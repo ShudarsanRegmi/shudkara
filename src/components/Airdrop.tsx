@@ -436,7 +436,7 @@ export const Airdrop: React.FC = () => {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-100 dark:border-slate-800">
           <div className="space-y-1">
             <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-              <Share2 className="text-indigo-600 w-6 h-6" />
+              <Share2 className="text-blue-600 w-6 h-6" />
               WebRTC Airdrop
             </h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -473,7 +473,7 @@ export const Airdrop: React.FC = () => {
             
             {peerId ? (
               <div className="flex items-center gap-2">
-                <code className="text-2xl font-mono font-bold tracking-widest text-indigo-600 dark:text-indigo-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-xl block flex-1 text-center shadow-sm">
+                <code className="text-2xl font-mono font-bold tracking-widest text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-4 py-2.5 rounded-xl block flex-1 text-center shadow-sm">
                   {peerId.replace('SHUD-', '')}
                 </code>
                 <button
@@ -486,7 +486,7 @@ export const Airdrop: React.FC = () => {
               </div>
             ) : (
               <div className="flex items-center gap-3 py-2 text-sm text-slate-400 font-medium animate-pulse">
-                <RefreshCw className="w-4 h-4 animate-spin text-indigo-500" />
+                <RefreshCw className="w-4 h-4 animate-spin text-blue-500" />
                 Contacting signalling server...
               </div>
             )}
@@ -504,9 +504,9 @@ export const Airdrop: React.FC = () => {
 
             {connectionStatus === 'connected' && connection ? (
               <div className="flex items-center gap-2">
-                <div className="flex-1 px-4 py-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100/50 dark:border-indigo-900/30 text-indigo-800 dark:text-indigo-300 font-semibold text-sm rounded-xl flex items-center justify-between">
+                <div className="flex-1 px-4 py-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100/50 dark:border-blue-900/30 text-blue-800 dark:text-blue-300 font-semibold text-sm rounded-xl flex items-center justify-between">
                   <span>Connected with: {connection.peer.replace('SHUD-', '')}</span>
-                  <ShieldCheck className="w-4.5 h-4.5 text-indigo-500 shrink-0" />
+                  <ShieldCheck className="w-4.5 h-4.5 text-blue-500 shrink-0" />
                 </div>
                 <button
                   onClick={disconnect}
@@ -523,12 +523,12 @@ export const Airdrop: React.FC = () => {
                   value={remotePeerIdInput}
                   onChange={(e) => setRemotePeerIdInput(e.target.value.toUpperCase())}
                   disabled={connectionStatus === 'connecting'}
-                  className="flex-1 font-mono tracking-widest text-center px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                  className="flex-1 font-mono tracking-widest text-center px-4 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                 />
                 <button
                   onClick={connectToPeer}
                   disabled={connectionStatus === 'connecting' || !remotePeerIdInput.trim()}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 text-white disabled:text-slate-400 font-semibold rounded-xl text-sm shadow-md shadow-indigo-500/10 hover:shadow-indigo-600/20 transition-all"
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 text-white disabled:text-slate-400 font-semibold rounded-xl text-sm shadow-md shadow-blue-500/10 hover:shadow-blue-600/20 transition-all"
                 >
                   Connect
                 </button>
@@ -552,7 +552,7 @@ export const Airdrop: React.FC = () => {
               onClick={() => fileInputRef.current?.click()}
               className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
                 dragActive 
-                  ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20 scale-[0.99]' 
+                  ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 scale-[0.99]' 
                   : 'border-slate-200 hover:border-slate-350 dark:border-slate-800 dark:hover:border-slate-700 hover:bg-slate-50/30'
               }`}
             >
@@ -562,7 +562,7 @@ export const Airdrop: React.FC = () => {
                 className="hidden"
                 onChange={handleFileChange}
               />
-              <FileUp className="w-10 h-10 text-indigo-500 mx-auto mb-3 animate-bounce" />
+              <FileUp className="w-10 h-10 text-blue-500 mx-auto mb-3 animate-bounce" />
               <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
                 Drag and drop a file here, or click to browse
               </p>
@@ -576,7 +576,7 @@ export const Airdrop: React.FC = () => {
               <p className="text-sm font-semibold text-slate-500 dark:text-slate-400">
                 You must connect with a peer first before sending files
               </p>
-              <div className="w-12 h-12 rounded-full border-4 border-indigo-100 dark:border-indigo-950/50 border-t-indigo-500 animate-spin mx-auto mt-4 hidden" />
+              <div className="w-12 h-12 rounded-full border-4 border-blue-100 dark:border-blue-950/50 border-t-blue-500 animate-spin mx-auto mt-4 hidden" />
             </div>
           )}
         </div>
@@ -601,8 +601,8 @@ export const Airdrop: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
                         transfer.type === 'incoming' 
-                          ? 'bg-purple-100 text-purple-700 dark:bg-purple-950/45 dark:text-purple-400' 
-                          : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/45 dark:text-indigo-400'
+                          ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-400' 
+                          : 'bg-blue-100 text-blue-700 dark:bg-blue-950/45 dark:text-blue-400'
                       }`}>
                         {transfer.type}
                       </span>
@@ -621,7 +621,7 @@ export const Airdrop: React.FC = () => {
                     {transfer.status === 'transferring' && (
                       <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-1.5 overflow-hidden">
                         <div 
-                          className="bg-indigo-600 h-1.5 rounded-full transition-all duration-150"
+                          className="bg-blue-600 h-1.5 rounded-full transition-all duration-150"
                           style={{ width: `${transfer.progress}%` }}
                         />
                       </div>
@@ -653,7 +653,7 @@ export const Airdrop: React.FC = () => {
                     ) : (
                       <div className="flex items-center gap-2">
                         {/* loading spinner */}
-                        <RefreshCw className="w-4 h-4 text-indigo-500 animate-spin" />
+                        <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
                       </div>
                     )}
                   </div>

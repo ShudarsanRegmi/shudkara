@@ -74,28 +74,28 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Hero Welcome banner */}
-      <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 rounded-3xl p-8 text-white shadow-xl">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-8 shadow-sm">
         <div className="max-w-3xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 backdrop-blur-md text-sm font-medium mb-4">
-            <Award className="w-4 h-4 text-yellow-300" />
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 text-blue-750 dark:text-blue-350 text-xs font-semibold mb-4 border border-blue-100 dark:border-blue-900/50">
+            <Award className="w-3.5 h-3.5 text-blue-600" />
             <span>Welcome to Shudkara Hub</span>
           </div>
-          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-4">
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-3 text-slate-900 dark:text-white">
             Developer Workspace
           </h1>
-          <p className="text-lg text-indigo-100 mb-6 max-w-xl">
+          <p className="text-sm md:text-base text-slate-600 dark:text-slate-400 mb-6 max-w-xl leading-relaxed">
             Track your LeetCode prep, instantly transfer files via secure WebRTC, or create ad-hoc collaborative text pads without logging in.
           </p>
-          <div className="flex flex-wrap gap-4">
+          <div className="flex flex-wrap gap-3">
             <button
               onClick={() => setActiveTab('leetcode')}
-              className="px-6 py-3 bg-white text-indigo-600 font-semibold rounded-xl shadow-lg hover:bg-indigo-50 transition-colors duration-200"
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow-md shadow-blue-500/10 hover:shadow-blue-600/20 transition-all duration-150"
             >
               Start Revising
             </button>
             <button
               onClick={() => setActiveTab('airdrop')}
-              className="px-6 py-3 bg-indigo-500/30 hover:bg-indigo-500/40 text-white font-semibold rounded-xl border border-white/20 backdrop-blur-sm transition-colors duration-200"
+              className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-sm transition-colors duration-150 dark:bg-slate-800 dark:hover:bg-slate-750 dark:text-slate-200"
             >
               Drop a File
             </button>
@@ -130,7 +130,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
                 </div>
                 <div className="w-full bg-slate-100 dark:bg-slate-800 rounded-full h-2">
                   <div 
-                    className="bg-indigo-600 h-2 rounded-full transition-all duration-500" 
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-500" 
                     style={{ width: `${completionPercentage}%` }}
                   />
                 </div>
@@ -207,7 +207,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-4">
-              <span className="p-3 bg-purple-100 dark:bg-purple-950/40 rounded-xl text-purple-600 dark:text-purple-400">
+              <span className="p-3 bg-slate-100 dark:bg-slate-800 rounded-xl text-slate-700 dark:text-slate-350">
                 <FileText className="w-6 h-6" />
               </span>
               <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
@@ -220,15 +220,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
             </p>
             <ul className="text-xs text-slate-500 dark:text-slate-400 space-y-2 mb-6">
               <li className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Access from any device via URL
               </li>
               <li className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Secured via custom edit passcodes
               </li>
               <li className="flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                 Perfect for code snippets & notepad sharing
               </li>
             </ul>

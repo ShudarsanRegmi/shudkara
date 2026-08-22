@@ -206,7 +206,7 @@ export const LeetCodeTracker: React.FC = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-slate-900 p-6 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm">
         <div>
           <h2 className="text-2xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-            <BookOpen className="w-6 h-6 text-indigo-600" />
+            <BookOpen className="w-6 h-6 text-blue-600" />
             Blind 75 Revision Tracker
           </h2>
           <p className="text-sm text-slate-500 dark:text-slate-400">
@@ -266,8 +266,8 @@ export const LeetCodeTracker: React.FC = () => {
           <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">Not Started</span>
         </div>
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-4 rounded-xl text-center shadow-sm col-span-2 md:col-span-1">
-          <span className="block text-2xl font-bold text-indigo-600 dark:text-indigo-400 flex items-center justify-center gap-1">
-            <Star className="w-5 h-5 fill-indigo-600 text-indigo-600 dark:fill-indigo-400 dark:text-indigo-400" />
+          <span className="block text-2xl font-bold text-blue-600 dark:text-blue-400 flex items-center justify-center gap-1">
+            <Star className="w-5 h-5 fill-blue-600 text-blue-600 dark:fill-blue-400 dark:text-blue-400" />
             {starredCount}
           </span>
           <span className="text-[10px] font-bold tracking-wider uppercase text-slate-400">Favorites</span>
@@ -284,7 +284,7 @@ export const LeetCodeTracker: React.FC = () => {
             placeholder="Search question name or number..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-slate-200 dark:border-slate-850 dark:bg-slate-950 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all"
+            className="w-full pl-10 pr-4 py-2 border border-slate-200 dark:border-slate-850 dark:bg-slate-950 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
           />
         </div>
 
@@ -296,7 +296,7 @@ export const LeetCodeTracker: React.FC = () => {
             <select
               value={selectedDifficulty}
               onChange={(e) => setSelectedDifficulty(e.target.value)}
-              className="text-xs font-semibold px-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-slate-200"
+              className="text-xs font-semibold px-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-slate-200"
             >
               <option value="All">All</option>
               <option value="Easy">Easy</option>
@@ -311,7 +311,7 @@ export const LeetCodeTracker: React.FC = () => {
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="text-xs font-semibold px-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:text-slate-200"
+              className="text-xs font-semibold px-2.5 py-1.5 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:text-slate-200"
             >
               <option value="All">All</option>
               <option value="Not Started">Not Started</option>
@@ -326,11 +326,11 @@ export const LeetCodeTracker: React.FC = () => {
             onClick={() => setShowOnlyFavorites(!showOnlyFavorites)}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors ${
               showOnlyFavorites
-                ? 'bg-indigo-100 border-indigo-200 text-indigo-700 dark:bg-indigo-950 dark:border-indigo-900 dark:text-indigo-300'
+                ? 'bg-blue-100 border-blue-200 text-blue-700 dark:bg-blue-950 dark:border-blue-900 dark:text-blue-300'
                 : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 dark:bg-slate-950 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800'
             }`}
           >
-            <Star className={`w-3.5 h-3.5 ${showOnlyFavorites ? 'fill-indigo-600 dark:fill-indigo-400' : ''}`} />
+            <Star className={`w-3.5 h-3.5 ${showOnlyFavorites ? 'fill-blue-600 dark:fill-blue-400' : ''}`} />
             Favorites Only
           </button>
         </div>
@@ -378,7 +378,7 @@ export const LeetCodeTracker: React.FC = () => {
                                 href={question.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="font-semibold text-slate-800 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline inline-flex items-center gap-1"
+                                className="font-semibold text-slate-800 dark:text-white hover:text-blue-600 dark:hover:text-blue-400 hover:underline inline-flex items-center gap-1"
                               >
                                 {question.title}
                                 <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -432,7 +432,7 @@ export const LeetCodeTracker: React.FC = () => {
                           <select
                             value={qProgress.status}
                             onChange={(e) => updateStatus(question.id, e.target.value as QuestionProgress['status'])}
-                            className={`text-xs font-bold rounded-lg px-2.5 py-1.5 border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                            className={`text-xs font-bold rounded-lg px-2.5 py-1.5 border focus:outline-none focus:ring-1 focus:ring-blue-500 ${
                               qProgress.status === 'Solved' ? 'bg-emerald-100/70 border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-900/50 dark:text-emerald-400' :
                               qProgress.status === 'In Progress' ? 'bg-blue-100/70 border-blue-200 text-blue-700 dark:bg-blue-950/30 dark:border-blue-900/50 dark:text-blue-400' :
                               qProgress.status === 'Needs Review' ? 'bg-rose-100/70 border-rose-200 text-rose-700 dark:bg-rose-950/30 dark:border-rose-900/50 dark:text-rose-400' :
@@ -452,13 +452,13 @@ export const LeetCodeTracker: React.FC = () => {
                               isExpanded
                                 ? 'bg-slate-100 border-slate-300 text-slate-800 dark:bg-slate-850 dark:border-slate-700 dark:text-slate-200'
                                 : qProgress.notes.trim() !== ''
-                                  ? 'bg-indigo-50/50 border-indigo-100 hover:bg-indigo-50 dark:bg-indigo-950/20 dark:border-indigo-900/30 text-indigo-600 dark:text-indigo-400 dark:hover:bg-indigo-950/40'
+                                  ? 'bg-blue-50/50 border-blue-100 hover:bg-blue-50 dark:bg-blue-950/20 dark:border-blue-900/30 text-blue-600 dark:text-blue-400 dark:hover:bg-blue-950/40'
                                   : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-600 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-800'
                             }`}
                           >
                             <span>Notes</span>
                             {qProgress.notes.trim() !== '' && (
-                              <span className="w-1.5 h-1.5 bg-indigo-500 rounded-full shrink-0" />
+                              <span className="w-1.5 h-1.5 bg-blue-500 rounded-full shrink-0" />
                             )}
                             {isExpanded ? <ChevronUp className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
                           </button>
@@ -473,7 +473,7 @@ export const LeetCodeTracker: React.FC = () => {
                             value={qProgress.notes}
                             onChange={(e) => updateNotes(question.id, e.target.value)}
                             rows={4}
-                            className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 p-3 rounded-xl border border-slate-200 dark:border-slate-850 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="w-full text-sm font-mono bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 p-3 rounded-xl border border-slate-200 dark:border-slate-850 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           />
                           <div className="flex justify-between items-center mt-2">
                             <span className="text-[10px] text-slate-400 font-medium">Notes auto-save on typing.</span>

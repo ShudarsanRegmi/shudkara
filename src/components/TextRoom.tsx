@@ -247,11 +247,11 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
           {/* Header panel */}
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
             <div className="space-y-1">
-              <span className="text-[10px] font-bold tracking-wider uppercase text-indigo-650 bg-indigo-50 dark:bg-indigo-950/40 dark:text-indigo-400 px-2 py-0.5 rounded">
+              <span className="text-[10px] font-bold tracking-wider uppercase text-blue-650 bg-blue-50 dark:bg-blue-950/40 dark:text-blue-400 px-2 py-0.5 rounded">
                 Active Room
               </span>
               <h2 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                <FileText className="text-indigo-600 w-5 h-5" />
+                <FileText className="text-blue-600 w-5 h-5" />
                 {activeRoomId}
               </h2>
             </div>
@@ -339,7 +339,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
               onChange={(e) => setRoomContent(e.target.value)}
               disabled={!isUnlocked || isSaving}
               rows={15}
-              className="w-full font-mono text-sm bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 p-4 rounded-2xl border border-slate-200 dark:border-slate-850 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-85 shadow-inner"
+              className="w-full font-mono text-sm bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-200 p-4 rounded-2xl border border-slate-200 dark:border-slate-850 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-85 shadow-inner"
             />
             
             {isUnlocked && (
@@ -347,7 +347,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
                 <button
                   onClick={handleSaveChanges}
                   disabled={isSaving}
-                  className="flex items-center gap-1.5 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-500/10 hover:shadow-indigo-600/20 transition-all"
+                  className="flex items-center gap-1.5 px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 dark:disabled:bg-slate-800 text-white font-bold rounded-xl text-sm shadow-md shadow-blue-500/10 hover:shadow-blue-600/20 transition-all"
                 >
                   {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
                   Save Changes
@@ -366,7 +366,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
             <form onSubmit={handleCreateRoom} className="space-y-5">
               <div className="space-y-1">
                 <h3 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                  <Plus className="text-indigo-600 w-5 h-5" />
+                  <Plus className="text-blue-600 w-5 h-5" />
                   Create a Text Room
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -384,7 +384,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
                   placeholder="e.g. secret-notes-123 (auto if empty)"
                   value={createRoomId}
                   onChange={(e) => setCreateRoomId(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, ''))}
-                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
               </div>
 
@@ -399,7 +399,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
                   required
                   value={createEditKey}
                   onChange={(e) => setCreateEditKey(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
@@ -413,14 +413,14 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
                   rows={4}
                   value={createContent}
                   onChange={(e) => setCreateContent(e.target.value)}
-                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                  className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-500/10 hover:shadow-indigo-600/20 transition-all flex items-center justify-center gap-2"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow-md shadow-blue-500/10 hover:shadow-blue-600/20 transition-all flex items-center justify-center gap-2"
               >
                 {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                 Create & Launch Room
@@ -433,7 +433,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
             <div className="space-y-6">
               <div className="space-y-1">
                 <h3 className="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                  <Search className="text-indigo-600 w-5 h-5" />
+                  <Search className="text-blue-600 w-5 h-5" />
                   Join Existing Room
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -449,7 +449,7 @@ export const TextRoom: React.FC<TextRoomProps> = ({ initialRoomId, onRoomChange 
                     placeholder="Enter Room Name / ID"
                     value={joinRoomId}
                     onChange={(e) => setJoinRoomId(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-850 dark:text-white rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                   />
                 </div>
 
