@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { 
-  LayoutDashboard, BookOpen, Share2, FileText, Terminal 
+  LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark 
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
 import { Airdrop } from './components/Airdrop';
 import { TextRoom } from './components/TextRoom';
+import { PromptVault } from './components/PromptVault';
 
 function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
@@ -108,6 +109,18 @@ function App() {
               <FileText className="w-4 h-4" />
               Text Rooms
             </button>
+
+            <button
+              onClick={() => setActiveTab('prompts')}
+              className={`flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-xl transition-all ${
+                activeTab === 'prompts'
+                  ? 'bg-slate-100 text-blue-600'
+                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+              }`}
+            >
+              <Bookmark className="w-4 h-4" />
+              PromptVault
+            </button>
           </nav>
 
 
@@ -120,6 +133,7 @@ function App() {
         {activeTab === 'dashboard' && <Dashboard setActiveTab={setActiveTab} />}
         {activeTab === 'leetcode' && <LeetCodeTracker />}
         {activeTab === 'airdrop' && <Airdrop />}
+        {activeTab === 'prompts' && <PromptVault />}
         {activeTab === 'textroom' && (
           <TextRoom 
             initialRoomId={urlRoomId || undefined} 
@@ -132,7 +146,7 @@ function App() {
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-slate-900/95 border-t border-slate-200 dark:border-slate-800 flex items-center justify-around py-2 px-1 backdrop-blur-md shadow-2xl">
         <button
           onClick={() => setActiveTab('dashboard')}
-          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/4 ${
+          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/5 ${
             activeTab === 'dashboard' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-450'
           }`}
         >
@@ -142,7 +156,7 @@ function App() {
 
         <button
           onClick={() => setActiveTab('leetcode')}
-          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/4 ${
+          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/5 ${
             activeTab === 'leetcode' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-450'
           }`}
         >
@@ -152,7 +166,7 @@ function App() {
 
         <button
           onClick={() => setActiveTab('airdrop')}
-          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/4 ${
+          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/5 ${
             activeTab === 'airdrop' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-450'
           }`}
         >
@@ -161,8 +175,18 @@ function App() {
         </button>
 
         <button
+          onClick={() => setActiveTab('prompts')}
+          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/5 ${
+            activeTab === 'prompts' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-450'
+          }`}
+        >
+          <Bookmark className="w-5 h-5" />
+          <span className="text-[10px] font-semibold">Vault</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('textroom')}
-          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/4 ${
+          className={`flex flex-col items-center gap-1.5 py-1 text-center shrink-0 w-1/5 ${
             activeTab === 'textroom' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-450'
           }`}
         >
