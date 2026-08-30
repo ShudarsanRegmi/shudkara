@@ -210,7 +210,7 @@ function App() {
 
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} />;
+        return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
       case 'leetcode':
         return <LeetCodeTracker progress={leetcodeProgress} onProgressChange={setLeetcodeProgress} />;
       case 'airdrop':
@@ -231,7 +231,7 @@ function App() {
       case 'imgdrop':
         return <ImgDrop />;
       default:
-        return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} />;
+        return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
     }
   };
 

@@ -163,6 +163,22 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
       };
     }
 
+    // 6. Reset TOTP Secret (requires session)
+    if (method === 'POST' && path.endsWith('/totp-reset')) {
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.replace('Bearer ', '').trim();
+      const isAuthorized = await verifySession(token);
+      if (!isAuthorized) {
+        return { status: 401, jsonBody: { error: 'Unauthorized.' } };
+      }
+
+      await db.collection('auth').deleteOne({ key: 'totp' });
+      return {
+        status: 200,
+        jsonBody: { success: true, message: 'TOTP secret reset successfully.' }
+      };
+    }
+
     return { status: 404, jsonBody: { error: 'Route not found.' } };
   } catch (err: any) {
     context.error('Auth handler error:', err);
