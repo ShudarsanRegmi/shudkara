@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { BLIND75_QUESTIONS } from '../data/blind75';
 import { 
   Search, Star, BookOpen, ExternalLink, Calendar, Plus, Minus, 
@@ -23,8 +23,12 @@ const DEFAULT_PROGRESS: QuestionProgress = {
   isFavorite: false,
 };
 
-export const LeetCodeTracker: React.FC = () => {
-  const [progress, setProgress] = useState<TrackerState>({});
+interface LeetCodeTrackerProps {
+  progress: TrackerState;
+  onProgressChange: (updated: TrackerState) => void;
+}
+
+export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onProgressChange }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
@@ -34,18 +38,6 @@ export const LeetCodeTracker: React.FC = () => {
   // Notification banner state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
-  // Load progress from localStorage on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('shudkara_leetcode_progress');
-    if (saved) {
-      try {
-        setProgress(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse localStorage progress:', e);
-      }
-    }
-  }, []);
-
   const triggerToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -53,8 +45,7 @@ export const LeetCodeTracker: React.FC = () => {
 
   // Save progress helper
   const saveProgress = (updated: TrackerState) => {
-    setProgress(updated);
-    localStorage.setItem('shudkara_leetcode_progress', JSON.stringify(updated));
+    onProgressChange(updated);
   };
 
   const getQuestionProgress = (id: string): QuestionProgress => {
@@ -161,8 +152,7 @@ export const LeetCodeTracker: React.FC = () => {
 
   const handleReset = () => {
     if (window.confirm('Are you absolutely sure you want to reset all LeetCode tracker progress? This cannot be undone.')) {
-      setProgress({});
-      localStorage.removeItem('shudkara_leetcode_progress');
+      onProgressChange({});
       triggerToast('Progress successfully reset.', 'info');
     }
   };

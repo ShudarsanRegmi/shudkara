@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Bookmark, Copy, Check, Plus, Trash2, Edit2, Search, X, FolderOpen } from 'lucide-react';
 
 interface AIPrompt {
@@ -10,27 +10,12 @@ interface AIPrompt {
   createdAt: string;
 }
 
-const DEFAULT_PROMPTS: AIPrompt[] = [
-  {
-    id: '1',
-    title: 'Code Refactoring Assistant',
-    prompt: 'Act as a senior software engineer. Review the following code for code smell, performance bottlenecks, and adherence to clean coding principles. Provide a refactored version along with a bulleted list of changes made:\n\n[INSERT CODE HERE]',
-    description: 'Prompts the AI to act as a senior developer to refactor your code and explain optimizations.',
-    tags: ['Coding', 'Refactor', 'Performance'],
-    createdAt: new Date().toLocaleDateString()
-  },
-  {
-    id: '2',
-    title: 'Creative Writing Editor',
-    prompt: 'You are an expert editorial critic. Analyze the text below for pacing, voice consistency, and descriptive depth. Suggest constructive revisions to make the scene more immersive and emotionally resonant:\n\n[INSERT TEXT HERE]',
-    description: 'Helps improve creative prose, narrative voice, and descriptive writing quality.',
-    tags: ['Writing', 'Creative', 'Editing'],
-    createdAt: new Date().toLocaleDateString()
-  }
-];
+interface PromptVaultProps {
+  prompts: AIPrompt[];
+  onPromptsChange: (updated: AIPrompt[]) => void;
+}
 
-export const PromptVault: React.FC = () => {
-  const [prompts, setPrompts] = useState<AIPrompt[]>([]);
+export const PromptVault: React.FC<PromptVaultProps> = ({ prompts, onPromptsChange }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -45,21 +30,9 @@ export const PromptVault: React.FC = () => {
   const [formDesc, setFormDesc] = useState('');
   const [formTags, setFormTags] = useState('');
 
-  // Load prompts
-  useEffect(() => {
-    const saved = localStorage.getItem('shudkara_prompt_vault');
-    if (saved) {
-      setPrompts(JSON.parse(saved));
-    } else {
-      setPrompts(DEFAULT_PROMPTS);
-      localStorage.setItem('shudkara_prompt_vault', JSON.stringify(DEFAULT_PROMPTS));
-    }
-  }, []);
-
   // Save prompts helper
   const savePrompts = (updated: AIPrompt[]) => {
-    setPrompts(updated);
-    localStorage.setItem('shudkara_prompt_vault', JSON.stringify(updated));
+    onPromptsChange(updated);
   };
 
   // Handle Copy to Clipboard

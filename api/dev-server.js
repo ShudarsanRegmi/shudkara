@@ -1,5 +1,25 @@
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
+
+// Load environment variables from local.settings.json
+try {
+  const localSettingsPath = path.join(__dirname, 'local.settings.json');
+  if (fs.existsSync(localSettingsPath)) {
+    const settings = JSON.parse(fs.readFileSync(localSettingsPath, 'utf8'));
+    if (settings.Values) {
+      for (const [key, value] of Object.entries(settings.Values)) {
+        process.env[key] = value;
+      }
+      console.log('Loaded local.settings.json values into process.env');
+    }
+  }
+} catch (err) {
+  console.error('Failed to load local.settings.json:', err);
+}
+
 const { roomsHandler } = require('./dist/src/functions/rooms');
+const { syncHandler } = require('./dist/src/functions/sync');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -17,13 +37,18 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = parsedUrl.pathname;
   
-  // Extract roomId from /api/rooms/{roomId} or /rooms/{roomId}
+  // Check if it is a sync route
   const parts = pathname.split('/').filter(Boolean);
+  const isSyncRoute = (parts[0] === 'api' && parts[1] === 'sync') || (parts[0] === 'sync');
+  
+  // Extract roomId from /api/rooms/{roomId} or /rooms/{roomId}
   let roomId = null;
-  if (parts[0] === 'api' && parts[1] === 'rooms' && parts[2]) {
-    roomId = parts[2];
-  } else if (parts[0] === 'rooms' && parts[1]) {
-    roomId = parts[1];
+  if (!isSyncRoute) {
+    if (parts[0] === 'api' && parts[1] === 'rooms' && parts[2]) {
+      roomId = parts[2];
+    } else if (parts[0] === 'rooms' && parts[1]) {
+      roomId = parts[1];
+    }
   }
 
   // Read body
@@ -33,15 +58,6 @@ const server = http.createServer(async (req, res) => {
   });
 
   req.on('end', async () => {
-    // Mock Azure Functions HttpRequest
-    const mockRequest = {
-      method: req.method,
-      params: { roomId },
-      json: async () => {
-        return bodyBuffer ? JSON.parse(bodyBuffer) : {};
-      }
-    };
-
     // Mock Azure Functions InvocationContext
     const mockContext = {
       log: (...args) => console.log('[API Dev Log]', ...args),
@@ -49,7 +65,28 @@ const server = http.createServer(async (req, res) => {
     };
 
     try {
-      const response = await roomsHandler(mockRequest, mockContext);
+      let response;
+      if (isSyncRoute) {
+        // Mock Azure Functions HttpRequest for sync (using URLSearchParams query)
+        const mockRequest = {
+          method: req.method,
+          query: parsedUrl.searchParams,
+          json: async () => {
+            return bodyBuffer ? JSON.parse(bodyBuffer) : {};
+          }
+        };
+        response = await syncHandler(mockRequest, mockContext);
+      } else {
+        // Mock Azure Functions HttpRequest for rooms
+        const mockRequest = {
+          method: req.method,
+          params: { roomId },
+          json: async () => {
+            return bodyBuffer ? JSON.parse(bodyBuffer) : {};
+          }
+        };
+        response = await roomsHandler(mockRequest, mockContext);
+      }
       
       const status = response.status || 200;
       const headers = response.headers || { 'Content-Type': 'application/json' };

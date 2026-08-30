@@ -4,9 +4,10 @@ import { BLIND75_QUESTIONS } from '../data/blind75';
 
 interface DashboardProps {
   setActiveTab: (tab: string) => void;
+  progress: Record<string, any>;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress }) => {
   const [stats, setStats] = useState({
     total: 75,
     solved: 0,
@@ -19,9 +20,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
   });
 
   useEffect(() => {
-    // Calculate stats from localStorage
-    const savedProgress = localStorage.getItem('shudkara_leetcode_progress');
-    const progressMap = savedProgress ? JSON.parse(savedProgress) : {};
+    // Calculate stats from progress prop
+    const progressMap = progress || {};
 
     let solved = 0;
     let inProgress = 0;
@@ -67,7 +67,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab }) => {
       medium: { total: mediumTotal, solved: mediumSolved },
       hard: { total: hardTotal, solved: hardSolved },
     });
-  }, []);
+  }, [progress]);
 
   const completionPercentage = Math.round((stats.solved / stats.total) * 100);
 
