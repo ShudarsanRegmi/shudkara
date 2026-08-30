@@ -39,13 +39,18 @@ function App() {
   const [prompts, setPrompts] = useState<any[]>([]);
   const isInitializedRef = useRef(false);
 
-  // Check URL query parameters for ?room=room-id
+  // Check URL query parameters for ?room=room-id or Firebase Auth link redirects
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
     if (room) {
       setUrlRoomId(room);
       setActiveTab('textroom');
+    }
+
+    // If redirected back from Firebase Email OTP link
+    if (window.location.href.includes('apiKey=') && window.location.href.includes('oobCode=')) {
+      setActiveTab('login');
     }
   }, []);
 
