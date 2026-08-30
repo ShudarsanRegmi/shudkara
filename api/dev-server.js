@@ -87,10 +87,16 @@ const server = http.createServer(async (req, res) => {
       error: (...args) => console.error('[API Dev Error]', ...args),
     };
 
-    // Mock HttpRequest headers list mapping
-    const headersMap = new Map();
+    // Use native Node Headers class (ensures case-insensitive header lookups)
+    const headers = new Headers();
     for (const [key, value] of Object.entries(req.headers)) {
-      headersMap.set(key.toLowerCase(), value);
+      if (value !== undefined) {
+        if (Array.isArray(value)) {
+          value.forEach(v => headers.append(key, v));
+        } else {
+          headers.set(key, value);
+        }
+      }
     }
 
     try {
@@ -99,7 +105,7 @@ const server = http.createServer(async (req, res) => {
         url: req.url,
         params,
         query: parsedUrl.searchParams,
-        headers: headersMap,
+        headers,
         json: async () => {
           return bodyBuffer ? JSON.parse(bodyBuffer) : {};
         }

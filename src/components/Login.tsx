@@ -82,10 +82,14 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   // Load TOTP configuration state
   const checkTotpSetup = async () => {
     try {
-      const res = await fetch('/api/auth/totp-setup');
+      const token = localStorage.getItem('shudkara_auth_token');
+      const headers = token ? { 'Authorization': `Bearer ${token}` } : undefined;
+      const res = await fetch('/api/auth/totp-setup', { headers });
       const data = await res.json();
-      if (!data.configured && data.otpauthUrl) {
+      if (data.otpauthUrl) {
         setTotpSetupData({ secret: data.secret, otpauthUrl: data.otpauthUrl });
+      } else {
+        setTotpSetupData(null);
       }
     } catch (err) {
       console.error('Failed to load TOTP configuration:', err);

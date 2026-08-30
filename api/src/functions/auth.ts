@@ -23,35 +23,51 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
       };
     }
 
-    // 2. TOTP Setup (returns secret + otpauthUrl if not configured yet)
+    // 2. TOTP Setup
     if (method === 'GET' && path.endsWith('/totp-setup')) {
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.replace('Bearer ', '').trim();
+      const isSessionValid = await verifySession(token);
+
       const authConfig = await db.collection('auth').findOne({ key: 'totp' });
-      if (authConfig) {
+      
+      // If configured and session is NOT valid, hide the secret details
+      if (authConfig && !isSessionValid) {
         return {
           status: 200,
           jsonBody: { configured: true }
         };
       }
 
-      // Generate a new key secret if not configured
-      const secret = speakeasy.generateSecret({
-        name: `shudkara (${OWNER_EMAIL})`,
-        issuer: 'shudkara'
-      });
+      // If not configured, OR if the logged-in user wants to view/reconfigure it
+      let secretBase32 = '';
+      let otpauthUrl = '';
 
-      // Save temporarily/pending or save permanently. Let's save permanently so they scan it once.
-      await db.collection('auth').updateOne(
-        { key: 'totp' },
-        { $set: { secret: secret.base32 } },
-        { upsert: true }
-      );
+      if (authConfig && authConfig.secret) {
+        secretBase32 = authConfig.secret;
+        otpauthUrl = `otpauth://totp/shudkara%20(${encodeURIComponent(OWNER_EMAIL)})?secret=${secretBase32}&issuer=shudkara`;
+      } else {
+        // Generate a new key secret if not configured
+        const secret = speakeasy.generateSecret({
+          name: `shudkara (${OWNER_EMAIL})`,
+          issuer: 'shudkara'
+        });
+        secretBase32 = secret.base32;
+        otpauthUrl = secret.otpauth_url || '';
+
+        await db.collection('auth').updateOne(
+          { key: 'totp' },
+          { $set: { secret: secretBase32 } },
+          { upsert: true }
+        );
+      }
 
       return {
         status: 200,
         jsonBody: {
-          configured: false,
-          secret: secret.base32,
-          otpauthUrl: secret.otpauth_url
+          configured: !!authConfig,
+          secret: secretBase32,
+          otpauthUrl: otpauthUrl
         }
       };
     }
