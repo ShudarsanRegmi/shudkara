@@ -1,21 +1,5 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
-import { MongoClient, Db } from 'mongodb';
-
-let client: MongoClient | null = null;
-let cachedDb: Db | null = null;
-
-async function connectToMongo(): Promise<Db> {
-  const uri = process.env.MONGODB_URI;
-  if (!uri) {
-    throw new Error('MONGODB_URI is not set');
-  }
-  if (!client) {
-    client = new MongoClient(uri);
-    await client.connect();
-    cachedDb = client.db();
-  }
-  return cachedDb!;
-}
+import { connectToMongo } from './db';
 
 export async function syncHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;

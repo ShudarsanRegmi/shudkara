@@ -1,5 +1,7 @@
 import { MongoClient, Db } from 'mongodb';
 
+const DB_NAME = 'shudkara';
+
 let client: MongoClient | null = null;
 let cachedDb: Db | null = null;
 
@@ -11,7 +13,7 @@ export async function connectToMongo(): Promise<Db> {
   if (!client) {
     client = new MongoClient(uri);
     await client.connect();
-    cachedDb = client.db();
+    cachedDb = client.db(DB_NAME); // Always explicitly target 'shudkara' db
   }
   return cachedDb!;
 }
