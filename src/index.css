@@ -1,3 +1,81 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:where(.dark, .dark *));
+@theme {
+  /* Editorial typography */
+  --font-serif: "Playfair Display", serif;
+  --font-sans: "Plus Jakarta Sans", sans-serif;
+
+  /* Global Slate Color Scheme -> Mapped to warm toast/brown/charcoal tones */
+  --color-slate-50: #fdfbf7;       /* App main background */
+  --color-slate-100: #f5f2eb;      /* Tabs active / lighter warm beige */
+  --color-slate-200: #e3dfda;      /* Borders / lines */
+  --color-slate-300: #d6d0c7;      /* Focus borders */
+  --color-slate-400: #8a8076;      /* Secondary muted text */
+  --color-slate-500: #6e645c;      /* Muted text */
+  --color-slate-600: #5a5450;      /* Toast theme text-muted */
+  --color-slate-700: #2e2724;      /* Strong text / subheadings */
+  --color-slate-800: #1c1714;      /* Dark text / standard text */
+  --color-slate-900: #1c1714;      /* Darkest text / headings */
+  --color-slate-950: #fdfbf7;      /* Hardcoded to match bg in dark wrapper context */
+
+  /* White -> Container backgrounds */
+  --color-white: #ffffff;
+
+  /* Blue Palette -> Mapped to warm Amber Gold (brand accent) */
+  --color-blue-50: #faf7f0;        /* Light accent bg */
+  --color-blue-100: #f5eedf;       /* Light border/badge bg */
+  --color-blue-200: #ebddc2;
+  --color-blue-500: #caa15d;       /* Primary amber gold */
+  --color-blue-600: #caa15d;       /* Button primary */
+  --color-blue-700: #b38e4b;       /* Button hover state */
+  --color-blue-750: #8c6e35;
+  --color-blue-800: #8c6e35;
+  --color-blue-950: #caa15d;
+
+  /* Emerald Palette -> Mapped to warm Sage Green (success tags) */
+  --color-emerald-50: #f4f6f2;     /* Easy question light bg */
+  --color-emerald-100: #eaede4;
+  --color-emerald-500: #7c8f58;    /* Sage green */
+  --color-emerald-600: #7c8f58;
+  --color-emerald-700: #627244;    /* Sage dark text */
+  --color-emerald-950: #7c8f58;
+
+  --color-green-50: #f4f6f2;
+  --color-green-100: #eaede4;
+  --color-green-500: #7c8f58;
+  --color-green-600: #7c8f58;
+  --color-green-700: #627244;
+
+  /* Red/Purple Palette -> Mapped to warm Rose (hard questions/delete actions) */
+  --color-red-50: #faf4f5;
+  --color-red-100: #f5e4e5;
+  --color-red-500: #c5787d;        /* Rose */
+  --color-red-600: #c5787d;
+  --color-red-700: #a35d62;
+
+  --color-purple-100: #f5e4e5;
+  --color-purple-700: #c5787d;
+
+  /* Yellow Palette -> Mapped to warm Ochre (medium questions) */
+  --color-yellow-50: #faf8f0;
+  --color-yellow-100: #f7eed8;
+  --color-yellow-500: #d4a257;     /* Ochre gold */
+  --color-yellow-600: #d4a257;
+  --color-yellow-700: #b2833e;
+}
+
+/* Base styling overrides for typography */
+@layer base {
+  html, body {
+    font-family: var(--font-sans);
+    background-color: #fdfbf7;
+    color: #1c1714;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1, h2, h3, h4, h5, h6, .serif-heading {
+    font-family: var(--font-serif);
+    font-weight: 700;
+  }
+}

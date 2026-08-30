@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { 
-  LayoutDashboard, BookOpen, Share2, FileText, Moon, Sun, Terminal 
+  LayoutDashboard, BookOpen, Share2, FileText, Terminal 
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -10,15 +10,6 @@ import { TextRoom } from './components/TextRoom';
 function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [urlRoomId, setUrlRoomId] = useState<string | null>(null);
-  
-  // Theme state - defaults to light (bright)
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('shudkara_theme');
-      if (saved === 'dark' || saved === 'light') return saved;
-    }
-    return 'light';
-  });
 
   // Check URL query parameters for ?room=room-id
   useEffect(() => {
@@ -30,20 +21,11 @@ function App() {
     }
   }, []);
 
-  // Sync theme to document element
+  // Ensure dark mode class is never present on document element (for single theme toast)
   useEffect(() => {
     const root = window.document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-    localStorage.setItem('shudkara_theme', theme);
-  }, [theme]);
-
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light');
-  };
+    root.classList.remove('dark');
+  }, []);
 
   const handleRoomChange = (roomId: string | null) => {
     if (roomId) {
@@ -128,16 +110,7 @@ function App() {
             </button>
           </nav>
 
-          {/* Theme switcher */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleTheme}
-              className="p-2.5 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 border border-transparent hover:border-slate-200 dark:hover:border-slate-700/80 transition-all"
-              title={theme === 'dark' ? 'Activate Light Mode' : 'Activate Dark Mode'}
-            >
-              {theme === 'dark' ? <Sun className="w-5 h-5 text-amber-400" /> : <Moon className="w-5 h-5" />}
-            </button>
-          </div>
+
 
         </div>
       </header>
