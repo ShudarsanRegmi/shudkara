@@ -16,11 +16,18 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
     if (method === 'GET' && path.endsWith('/check')) {
       const authHeader = request.headers.get('Authorization') || '';
       const token = authHeader.replace('Bearer ', '').trim();
-      const isValid = await verifySession(token);
-      return {
-        status: 200,
-        jsonBody: { authenticated: isValid }
-      };
+      try {
+        const isValid = await verifySession(token);
+        return {
+          status: 200,
+          jsonBody: { authenticated: isValid }
+        };
+      } catch (err: any) {
+        return {
+          status: 200,
+          jsonBody: { authenticated: false, error: err.message, stack: err.stack }
+        };
+      }
     }
 
     // 2. TOTP Setup

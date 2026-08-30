@@ -18,18 +18,14 @@ export async function connectToMongo(): Promise<Db> {
 
 export async function verifySession(token: string | null): Promise<boolean> {
   if (!token) return false;
-  try {
-    const db = await connectToMongo();
-    const session = await db.collection('sessions').findOne({ token: token.trim() });
-    if (!session) return false;
-    
-    const expiresAt = new Date(session.expiresAt);
-    if (expiresAt.getTime() < Date.now()) {
-      await db.collection('sessions').deleteOne({ token: token.trim() });
-      return false;
-    }
-    return true;
-  } catch {
+  const db = await connectToMongo();
+  const session = await db.collection('sessions').findOne({ token: token.trim() });
+  if (!session) return false;
+  
+  const expiresAt = new Date(session.expiresAt);
+  if (expiresAt.getTime() < Date.now()) {
+    await db.collection('sessions').deleteOne({ token: token.trim() });
     return false;
   }
+  return true;
 }

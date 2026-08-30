@@ -47,6 +47,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       if (savedEmail) {
         signInWithEmailLink(firebaseAuth, savedEmail, window.location.href)
           .then((result) => {
+            console.log('Firebase signInWithEmailLink success:', result.user?.email);
             window.localStorage.removeItem('emailForSignIn');
             // Clean up the URL parameters
             window.history.replaceState({}, document.title, window.location.pathname);
@@ -55,20 +56,21 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             return fetch('/api/auth/firebase-login', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email: result.user?.email })
+              body: JSON.stringify({ email: result.user?.email || savedEmail })
             });
           })
           .then(async (res) => {
             const data = await res.json();
+            console.log('/firebase-login API status:', res.status, data);
             if (res.ok && data.token) {
               onLoginSuccess(data.token);
             } else {
               setEmailError(data.error || 'Access denied: Unrecognized email.');
             }
           })
-          .catch((err) => {
-            console.error(err);
-            setEmailError('Failed to sign in with link. It may have expired.');
+          .catch((err: any) => {
+            console.error('Sign in link error:', err);
+            setEmailError('Failed to sign in: ' + err.message);
           })
           .finally(() => {
             setIsLoading(false);
