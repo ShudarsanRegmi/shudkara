@@ -18,14 +18,19 @@ try {
   console.error('Failed to load local.settings.json:', err);
 }
 
+// Load handlers
 const { roomsHandler } = require('./dist/src/functions/rooms');
 const { syncHandler } = require('./dist/src/functions/sync');
+const { authHandler } = require('./dist/src/functions/auth');
+const { linksHandler } = require('./dist/src/functions/links');
+const { keyValHandler } = require('./dist/src/functions/keyval');
+const { imgDropHandler } = require('./dist/src/functions/imgdrop');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -37,18 +42,36 @@ const server = http.createServer(async (req, res) => {
   const parsedUrl = new URL(req.url, `http://${req.headers.host}`);
   const pathname = parsedUrl.pathname;
   
-  // Check if it is a sync route
   const parts = pathname.split('/').filter(Boolean);
-  const isSyncRoute = (parts[0] === 'api' && parts[1] === 'sync') || (parts[0] === 'sync');
-  
-  // Extract roomId from /api/rooms/{roomId} or /rooms/{roomId}
-  let roomId = null;
-  if (!isSyncRoute) {
-    if (parts[0] === 'api' && parts[1] === 'rooms' && parts[2]) {
-      roomId = parts[2];
-    } else if (parts[0] === 'rooms' && parts[1]) {
-      roomId = parts[1];
-    }
+  const isApi = parts[0] === 'api';
+  const baseIndex = isApi ? 1 : 0;
+  const resource = parts[baseIndex];
+
+  let handlerToUse = null;
+  let params = {};
+
+  if (resource === 'rooms') {
+    handlerToUse = roomsHandler;
+    params = { roomId: parts[baseIndex + 1] || null };
+  } else if (resource === 'sync') {
+    handlerToUse = syncHandler;
+  } else if (resource === 'auth') {
+    handlerToUse = authHandler;
+  } else if (resource === 'links') {
+    handlerToUse = linksHandler;
+    params = { id: parts[baseIndex + 1] || null };
+  } else if (resource === 'keyval') {
+    handlerToUse = keyValHandler;
+    params = { key: parts[baseIndex + 1] || null };
+  } else if (resource === 'imgdrop') {
+    handlerToUse = imgDropHandler;
+    params = { id: parts[baseIndex + 1] || null };
+  }
+
+  if (!handlerToUse) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Endpoint not found.' }));
+    return;
   }
 
   // Read body
@@ -64,29 +87,25 @@ const server = http.createServer(async (req, res) => {
       error: (...args) => console.error('[API Dev Error]', ...args),
     };
 
+    // Mock HttpRequest headers list mapping
+    const headersMap = new Map();
+    for (const [key, value] of Object.entries(req.headers)) {
+      headersMap.set(key.toLowerCase(), value);
+    }
+
     try {
-      let response;
-      if (isSyncRoute) {
-        // Mock Azure Functions HttpRequest for sync (using URLSearchParams query)
-        const mockRequest = {
-          method: req.method,
-          query: parsedUrl.searchParams,
-          json: async () => {
-            return bodyBuffer ? JSON.parse(bodyBuffer) : {};
-          }
-        };
-        response = await syncHandler(mockRequest, mockContext);
-      } else {
-        // Mock Azure Functions HttpRequest for rooms
-        const mockRequest = {
-          method: req.method,
-          params: { roomId },
-          json: async () => {
-            return bodyBuffer ? JSON.parse(bodyBuffer) : {};
-          }
-        };
-        response = await roomsHandler(mockRequest, mockContext);
-      }
+      const mockRequest = {
+        method: req.method,
+        url: req.url,
+        params,
+        query: parsedUrl.searchParams,
+        headers: headersMap,
+        json: async () => {
+          return bodyBuffer ? JSON.parse(bodyBuffer) : {};
+        }
+      };
+
+      const response = await handlerToUse(mockRequest, mockContext);
       
       const status = response.status || 200;
       const headers = response.headers || { 'Content-Type': 'application/json' };
