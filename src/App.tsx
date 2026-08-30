@@ -65,7 +65,7 @@ function App() {
     const token = localStorage.getItem('shudkara_auth_token');
     if (token) {
       fetch('/api/auth/check', {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'X-Session-Token': token }
       })
       .then(res => res.json())
       .then(data => {
@@ -183,7 +183,7 @@ function App() {
       try {
         await fetch('/api/auth/logout', {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${authToken}` }
+          headers: { 'X-Session-Token': authToken ?? '' }
         });
       } catch {}
     }

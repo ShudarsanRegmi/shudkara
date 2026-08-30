@@ -1,7 +1,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
-import { connectToMongo, verifySession } from './db';
+import { connectToMongo, verifySession, extractToken } from './db';
 
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
 
@@ -14,8 +14,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
     
     // 1. Check Session Status
     if (method === 'GET' && path.endsWith('/check')) {
-      const authHeader = request.headers.get('Authorization') || '';
-      const token = authHeader.replace('Bearer ', '').trim();
+      const token = extractToken(request);
       try {
         const isValid = await verifySession(token);
         return {
@@ -32,8 +31,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
 
     // 2. TOTP Setup
     if (method === 'GET' && path.endsWith('/totp-setup')) {
-      const authHeader = request.headers.get('Authorization') || '';
-      const token = authHeader.replace('Bearer ', '').trim();
+      const token = extractToken(request);
       const isSessionValid = await verifySession(token);
 
       const authConfig = await db.collection('auth').findOne({ key: 'totp' });
@@ -159,8 +157,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
 
     // 5. Logout
     if (method === 'POST' && path.endsWith('/logout')) {
-      const authHeader = request.headers.get('Authorization') || '';
-      const token = authHeader.replace('Bearer ', '').trim();
+      const token = extractToken(request);
       if (token) {
         await db.collection('sessions').deleteOne({ token });
       }
@@ -172,8 +169,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
 
     // 6. Reset TOTP Secret (requires session)
     if (method === 'POST' && path.endsWith('/totp-reset')) {
-      const authHeader = request.headers.get('Authorization') || '';
-      const token = authHeader.replace('Bearer ', '').trim();
+      const token = extractToken(request);
       const isAuthorized = await verifySession(token);
       if (!isAuthorized) {
         return { status: 401, jsonBody: { error: 'Unauthorized.' } };

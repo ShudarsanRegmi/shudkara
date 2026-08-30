@@ -67,7 +67,7 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'X-Session-Token': authToken ?? ''
         },
         body: JSON.stringify({
           name: newFormName.trim(),
@@ -101,7 +101,7 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'X-Session-Token': authToken ?? ''
         },
         body: JSON.stringify({
           name: editingName.trim(),
@@ -131,7 +131,7 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
       const res = await fetch(`/api/links/${id}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${authToken}`
+          'X-Session-Token': authToken ?? ''
         }
       });
 

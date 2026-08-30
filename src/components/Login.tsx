@@ -85,7 +85,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const checkTotpSetup = async () => {
     try {
       const token = localStorage.getItem('shudkara_auth_token');
-      const headers = token ? { 'Authorization': `Bearer ${token}` } : undefined;
+      const headers = token ? { 'X-Session-Token': token } : undefined;
       const res = await fetch('/api/auth/totp-setup', { headers });
       const data = await res.json();
       if (data.otpauthUrl) {

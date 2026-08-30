@@ -1,6 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import { connectToMongo, verifySession } from './db';
+import { connectToMongo, verifySession, extractToken } from './db';
 
 interface LinkNode {
   id: string;
@@ -35,8 +35,7 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
     }
 
     // Auth validation for all write/delete operations
-    const authHeader = request.headers.get('Authorization') || '';
-    const token = authHeader.replace('Bearer ', '').trim();
+    const token = extractToken(request);
     const isAuthorized = await verifySession(token);
     if (!isAuthorized) {
       return { status: 401, jsonBody: { error: 'Unauthorized. Login required to manage links.' } };

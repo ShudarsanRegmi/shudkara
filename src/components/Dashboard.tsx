@@ -24,7 +24,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
     setLoadingTotp(true);
     try {
       const res = await fetch('/api/auth/totp-setup', {
-        headers: { 'Authorization': `Bearer ${authToken}` }
+        headers: { 'X-Session-Token': authToken ?? '' }
       });
       if (res.ok) {
         const data = await res.json();
@@ -87,7 +87,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
     try {
       const res = await fetch('/api/auth/totp-reset', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${authToken}` }
+        headers: { 'X-Session-Token': authToken ?? '' }
       });
       if (res.ok) {
         setTestCode('');

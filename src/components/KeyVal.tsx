@@ -65,7 +65,7 @@ export const KeyVal: React.FC<KeyValProps> = ({ authToken }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`
+          'X-Session-Token': authToken ?? ''
         },
         body: JSON.stringify({
           key: newKey.trim(),
@@ -98,7 +98,7 @@ export const KeyVal: React.FC<KeyValProps> = ({ authToken }) => {
       const res = await fetch(`/api/keyval/${encodeURIComponent(key)}`, {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${authToken}`
+          'X-Session-Token': authToken ?? ''
         }
       });
 
