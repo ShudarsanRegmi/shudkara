@@ -1,293 +1,265 @@
-import React, { useState, useEffect } from 'react';
-import { Key, Copy, Check, Plus, Trash2, Search, Lock, RefreshCw } from 'lucide-react';
-
-interface KeyValPair {
-  key: string;
-  value: string;
-  updatedAt: string;
-}
+import React, { useState, useRef, useEffect } from 'react';
+import { Check, X, Plus, Trash2, ChevronDown, ChevronUp, Keyboard } from 'lucide-react';
 
 interface KeyValProps {
-  authToken: string | null;
+  authToken?: string | null;
 }
 
-export const KeyVal: React.FC<KeyValProps> = ({ authToken }) => {
-  const [pairs, setPairs] = useState<KeyValPair[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+type Status = 'idle' | 'loading' | 'copied' | 'not_found' | 'error';
 
-  // Form states (visible only if logged in)
+export const KeyVal: React.FC<KeyValProps> = ({ authToken }) => {
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<Status>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [showAdmin, setShowAdmin] = useState(false);
+
+  // Admin panel state
+  const [adminKeys, setAdminKeys] = useState<{ key: string; updatedAt: string }[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
-  const [formError, setFormError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [adminMsg, setAdminMsg] = useState('');
 
-  const isLoggedIn = !!authToken;
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const fetchPairs = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/keyval');
-      if (res.ok) {
-        const data = await res.json();
-        setPairs(data);
-      }
-    } catch (err) {
-      console.error('Failed to load key-value pairs:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Auto-focus the run box
   useEffect(() => {
-    fetchPairs();
+    inputRef.current?.focus();
   }, []);
 
-  const handleCopy = (key: string, value: string) => {
-    navigator.clipboard.writeText(value);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 1500);
+  // Reset status after 2.5s
+  useEffect(() => {
+    if (status === 'copied' || status === 'not_found' || status === 'error') {
+      const t = setTimeout(() => {
+        setStatus('idle');
+        setQuery('');
+        setErrorMsg('');
+        inputRef.current?.focus();
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+  }, [status]);
+
+  const handleRun = async () => {
+    const key = query.trim();
+    if (!key) return;
+
+    setStatus('loading');
+    try {
+      const res = await fetch(`/api/keyval/${encodeURIComponent(key)}`);
+      if (res.status === 404) {
+        setStatus('not_found');
+        return;
+      }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        setErrorMsg(d.error || 'Error fetching key.');
+        setStatus('error');
+        return;
+      }
+      const data = await res.json();
+      // Copy to clipboard — never displayed in DOM
+      await navigator.clipboard.writeText(data.value);
+      setStatus('copied');
+    } catch {
+      setErrorMsg('Clipboard access failed or network error.');
+      setStatus('error');
+    }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newKey.trim() || !newValue.trim()) {
-      setFormError('Both key and value fields are required.');
-      return;
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleRun();
+    if (e.key === 'Escape') {
+      setQuery('');
+      setStatus('idle');
     }
+  };
 
-    setIsSubmitting(true);
-    setFormError('');
+  // ── Admin: load key names (no values) ────────────────────────────────────
+  const loadAdminKeys = async () => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/keyval/__list__', {
+        headers: { 'X-Session-Token': authToken }
+      });
+      if (res.ok) setAdminKeys(await res.json());
+    } catch {}
+  };
 
+  const toggleAdmin = () => {
+    if (!showAdmin && authToken) loadAdminKeys();
+    setShowAdmin(v => !v);
+  };
+
+  const handleAddKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKey.trim() || !newValue.trim() || !authToken) return;
+    setAdminMsg('');
     try {
       const res = await fetch('/api/keyval', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken ?? ''
-        },
-        body: JSON.stringify({
-          key: newKey.trim(),
-          value: newValue.trim()
-        })
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': authToken },
+        body: JSON.stringify({ key: newKey.trim(), value: newValue.trim() })
       });
-
+      const data = await res.json();
       if (res.ok) {
-        setNewKey('');
-        setNewValue('');
-        await fetchPairs();
+        setNewKey(''); setNewValue('');
+        setAdminMsg(`Saved "${data.key}"`);
+        await loadAdminKeys();
       } else {
-        const data = await res.json();
-        setFormError(data.error || 'Failed to save key-value.');
+        setAdminMsg(data.error || 'Failed to save key.');
       }
-    } catch (err) {
-      setFormError('Network error saving key-value.');
-    } finally {
-      setIsSubmitting(false);
-    }
+    } catch { setAdminMsg('Network error.'); }
   };
 
-  const handleDelete = async (key: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent trigger copy value when clicking delete
-    if (!window.confirm(`Are you sure you want to delete the key "${key}"?`)) {
-      return;
-    }
-
+  const handleDeleteKey = async (key: string) => {
+    if (!authToken) return;
     try {
       const res = await fetch(`/api/keyval/${encodeURIComponent(key)}`, {
         method: 'DELETE',
-        headers: {
-          'X-Session-Token': authToken ?? ''
-        }
+        headers: { 'X-Session-Token': authToken }
       });
-
-      if (res.ok) {
-        await fetchPairs();
-      } else {
-        const data = await res.json();
-        alert(data.error || 'Failed to delete key.');
-      }
-    } catch (err) {
-      alert('Network error deleting key.');
-    }
+      if (res.ok) await loadAdminKeys();
+    } catch {}
   };
 
-  const filteredPairs = pairs.filter(p => 
-    p.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.value.toLowerCase().includes(searchQuery.toLowerCase())
-  ).sort((a, b) => a.key.localeCompare(b.key));
+  // ── Status color and icon ─────────────────────────────────────────────────
+  const statusRing: Record<Status, string> = {
+    idle:      'ring-slate-200 focus-within:ring-blue-400',
+    loading:   'ring-blue-400',
+    copied:    'ring-emerald-400',
+    not_found: 'ring-red-300',
+    error:     'ring-red-400',
+  };
+
+  const statusIndicator = () => {
+    if (status === 'copied')    return <span className="flex items-center gap-1 text-xs font-semibold text-emerald-600"><Check className="w-3.5 h-3.5" />Copied to clipboard</span>;
+    if (status === 'not_found') return <span className="flex items-center gap-1 text-xs font-semibold text-red-500"><X className="w-3.5 h-3.5" />Key not found</span>;
+    if (status === 'error')     return <span className="flex items-center gap-1 text-xs font-semibold text-red-500"><X className="w-3.5 h-3.5" />{errorMsg}</span>;
+    if (status === 'loading')   return <span className="text-xs text-slate-400">Looking up…</span>;
+    return null;
+  };
 
   return (
-    <div className="space-y-8 animate-fade-in text-slate-800">
-      
-      {/* Header Block */}
-      <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div className="space-y-2">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-750 text-xs font-semibold border border-blue-100">
-            <Key className="w-3.5 h-3.5 text-blue-600" />
-            <span>Key Copy Deck</span>
-          </div>
-          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900">
-            KeyVal Store
-          </h1>
-          <p className="text-sm md:text-base text-slate-600 max-w-xl leading-relaxed">
-            Click on any key-value card to copy its value immediately to your clipboard. Public search is active; writes require manager authentication.
-          </p>
+    <div className="min-h-[60vh] flex flex-col items-center justify-center px-4 select-none">
+
+      {/* ── Run Box ── */}
+      <div className="w-full max-w-lg space-y-3">
+
+        {/* Label */}
+        <div className="flex items-center gap-2 text-slate-400 text-xs font-semibold uppercase tracking-widest mb-1">
+          <Keyboard className="w-3.5 h-3.5" />
+          KeyVal
         </div>
-      </div>
 
-      {/* Grid: Editor Panel + List View */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-        
-        {/* Editor panel (Only visible if logged in, or shows login prompt) */}
-        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-4">
-          <h2 className="text-xl font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center gap-2">
-            <Plus className="w-5 h-5 text-blue-600" />
-            Manage Key-Values
-          </h2>
-          
-          {isLoggedIn ? (
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Key
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. AZURE_API_ENDPOINT"
-                  value={newKey}
-                  onChange={(e) => setNewKey(e.target.value)}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50/50"
-                  required
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Value
-                </label>
-                <textarea
-                  placeholder="Paste value here..."
-                  rows={4}
-                  value={newValue}
-                  onChange={(e) => setNewValue(e.target.value)}
-                  className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50/50 font-mono text-xs"
-                  required
-                />
-              </div>
-
-              {formError && (
-                <p className="text-xs text-red-650 font-semibold">{formError}</p>
-              )}
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-750 text-white font-bold rounded-xl text-xs transition shadow-md shadow-blue-500/10"
-              >
-                {isSubmitting ? 'Saving...' : 'Add / Update Pair'}
-              </button>
-            </form>
-          ) : (
-            <div className="text-center py-6 px-4 border border-dashed border-slate-200 rounded-2xl bg-slate-50/50 space-y-3">
-              <Lock className="w-8 h-8 text-slate-400 mx-auto" />
-              <h3 className="text-sm font-bold text-slate-700">Creation Locked</h3>
-              <p className="text-[11px] text-slate-500 leading-relaxed">
-                You can search and copy values freely, but creating or updating keys requires owner authentication.
-              </p>
-            </div>
+        {/* Input */}
+        <div className={`flex items-center bg-white border-2 rounded-2xl shadow-lg ring-2 transition-all duration-150 ${statusRing[status]}`}>
+          <input
+            ref={inputRef}
+            type="text"
+            value={status === 'idle' || status === 'loading' ? query : ''}
+            onChange={e => { setQuery(e.target.value); setStatus('idle'); }}
+            onKeyDown={handleKeyDown}
+            placeholder="Type a key and press Enter…"
+            className="flex-1 bg-transparent px-5 py-4 text-lg font-mono font-medium text-slate-800 placeholder:text-slate-300 focus:outline-none"
+            spellCheck={false}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            disabled={status === 'loading'}
+          />
+          {query && status === 'idle' && (
+            <button
+              onClick={handleRun}
+              className="mr-3 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg transition"
+            >
+              ↵
+            </button>
           )}
         </div>
 
-        {/* Display List panel */}
-        <div className="lg:col-span-2 space-y-4">
-          {/* Search bar */}
-          <div className="relative bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex items-center">
-            <Search className="w-4 h-4 text-slate-400 ml-2" />
-            <input
-              type="text"
-              placeholder="Search keys or values..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-3 pr-2 py-1.5 focus:outline-none text-sm"
-            />
-          </div>
-
-          {/* List display */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm">
-            {loading ? (
-              <div className="text-center py-10">
-                <RefreshCw className="w-8 h-8 text-blue-500 animate-spin mx-auto mb-2" />
-                <span className="text-xs text-slate-500">Loading keys database...</span>
-              </div>
-            ) : filteredPairs.length > 0 ? (
-              <div className="grid grid-cols-1 gap-4">
-                {filteredPairs.map((p) => {
-                  const isCopied = copiedKey === p.key;
-                  return (
-                    <div
-                      key={p.key}
-                      onClick={() => handleCopy(p.key, p.value)}
-                      className={`group border border-slate-200 rounded-2xl p-4 hover:border-blue-300 hover:shadow-sm bg-slate-50/30 hover:bg-white transition duration-150 cursor-pointer flex items-center justify-between gap-4`}
-                    >
-                      <div className="space-y-1 min-w-0 flex-1">
-                        <span className="font-mono text-xs font-extrabold text-slate-800 block truncate group-hover:text-blue-600 transition-colors">
-                          {p.key}
-                        </span>
-                        <span className="font-mono text-[11px] text-slate-500 block truncate leading-relaxed">
-                          {p.value}
-                        </span>
-                      </div>
-                      
-                      <div className="flex items-center gap-2 shrink-0">
-                        {isLoggedIn && (
-                          <button
-                            onClick={(e) => handleDelete(p.key, e)}
-                            className="p-1.5 text-slate-400 hover:text-red-650 hover:bg-slate-50 rounded-lg transition"
-                            title="Delete pair"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        <span className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded transition ${
-                          isCopied 
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
-                            : 'bg-slate-100 text-slate-500 border border-transparent'
-                        }`}>
-                          {isCopied ? (
-                            <>
-                              <Check className="w-3 h-3 text-emerald-600" />
-                              Copied
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3 h-3 text-slate-400" />
-                              Copy
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-center py-16 space-y-3">
-                <Key className="w-12 h-12 text-slate-300 mx-auto" />
-                <h3 className="text-lg font-bold text-slate-700">No keys found</h3>
-                <p className="text-xs text-slate-550 max-w-sm mx-auto leading-relaxed">
-                  {searchQuery 
-                    ? 'No matching keys or values found. Try typing another search query.'
-                    : 'The database is currently empty.'}
-                </p>
-              </div>
-            )}
-          </div>
+        {/* Status */}
+        <div className="h-5 flex items-center pl-1">
+          {statusIndicator()}
+          {status === 'idle' && !query && (
+            <span className="text-[11px] text-slate-300">Esc to clear · Enter to copy</span>
+          )}
         </div>
-
       </div>
 
+      {/* ── Admin Panel (logged-in only) ── */}
+      {authToken && (
+        <div className="w-full max-w-lg mt-12">
+          <button
+            onClick={toggleAdmin}
+            className="flex items-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-600 font-semibold uppercase tracking-widest transition"
+          >
+            {showAdmin ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            Manage Keys
+          </button>
+
+          {showAdmin && (
+            <div className="mt-4 bg-white border border-slate-100 rounded-2xl shadow-sm p-5 space-y-5">
+
+              {/* Add new key */}
+              <form onSubmit={handleAddKey} className="space-y-2">
+                <p className="text-[11px] uppercase font-bold text-slate-400 tracking-widest">Add / Update</p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newKey}
+                    onChange={e => setNewKey(e.target.value)}
+                    placeholder="key"
+                    className="w-1/3 px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <input
+                    type="text"
+                    value={newValue}
+                    onChange={e => setNewValue(e.target.value)}
+                    placeholder="value"
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!newKey.trim() || !newValue.trim()}
+                    className="px-3 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-xl transition"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+                </div>
+                {adminMsg && (
+                  <p className="text-xs font-medium text-slate-500 pl-1">{adminMsg}</p>
+                )}
+              </form>
+
+              {/* Key list (names only, no values) */}
+              {adminKeys.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] uppercase font-bold text-slate-400 tracking-widest">Stored Keys</p>
+                  {adminKeys.map(({ key }) => (
+                    <div key={key} className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-xl">
+                      <span className="font-mono text-sm text-slate-700">{key}</span>
+                      <button
+                        onClick={() => handleDeleteKey(key)}
+                        className="text-slate-300 hover:text-red-500 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {adminKeys.length === 0 && (
+                <p className="text-xs text-slate-300 text-center py-2">No keys stored yet.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
