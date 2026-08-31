@@ -25,6 +25,7 @@ const { authHandler } = require('./dist/src/functions/auth');
 const { linksHandler } = require('./dist/src/functions/links');
 const { keyValHandler } = require('./dist/src/functions/keyval');
 const { imgDropHandler } = require('./dist/src/functions/imgdrop');
+const { timelineHandler } = require('./dist/src/functions/timeline');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -65,6 +66,9 @@ const server = http.createServer(async (req, res) => {
     params = { key: parts[baseIndex + 1] || null };
   } else if (resource === 'imgdrop') {
     handlerToUse = imgDropHandler;
+    params = { id: parts[baseIndex + 1] || null };
+  } else if (resource === 'timeline') {
+    handlerToUse = timelineHandler;
     params = { id: parts[baseIndex + 1] || null };
   }
 

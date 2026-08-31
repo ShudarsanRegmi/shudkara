@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
-  Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut
+  Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -12,6 +12,7 @@ import { LinkManager } from './components/LinkManager';
 import { KeyVal } from './components/KeyVal';
 import { ImgDrop } from './components/ImgDrop';
 import { Login } from './components/Login';
+import { LifetimeLine } from './components/LifetimeLine';
 
 const GLOBAL_SYNC_KEY = 'global_user';
 
@@ -22,6 +23,7 @@ const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: 
   airdrop: { requiresLogin: false, label: 'Airdrop', icon: Share2 },
   textroom: { requiresLogin: false, label: 'Rooms', icon: FileText },
   prompts: { requiresLogin: true, label: 'PromptVault', icon: Bookmark },
+  timeline: { requiresLogin: true, label: 'Timeline', icon: Sparkles },
   links: { requiresLogin: false, label: 'LinkManager', icon: LinkIcon },
   keyval: { requiresLogin: false, label: 'KeyVal', icon: KeyIcon },
   imgdrop: { requiresLogin: false, label: 'ImgDrop', icon: ImageIcon }
@@ -224,6 +226,8 @@ function App() {
         );
       case 'prompts':
         return <PromptVault prompts={prompts} onPromptsChange={setPrompts} />;
+      case 'timeline':
+        return <LifetimeLine authToken={authToken} />;
       case 'links':
         return <LinkManager authToken={authToken} />;
       case 'keyval':
