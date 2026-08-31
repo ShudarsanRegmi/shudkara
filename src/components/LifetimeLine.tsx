@@ -60,6 +60,31 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [editCategory, setEditCategory] = useState('');
   const [editRawTags, setEditRawTags] = useState('');
   const [editTimestamp, setEditTimestamp] = useState('');
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSyncDrive = async () => {
+    if (!authToken || syncing) return;
+    setSyncing(true);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/timeline/sync-drive', {
+        method: 'POST',
+        headers: { 'X-Session-Token': authToken }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Sync successful');
+        fetchPosts(true);
+        fetchFilterMetadata();
+      } else {
+        setErrorMsg(data.error || 'Failed to sync Google Drive.');
+      }
+    } catch {
+      setErrorMsg('Network error occurred during Google Drive sync.');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Media Lightbox
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -310,13 +335,24 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           <p className="text-sm text-slate-500">Your personal chronicle & timeline vault</p>
         </div>
         
-        <button
-          onClick={() => setShowCreator(!showCreator)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm transition shadow-sm"
-        >
-          {showCreator ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          {showCreator ? 'Close' : 'Document Moment'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncDrive}
+            disabled={syncing}
+            className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold rounded-xl text-sm transition shadow-sm"
+          >
+            {syncing ? <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> : <Clock className="w-4 h-4 text-slate-500" />}
+            {syncing ? 'Syncing...' : 'Sync GDrive'}
+          </button>
+          
+          <button
+            onClick={() => setShowCreator(!showCreator)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm transition shadow-sm"
+          >
+            {showCreator ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            {showCreator ? 'Close' : 'Document Moment'}
+          </button>
+        </div>
       </div>
 
       {/* ── Post Creator Form ── */}
