@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Folder, FolderOpen, ExternalLink, Plus, Trash2, Edit2, ChevronRight, ChevronDown, Save, X, Link, RefreshCw } from 'lucide-react';
+import { Folder, FolderOpen, ExternalLink, Plus, Trash2, Edit2, ChevronRight, ChevronDown, Save, X, Link, RefreshCw, Lock, Unlock } from 'lucide-react';
 
 interface LinkNode {
   id: string;
@@ -7,6 +7,7 @@ interface LinkNode {
   name: string;
   type: 'folder' | 'link';
   url?: string;
+  isPrivate?: boolean;
 }
 
 interface LinkManagerProps {
@@ -119,6 +120,26 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
     } catch (err) {
       alert('Error updating node.');
     }
+  };
+
+  // Toggle node privacy
+  const handleTogglePrivate = async (node: LinkNode) => {
+    if (!isLoggedIn) return;
+    try {
+      const res = await fetch(`/api/links/${node.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken ?? ''
+        },
+        body: JSON.stringify({
+          isPrivate: !node.isPrivate
+        })
+      });
+      if (res.ok) {
+        await fetchNodes();
+      }
+    } catch {}
   };
 
   // Delete Node (recursive)
@@ -245,6 +266,11 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
                           <ExternalLink className="w-3 h-3 text-slate-400 inline" />
                         </a>
                       )}
+                      {node.isPrivate && (
+                        <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-extrabold flex items-center gap-0.5 shrink-0">
+                          <Lock className="w-2.5 h-2.5" /> Private
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -252,6 +278,13 @@ export const LinkManager: React.FC<LinkManagerProps> = ({ authToken }) => {
                 {/* Operations (Logged-in only) */}
                 {isLoggedIn && !isEditing && (
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => handleTogglePrivate(node)}
+                      className={`p-1 hover:bg-slate-200 rounded ${node.isPrivate ? 'text-amber-600 font-bold' : 'text-slate-400 hover:text-slate-600'}`}
+                      title={node.isPrivate ? 'Private (Click to make Public)' : 'Public (Click to Lock)'}
+                    >
+                      {node.isPrivate ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                    </button>
                     {isFolder && (
                       <>
                         <button

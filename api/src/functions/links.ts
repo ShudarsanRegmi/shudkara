@@ -8,6 +8,7 @@ interface LinkNode {
   name: string;
   type: 'folder' | 'link';
   url?: string;
+  isPrivate?: boolean;
   createdAt: Date;
 }
 
@@ -19,14 +20,23 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
     const db = await connectToMongo();
     const col = db.collection('links');
 
-    // 1. GET - Fetch all nodes (publicly readable)
+    const token = extractToken(request);
+    const isAuthorized = await verifySession(token);
+
+    // 1. GET - Fetch all nodes (filter private nodes for unauthenticated visitors)
     if (method === 'GET') {
       const nodes = await col.find({}).toArray();
-      // Remove mongo _id for clean payload
-      const cleaned = nodes.map(n => {
+      
+      // If not logged in, filter out nodes where isPrivate === true
+      const filtered = isAuthorized 
+        ? nodes 
+        : nodes.filter(n => !n.isPrivate);
+
+      const cleaned = filtered.map(n => {
         const { _id, ...rest } = n;
         return rest;
       });
+      
       return {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -35,8 +45,6 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
     }
 
     // Auth validation for all write/delete operations
-    const token = extractToken(request);
-    const isAuthorized = await verifySession(token);
     if (!isAuthorized) {
       return { status: 401, jsonBody: { error: 'Unauthorized. Login required to manage links.' } };
     }
@@ -50,7 +58,7 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
       }
 
-      const { name, type, parentId, url } = body;
+      const { name, type, parentId, url, isPrivate } = body;
       if (!name || typeof name !== 'string') {
         return { status: 400, jsonBody: { error: 'Name is required.' } };
       }
@@ -64,6 +72,7 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
         name: name.trim(),
         type,
         url: type === 'link' ? (url || '').trim() : undefined,
+        isPrivate: !!isPrivate,
         createdAt: new Date()
       };
 
@@ -88,12 +97,13 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
       }
 
-      const { name, parentId, url } = body;
+      const { name, parentId, url, isPrivate } = body;
       const updates: any = {};
       
       if (name !== undefined) updates.name = name.trim();
       if (parentId !== undefined) updates.parentId = parentId || null;
       if (url !== undefined) updates.url = url.trim();
+      if (isPrivate !== undefined) updates.isPrivate = !!isPrivate;
 
       const result = await col.updateOne(
         { id: nodeId },
@@ -116,11 +126,9 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'Node ID is required.' } };
       }
 
-      // Fetch all nodes to trace hierarchy
       const allNodes = await col.find({}).toArray();
       const idsToDelete = new Set<string>([nodeId]);
 
-      // Simple queue-based subtree discovery
       const queue = [nodeId];
       while (queue.length > 0) {
         const currentId = queue.shift();
@@ -133,25 +141,18 @@ export async function linksHandler(request: HttpRequest, context: InvocationCont
         });
       }
 
-      const deleteResult = await col.deleteMany({ id: { $in: Array.from(idsToDelete) } });
+      await col.deleteMany({ id: { $in: Array.from(idsToDelete) } });
 
       return {
         status: 200,
-        jsonBody: {
-          success: true,
-          deletedCount: deleteResult.deletedCount,
-          message: `${deleteResult.deletedCount} nodes deleted recursively.`
-        }
+        jsonBody: { success: true, message: `Deleted node and ${idsToDelete.size - 1} child nodes.` }
       };
     }
 
     return { status: 405, jsonBody: { error: `Method ${method} not allowed.` } };
   } catch (err: any) {
     context.error('Links handler error:', err);
-    return {
-      status: 500,
-      jsonBody: { error: 'Internal server error.', details: err.message }
-    };
+    return { status: 500, jsonBody: { error: 'Internal server error.', details: err.message } };
   }
 }
 
