@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -15,6 +15,8 @@ import { ImgDrop } from './components/ImgDrop';
 import { Login } from './components/Login';
 import { LifetimeLine } from './components/LifetimeLine';
 import { SharedPromptViewer } from './components/SharedPromptViewer';
+import { Todos, type TodoItem } from './components/Todos';
+import { Lists, type ListCategory } from './components/Lists';
 
 const GLOBAL_SYNC_KEY = 'global_user';
 
@@ -24,6 +26,7 @@ const NAV_GROUPS = [
     category: 'Tools & Utilities',
     icon: Wrench,
     items: [
+      { key: 'todos', label: 'Todos', description: 'Aesthetic Whiteboard & Flat Task List', icon: CheckSquare, requiresLogin: false },
       { key: 'airdrop', label: 'Airdrop', description: 'Direct P2P file sharing', icon: Share2, requiresLogin: false },
       { key: 'textroom', label: 'Rooms', description: 'Live collaborative text room', icon: FileText, requiresLogin: false },
       { key: 'keyval', label: 'KeyVal', description: 'Secret key-value runbox', icon: KeyIcon, requiresLogin: false },
@@ -34,6 +37,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'lists', label: 'Lists', description: 'Static reference collections & notes', icon: ListOrdered, requiresLogin: false },
       { key: 'prompts', label: 'PromptVault', description: 'AI prompt library & links', icon: Bookmark, requiresLogin: false },
       { key: 'links', label: 'LinkManager', description: 'Tree bookmark manager', icon: LinkIcon, requiresLogin: false },
       { key: 'timeline', label: 'Timeline', description: 'Lifetime Line personal feed', icon: Sparkles, requiresLogin: true },
@@ -45,6 +49,8 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  todos: { requiresLogin: false, label: 'Todos', icon: CheckSquare },
+  lists: { requiresLogin: false, label: 'Lists', icon: ListOrdered },
   leetcode: { requiresLogin: true, label: 'LeetCode 75', icon: BookOpen },
   airdrop: { requiresLogin: false, label: 'Airdrop', icon: Share2 },
   textroom: { requiresLogin: false, label: 'Rooms', icon: FileText },
@@ -69,6 +75,10 @@ function App() {
   // Database Sync States (silent background sync)
   const [leetcodeProgress, setLeetcodeProgress] = useState<Record<string, any>>({});
   const [prompts, setPrompts] = useState<any[]>([]);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [todoBoardPrivate, setTodoBoardPrivate] = useState<boolean>(false);
+  const [lists, setLists] = useState<ListCategory[]>([]);
+  
   const isInitializedRef = useRef(false);
 
   // Active Dropdown state for Desktop Navbar
@@ -118,7 +128,7 @@ function App() {
     }
   }, []);
 
-  // Sync prompts and leetcode progress
+  // Sync prompts and cloud data
   useEffect(() => {
     loadCloudData();
   }, []);
@@ -137,7 +147,10 @@ function App() {
         body: JSON.stringify({
           syncKey: GLOBAL_SYNC_KEY,
           leetcodeProgress,
-          prompts
+          prompts,
+          todos,
+          todoBoardPrivate,
+          lists
         })
       })
       .catch(err => {
@@ -146,7 +159,7 @@ function App() {
     }, 1200);
 
     return () => clearTimeout(delayDebounce);
-  }, [leetcodeProgress, prompts]);
+  }, [leetcodeProgress, prompts, todos, todoBoardPrivate, lists]);
 
   // Load database data helper
   const loadCloudData = async () => {
@@ -159,6 +172,9 @@ function App() {
       if (data.exists) {
         setLeetcodeProgress(data.leetcodeProgress || {});
         setPrompts(data.prompts || []);
+        setTodos(data.todos || []);
+        setTodoBoardPrivate(!!data.todoBoardPrivate);
+        setLists(data.lists || []);
       }
     } catch (err) {
       console.error('Failed to load cloud data:', err);
@@ -187,6 +203,7 @@ function App() {
   };
 
   const handleLogout = () => {
+    if (!window.confirm('Are you sure you want to log out?')) return;
     if (authToken) {
       fetch('/api/auth/logout', {
         method: 'POST',
@@ -215,10 +232,10 @@ function App() {
       return <SharedPromptViewer prompt={sharedPrompt} />;
     } else {
       return (
-        <div className="min-h-screen bg-slate-950 text-slate-300 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 p-8 rounded-3xl text-center max-w-sm space-y-3">
-            <h2 className="text-xl font-bold text-white">Prompt Not Available</h2>
-            <p className="text-xs text-slate-400">
+        <div className="min-h-screen bg-slate-50 text-slate-700 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 p-8 rounded-3xl text-center max-w-sm space-y-3 shadow-xl">
+            <h2 className="text-xl font-bold text-slate-900">Prompt Not Available</h2>
+            <p className="text-xs text-slate-500">
               This prompt may have been set to private or deleted by its author.
             </p>
           </div>
@@ -241,6 +258,18 @@ function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
+      case 'todos':
+        return (
+          <Todos 
+            authToken={authToken} 
+            todos={todos} 
+            onTodosChange={setTodos}
+            isBoardPrivate={todoBoardPrivate}
+            onBoardPrivacyChange={setTodoBoardPrivate}
+          />
+        );
+      case 'lists':
+        return <Lists authToken={authToken} lists={lists} onListsChange={setLists} />;
       case 'leetcode':
         return <LeetCodeTracker progress={leetcodeProgress} onProgressChange={setLeetcodeProgress} />;
       case 'airdrop':
@@ -362,7 +391,7 @@ function App() {
           </nav>
 
           {/* Authentication Action & Mobile Menu Toggle */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3 sm:gap-4 pl-2">
             {authToken ? (
               <button
                 onClick={handleLogout}

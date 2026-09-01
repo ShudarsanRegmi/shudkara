@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { BLIND75_QUESTIONS } from '../data/blind75';
 import { 
   Search, Star, BookOpen, ExternalLink, Calendar, Plus, Minus, 
-  ChevronDown, ChevronUp, Trash2, Download, Upload, AlertTriangle, Check
+  ChevronDown, ChevronUp, Download, Upload, AlertTriangle, Check
 } from 'lucide-react';
 
 interface QuestionProgress {
@@ -151,7 +151,8 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
   };
 
   const handleReset = () => {
-    if (window.confirm('Are you absolutely sure you want to reset all LeetCode tracker progress? This cannot be undone.')) {
+    const input = window.prompt('Type "RESET" (in capital letters) to confirm wiping all LeetCode progress:');
+    if (input === 'RESET') {
       onProgressChange({});
       triggerToast('Progress successfully reset.', 'info');
     }
@@ -215,7 +216,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
             Export Data
           </button>
           
-          <label className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700/80 text-xs font-semibold text-slate-700 dark:text-slate-300 rounded-lg border border-slate-200 dark:border-slate-700/80 cursor-pointer transition-colors">
+          <label className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 rounded-lg border border-slate-200 cursor-pointer transition-colors">
             <Upload className="w-3.5 h-3.5" />
             Import Backup
             <input 
@@ -225,15 +226,6 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
               className="hidden" 
             />
           </label>
-
-          <button
-            onClick={handleReset}
-            title="Reset All Tracker Progress"
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-rose-50 hover:bg-rose-100/80 dark:bg-rose-950/20 dark:hover:bg-rose-950/40 text-xs font-semibold text-rose-600 dark:text-rose-400 rounded-lg border border-rose-100 dark:border-rose-900/30 transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Reset All
-          </button>
         </div>
       </div>
 
@@ -488,6 +480,16 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
             </p>
           </div>
         )}
+      </div>
+
+      {/* Discrete Bottom Reset */}
+      <div className="pt-8 text-center">
+        <button
+          onClick={handleReset}
+          className="text-xs text-slate-400 hover:text-red-500 transition underline underline-offset-4"
+        >
+          Reset All Progress
+        </button>
       </div>
     </div>
   );

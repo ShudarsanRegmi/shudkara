@@ -25,6 +25,9 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
             leetcodeProgress: doc.leetcodeProgress || {},
             leetcodeNotes: doc.leetcodeNotes || {},
             prompts: doc.prompts || [],
+            todos: doc.todos || [],
+            todoBoardPrivate: !!doc.todoBoardPrivate,
+            lists: doc.lists || [],
             updatedAt: doc.updatedAt
           }
         };
@@ -36,7 +39,10 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
             exists: false,
             leetcodeProgress: {},
             leetcodeNotes: {},
-            prompts: []
+            prompts: [],
+            todos: [],
+            todoBoardPrivate: false,
+            lists: []
           }
         };
       }
@@ -50,7 +56,7 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
         return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
       }
 
-      const { syncKey, leetcodeProgress, leetcodeNotes, prompts } = body;
+      const { syncKey, leetcodeProgress, leetcodeNotes, prompts, todos, todoBoardPrivate, lists } = body;
       if (!syncKey || typeof syncKey !== 'string' || syncKey.trim() === '') {
         return { status: 400, jsonBody: { error: 'Sync key is required to save data.' } };
       }
@@ -60,6 +66,9 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
         leetcodeProgress: leetcodeProgress || {},
         leetcodeNotes: leetcodeNotes || {},
         prompts: prompts || [],
+        todos: todos || [],
+        todoBoardPrivate: !!todoBoardPrivate,
+        lists: lists || [],
         updatedAt: new Date()
       };
 
