@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { BLIND75_QUESTIONS } from '../data/blind75';
 import { 
-  Search, Star, BookOpen, ExternalLink, Calendar, Plus, Minus, 
+  Search, Star, BookOpen, ExternalLink, Calendar, Plus, 
   ChevronDown, ChevronUp, Download, Upload, AlertTriangle, Check,
   Compass, Eye, Flame, Award, ShieldCheck, Clock, Zap,
-  AlertCircle, FileText, Sparkles, PlusCircle, Trash2
+  AlertCircle, FileText, Sparkles, Trash2, X
 } from 'lucide-react';
 
 export interface RunLogEntry {
@@ -37,7 +37,7 @@ const DEFAULT_PROGRESS: QuestionProgress = {
   runLogs: []
 };
 
-// ── Sanskrit Mastery Tier Definition (Option 3) ──
+// ── Sanskrit Mastery Tier Definition with Color Gamification ──
 export interface SanskritTier {
   name: string;
   script: string;
@@ -46,6 +46,7 @@ export interface SanskritTier {
   bg: string;
   border: string;
   text: string;
+  rowBg?: string;
   glow?: string;
 }
 
@@ -56,9 +57,10 @@ export function getSanskritTier(runs: number): SanskritTier {
       script: 'आरम्भ',
       meaning: 'Unstudied',
       icon: Compass,
-      bg: 'bg-slate-100 dark:bg-slate-800',
-      border: 'border-slate-200 dark:border-slate-700',
-      text: 'text-slate-600 dark:text-slate-400',
+      bg: 'bg-slate-100',
+      border: 'border-slate-200',
+      text: 'text-slate-600',
+      rowBg: 'bg-white'
     };
   }
   if (runs === 1) {
@@ -67,9 +69,10 @@ export function getSanskritTier(runs: number): SanskritTier {
       script: 'बोध',
       meaning: 'Perceived',
       icon: Eye,
-      bg: 'bg-amber-50 dark:bg-amber-950/30',
-      border: 'border-amber-200 dark:border-amber-900/40',
-      text: 'text-amber-700 dark:text-amber-400',
+      bg: 'bg-emerald-100',
+      border: 'border-emerald-300',
+      text: 'text-emerald-800',
+      rowBg: 'bg-emerald-50/20'
     };
   }
   if (runs === 2) {
@@ -78,9 +81,10 @@ export function getSanskritTier(runs: number): SanskritTier {
       script: 'अभ्यास',
       meaning: 'Practiced',
       icon: Flame,
-      bg: 'bg-sky-50 dark:bg-sky-950/30',
-      border: 'border-sky-200 dark:border-sky-900/40',
-      text: 'text-sky-700 dark:text-sky-400',
+      bg: 'bg-sky-100',
+      border: 'border-sky-300',
+      text: 'text-sky-800',
+      rowBg: 'bg-sky-50/30'
     };
   }
   if (runs >= 3 && runs < 5) {
@@ -89,21 +93,23 @@ export function getSanskritTier(runs: number): SanskritTier {
       script: 'प्रवीनता',
       meaning: 'Expert',
       icon: Award,
-      bg: 'bg-indigo-50 dark:bg-indigo-950/30',
-      border: 'border-indigo-200 dark:border-indigo-900/40',
-      text: 'text-indigo-700 dark:text-indigo-400',
+      bg: 'bg-indigo-100',
+      border: 'border-indigo-300',
+      text: 'text-indigo-800',
+      rowBg: 'bg-indigo-50/30'
     };
   }
-  // 5+ runs
+  // 5+ runs (Siddhi Mastery)
   return {
     name: 'Siddhi',
     script: 'सिद्धि',
     meaning: 'Mastered',
     icon: ShieldCheck,
-    bg: 'bg-emerald-100 dark:bg-emerald-950/40',
-    border: 'border-emerald-300 dark:border-emerald-800',
-    text: 'text-emerald-800 dark:text-emerald-300',
-    glow: 'shadow-sm shadow-emerald-300/50 ring-2 ring-emerald-400/40'
+    bg: 'bg-gradient-to-r from-amber-200 via-amber-100 to-emerald-100',
+    border: 'border-amber-300',
+    text: 'text-amber-950 font-black',
+    rowBg: 'bg-amber-50/40 border-amber-200',
+    glow: 'shadow-md shadow-amber-300/40 ring-2 ring-amber-400/50 animate-pulse'
   };
 }
 
@@ -119,13 +125,13 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
   const [selectedTier, setSelectedTier] = useState<string>('All');
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
   
-  // Expanded card state & active tabs
-  const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
-  const [activeCardTab, setActiveCardTab] = useState<Record<string, 'notes' | 'log'>>({});
+  // Independent expander states for Notes vs Logs
+  const [openNotesPanel, setOpenNotesPanel] = useState<Record<string, boolean>>({});
+  const [openLogsPanel, setOpenLogsPanel] = useState<Record<string, boolean>>({});
   const [notesEditMode, setNotesEditMode] = useState<Record<string, boolean>>({});
 
-  // New Run Log Form State per question
-  const [logFormOpen, setLogFormOpen] = useState<Record<string, boolean>>({});
+  // Active Run Log Modal state
+  const [activeModalQuestionId, setActiveModalQuestionId] = useState<string | null>(null);
   const [logDate, setLogDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [logTime, setLogTime] = useState<string>('15');
   const [logTC, setLogTC] = useState<string>('O(N)');
@@ -197,35 +203,28 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     );
   };
 
-  const adjustRevisionCount = (id: string, delta: number) => {
-    const current = getQuestionProgress(id);
-    const newCount = Math.max(0, current.revisedCount + delta);
-    const oldTier = getSanskritTier(current.revisedCount);
-    const newTier = getSanskritTier(newCount);
-
-    const updated = {
-      ...progress,
-      [id]: {
-        ...current,
-        revisedCount: newCount,
-        lastRevised: delta > 0 ? new Date().toISOString().split('T')[0] : current.lastRevised
-      }
-    };
-    saveProgress(updated);
-
-    if (delta > 0 && newTier.name !== oldTier.name) {
-      triggerToast(`Mastery Tier Level Up! Reached ${newTier.name} (${newTier.script})`, 'success');
-    }
+  // Open the Run Log modal when (+) button is clicked
+  const handleOpenRunLogModal = (questionId: string) => {
+    setActiveModalQuestionId(questionId);
+    setLogDate(new Date().toISOString().split('T')[0]);
+    setLogTime('15');
+    setLogTC('O(N)');
+    setLogSC('O(1)');
+    setLogRating('Smooth');
+    setLogNotes('');
   };
 
-  // ── Log New Run / Sadhana Entry ──
-  const handleAddRunLog = (questionId: string) => {
+  // Submit modal form -> saves log entry AND increases revision count (+1)
+  const handleSubmitRunLogModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeModalQuestionId) return;
+
     if (!logNotes.trim()) {
-      triggerToast('Please write a brief approach note for this run log.', 'error');
+      triggerToast('Please write your solution approach & thoughts.', 'error');
       return;
     }
 
-    const current = getQuestionProgress(questionId);
+    const current = getQuestionProgress(activeModalQuestionId);
     const newEntry: RunLogEntry = {
       id: Date.now().toString(),
       date: logDate || new Date().toISOString().split('T')[0],
@@ -237,45 +236,53 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     };
 
     const newLogs = [newEntry, ...(current.runLogs || [])];
+    const oldTier = getSanskritTier(current.revisedCount);
     const newCount = current.revisedCount + 1;
     const newTier = getSanskritTier(newCount);
 
     const updated = {
       ...progress,
-      [questionId]: {
+      [activeModalQuestionId]: {
         ...current,
         revisedCount: newCount,
         lastRevised: newEntry.date,
-        status: current.status === 'Not Started' ? 'Solved' : current.status,
+        status: (current.status === 'Not Started' ? 'Solved' : current.status) as QuestionProgress['status'],
         runLogs: newLogs
       }
     };
 
     saveProgress(updated);
-    setLogFormOpen(prev => ({ ...prev, [questionId]: false }));
+    setActiveModalQuestionId(null);
     setLogNotes('');
-    triggerToast(`Recorded run log & updated to ${newTier.name} (${newTier.script})!`, 'success');
+
+    if (newTier.name !== oldTier.name) {
+      triggerToast(`Mastery Level Up! Ascended to ${newTier.name} (${newTier.script})!`, 'success');
+    } else {
+      triggerToast(`Logged run & increased revision count to ${newCount}!`, 'success');
+    }
   };
 
+  // Delete run log entry (optionally decrease count if confirmed)
   const handleDeleteRunLog = (questionId: string, logId: string) => {
     const current = getQuestionProgress(questionId);
     const updatedLogs = (current.runLogs || []).filter(l => l.id !== logId);
+    
+    let shouldDecrease = false;
+    if (current.revisedCount > 0) {
+      shouldDecrease = window.confirm('Do you also want to decrease the revision count by 1?');
+    }
+
     const updated = {
       ...progress,
       [questionId]: {
         ...current,
+        revisedCount: shouldDecrease ? Math.max(0, current.revisedCount - 1) : current.revisedCount,
         runLogs: updatedLogs
       }
     };
-    saveProgress(updated);
-    triggerToast('Run log entry removed.', 'info');
-  };
 
-  const toggleNotesExpand = (id: string) => {
-    setExpandedNotes(prev => ({
-      ...prev,
-      [id]: !prev[id]
-    }));
+    saveProgress(updated);
+    triggerToast('Run log entry deleted.', 'info');
   };
 
   const handleExport = () => {
@@ -315,7 +322,6 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     }
   };
 
-  // Quick formatting helper for notes
   const insertFormat = (id: string, prefix: string, suffix: string = '') => {
     const current = getQuestionProgress(id);
     const formatted = `${current.notes}\n${prefix}${suffix}`;
@@ -370,7 +376,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
             Blind 75 Mastery & Abhyasa Journal
           </h2>
           <p className="text-xs text-slate-500 max-w-xl">
-            Track solution approaches, log run histories (Sadhana), and ascend through the 5 Sanskrit Mastery Tiers.
+            Track solution approaches, log run histories, and ascend through the 5 Sanskrit Mastery Tiers.
           </p>
         </div>
 
@@ -411,12 +417,12 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
         </div>
 
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-3">
-          <div className="p-3 bg-emerald-50 text-emerald-600 rounded-xl">
-            <ShieldCheck className="w-5 h-5" />
+          <div className="p-3 bg-amber-100 text-amber-700 rounded-xl border border-amber-300 shadow-sm">
+            <ShieldCheck className="w-5 h-5 text-amber-700" />
           </div>
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Siddhi (Mastered)</p>
-            <p className="text-lg font-extrabold text-emerald-700">{siddhiCount} Problems</p>
+            <p className="text-lg font-extrabold text-amber-800">{siddhiCount} Problems</p>
           </div>
         </div>
 
@@ -540,15 +546,19 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm divide-y divide-slate-100">
                 {categoryQuestions.map((question) => {
                   const qProgress = getQuestionProgress(question.id);
-                  const isExpanded = !!expandedNotes[question.id];
+                  const isSiddhiMastered = qProgress.revisedCount >= 5;
                   const tier = getSanskritTier(qProgress.revisedCount);
                   const TierIcon = tier.icon;
-                  const activeTab = activeCardTab[question.id] || 'notes';
+
+                  const isNotesOpen = !!openNotesPanel[question.id];
+                  const isLogsOpen = !!openLogsPanel[question.id];
                   const isNotesEditing = !!notesEditMode[question.id];
-                  const isLogOpen = !!logFormOpen[question.id];
 
                   return (
-                    <div key={question.id} className="p-4 hover:bg-slate-50/60 transition-colors space-y-3">
+                    <div 
+                      key={question.id} 
+                      className={`p-4 transition-colors space-y-3 ${tier.rowBg || 'bg-white'} ${isSiddhiMastered ? 'opacity-90' : ''}`}
+                    >
                       
                       {/* Top Row: Title, Sanskrit Tier, Controls */}
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -564,17 +574,31 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
                           <div className="min-w-0 space-y-1">
                             <div className="flex items-center flex-wrap gap-2">
                               <span className="text-slate-400 font-bold text-xs">#{question.id}</span>
+                              
+                              {/* Strikethrough when Siddhi (5+ runs) reached */}
                               <a
                                 href={question.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="font-extrabold text-sm text-slate-900 hover:text-blue-600 hover:underline inline-flex items-center gap-1"
+                                className={`font-extrabold text-sm hover:underline inline-flex items-center gap-1 ${
+                                  isSiddhiMastered 
+                                    ? 'line-through text-slate-400 font-semibold' 
+                                    : 'text-slate-900 hover:text-blue-600'
+                                }`}
                               >
                                 {question.title}
                                 <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                               </a>
 
-                              {/* Sanskrit Tier Badge */}
+                              {/* Siddhi Mastered Stamp */}
+                              {isSiddhiMastered && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black tracking-wide shadow-sm">
+                                  <Check className="w-3 h-3 text-amber-700" />
+                                  Siddhi Mastered
+                                </span>
+                              )}
+
+                              {/* Sanskrit Tier Badge with level-based color gamification */}
                               <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold transition-all duration-300 ${tier.bg} ${tier.border} ${tier.text} ${tier.glow || ''}`}>
                                 <TierIcon className="w-3.5 h-3.5 shrink-0" />
                                 <span>{tier.name}</span>
@@ -605,26 +629,16 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
 
                         {/* Controls */}
                         <div className="flex items-center flex-wrap gap-3 shrink-0">
-                          {/* Revision Counter */}
-                          <div className="flex items-center border border-slate-200 rounded-xl px-1.5 py-1 bg-slate-50">
-                            <button
-                              onClick={() => adjustRevisionCount(question.id, -1)}
-                              disabled={qProgress.revisedCount <= 0}
-                              className="p-1 hover:text-rose-600 disabled:opacity-30 text-slate-500 transition"
-                            >
-                              <Minus className="w-3.5 h-3.5" />
-                            </button>
-                            <span className="text-xs font-extrabold px-2 text-slate-800 min-w-[3rem] text-center">
-                              {qProgress.revisedCount} {qProgress.revisedCount === 1 ? 'run' : 'runs'}
-                            </span>
-                            <button
-                              onClick={() => adjustRevisionCount(question.id, 1)}
-                              className="p-1 hover:text-emerald-600 text-slate-500 transition"
-                              title="Add +1 Revision Run"
-                            >
-                              <Plus className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          
+                          {/* (+) Button: Opens Run Log Modal & Increases Runs */}
+                          <button
+                            onClick={() => handleOpenRunLogModal(question.id)}
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition shadow-sm"
+                            title="Log a new solution attempt and increase revision (+1)"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>{qProgress.revisedCount} {qProgress.revisedCount === 1 ? 'run' : 'runs'}</span>
+                          </button>
 
                           {/* Status dropdown */}
                           <select
@@ -643,290 +657,188 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
                             <option value="Needs Review">Needs Review</option>
                           </select>
 
-                          {/* Notes & Run Log expander */}
+                          {/* Separate Notes Expander Button */}
                           <button
-                            onClick={() => toggleNotesExpand(question.id)}
+                            onClick={() => setOpenNotesPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
-                              isExpanded
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                              isNotesOpen
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : qProgress.notes.trim() !== ''
+                                  ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
                             }`}
                           >
                             <FileText className="w-3.5 h-3.5" />
-                            <span>Notes & Logs</span>
+                            <span>Notes</span>
+                            {isNotesOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          </button>
+
+                          {/* Separate Logs Expander Button */}
+                          <button
+                            onClick={() => setOpenLogsPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                              isLogsOpen
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : qProgress.runLogs && qProgress.runLogs.length > 0
+                                  ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Logs</span>
                             {qProgress.runLogs && qProgress.runLogs.length > 0 && (
-                              <span className="px-1.5 py-0.2 bg-blue-500 text-white rounded-full text-[9px]">
+                              <span className="px-1.5 py-0.2 bg-amber-600 text-white rounded-full text-[9px] font-bold">
                                 {qProgress.runLogs.length}
                               </span>
                             )}
-                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            {isLogsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                           </button>
                         </div>
                       </div>
 
-                      {/* ── Collapsible Notes & Run Log Panel ── */}
-                      {isExpanded && (
-                        <div className="mt-4 pt-4 border-t border-slate-200 space-y-4 animate-in fade-in duration-150">
-                          
-                          {/* Inner Tabs: Notes vs Abhyasa Run Log */}
-                          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => setActiveCardTab(prev => ({ ...prev, [question.id]: 'notes' }))}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
-                                  activeTab === 'notes'
-                                    ? 'bg-blue-600 text-white shadow-sm'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                📝 General Notes
-                              </button>
-                              <button
-                                onClick={() => setActiveCardTab(prev => ({ ...prev, [question.id]: 'log' }))}
-                                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-                                  activeTab === 'log'
-                                    ? 'bg-blue-600 text-white shadow-sm'
-                                    : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                                }`}
-                              >
-                                📜 Abhyasa Log ({qProgress.runLogs?.length || 0})
-                              </button>
-                            </div>
-
-                            {activeTab === 'notes' && (
-                              <button
-                                onClick={() => setNotesEditMode(prev => ({ ...prev, [question.id]: !isNotesEditing }))}
-                                className="px-3 py-1 text-xs font-bold text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
-                              >
-                                {isNotesEditing ? '👁️ Preview' : '✏️ Edit Notes'}
-                              </button>
-                            )}
-
-                            {activeTab === 'log' && (
-                              <button
-                                onClick={() => setLogFormOpen(prev => ({ ...prev, [question.id]: !isLogOpen }))}
-                                className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
-                              >
-                                <PlusCircle className="w-3.5 h-3.5" />
-                                Log New Run
-                              </button>
-                            )}
+                      {/* ── Separate Panel 1: General Solution Notes ── */}
+                      {isNotesOpen && (
+                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-extrabold text-slate-700 flex items-center gap-1">
+                              <FileText className="w-3.5 h-3.5 text-blue-600" /> Solution Approach & Notes
+                            </span>
+                            <button
+                              onClick={() => setNotesEditMode(prev => ({ ...prev, [question.id]: !isNotesEditing }))}
+                              className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                            >
+                              {isNotesEditing ? '👁️ Preview' : '✏️ Edit Notes'}
+                            </button>
                           </div>
 
-                          {/* ── Tab 1: Enhanced Notes (Formatted Preview vs Edit Toolbar) ── */}
-                          {activeTab === 'notes' && (
+                          {isNotesEditing ? (
                             <div className="space-y-2">
-                              {isNotesEditing ? (
-                                <div className="space-y-2">
-                                  {/* Toolbar */}
-                                  <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
-                                    <button 
-                                      onClick={() => insertFormat(question.id, '**Bold Text**')}
-                                      className="px-2 py-1 font-bold bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                    >
-                                      B
-                                    </button>
-                                    <button 
-                                      onClick={() => insertFormat(question.id, '`code`')}
-                                      className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                    >
-                                      `code`
-                                    </button>
-                                    <button 
-                                      onClick={() => insertFormat(question.id, '```\n// Code block here\n```')}
-                                      className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                    >
-                                      ``` block
-                                    </button>
-                                    <button 
-                                      onClick={() => insertFormat(question.id, '- ')}
-                                      className="px-2 py-1 bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                    >
-                                      • List
-                                    </button>
-                                  </div>
+                              {/* Formatting Toolbar */}
+                              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+                                <button 
+                                  onClick={() => insertFormat(question.id, '**Bold Text**')}
+                                  className="px-2 py-1 font-bold bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                >
+                                  B
+                                </button>
+                                <button 
+                                  onClick={() => insertFormat(question.id, '`code`')}
+                                  className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                >
+                                  `code`
+                                </button>
+                                <button 
+                                  onClick={() => insertFormat(question.id, '```\n// Code block here\n```')}
+                                  className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                >
+                                  ``` block
+                                </button>
+                                <button 
+                                  onClick={() => insertFormat(question.id, '- ')}
+                                  className="px-2 py-1 bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                >
+                                  • List
+                                </button>
+                              </div>
 
-                                  <textarea
-                                    placeholder="Write your approach notes, key insights, or solution code snippet..."
-                                    value={qProgress.notes}
-                                    onChange={(e) => updateNotes(question.id, e.target.value)}
-                                    rows={5}
-                                    className="w-full text-xs font-mono bg-slate-900 text-slate-100 p-4 rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner"
-                                  />
-                                </div>
+                              <textarea
+                                placeholder="Write your solution approach, time/space complexity notes, or code snippet..."
+                                value={qProgress.notes}
+                                onChange={(e) => updateNotes(question.id, e.target.value)}
+                                rows={4}
+                                className="w-full text-xs font-mono bg-slate-900 text-slate-100 p-4 rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner"
+                              />
+                            </div>
+                          ) : (
+                            <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl min-h-[70px]">
+                              {qProgress.notes.trim() ? (
+                                <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed">
+                                  {qProgress.notes}
+                                </pre>
                               ) : (
-                                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl min-h-[80px]">
-                                  {qProgress.notes.trim() ? (
-                                    <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed">
-                                      {qProgress.notes}
-                                    </pre>
-                                  ) : (
-                                    <p className="text-xs text-slate-400 italic">No notes written yet. Click "Edit Notes" to write your solution notes.</p>
-                                  )}
-                                </div>
+                                <p className="text-xs text-slate-400 italic">No general notes added yet. Click "Edit Notes" to write your solution notes.</p>
                               )}
                             </div>
                           )}
+                        </div>
+                      )}
 
-                          {/* ── Tab 2: Abhyasa Run Log (Journal of previous attempts) ── */}
-                          {activeTab === 'log' && (
-                            <div className="space-y-4">
-                              
-                              {/* New Run Log Form */}
-                              {isLogOpen && (
-                                <div className="bg-slate-900 text-slate-100 p-4 rounded-2xl space-y-3 border border-slate-800 animate-in fade-in duration-150">
-                                  <div className="flex items-center justify-between border-b border-slate-800 pb-2">
-                                    <span className="text-xs font-extrabold text-amber-400 flex items-center gap-1">
-                                      <Zap className="w-3.5 h-3.5" /> Log Solution Run
-                                    </span>
-                                    <button onClick={() => setLogFormOpen(prev => ({ ...prev, [question.id]: false }))}>
-                                      <ChevronUp className="w-4 h-4 text-slate-400" />
-                                    </button>
-                                  </div>
+                      {/* ── Separate Panel 2: Abhyasa Run Log Timeline ── */}
+                      {isLogsOpen && (
+                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-3 animate-in fade-in duration-150">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-amber-600" /> Abhyasa Run History Journal
+                            </span>
+                            <button
+                              onClick={() => handleOpenRunLogModal(question.id)}
+                              className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Log New Run
+                            </button>
+                          </div>
 
-                                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-                                    <div>
-                                      <label className="text-[10px] text-slate-400 font-bold block mb-1">Date</label>
-                                      <input
-                                        type="date"
-                                        value={logDate}
-                                        onChange={e => setLogDate(e.target.value)}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200"
-                                      />
+                          {/* History timeline entries */}
+                          {qProgress.runLogs && qProgress.runLogs.length > 0 ? (
+                            <div className="space-y-3">
+                              {qProgress.runLogs.map((log) => (
+                                <div 
+                                  key={log.id} 
+                                  className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2 relative group"
+                                >
+                                  <div className="flex items-center justify-between text-xs">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-slate-800 flex items-center gap-1">
+                                        <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                                        {log.date}
+                                      </span>
+                                      {log.rating && (
+                                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                          log.rating === 'Smooth' ? 'bg-emerald-100 text-emerald-800' :
+                                          log.rating === 'Struggled' ? 'bg-amber-100 text-amber-800' :
+                                          'bg-rose-100 text-rose-800'
+                                        }`}>
+                                          {log.rating}
+                                        </span>
+                                      )}
                                     </div>
-                                    <div>
-                                      <label className="text-[10px] text-slate-400 font-bold block mb-1">Time (mins)</label>
-                                      <input
-                                        type="number"
-                                        value={logTime}
-                                        onChange={e => setLogTime(e.target.value)}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] text-slate-400 font-bold block mb-1">Time Complexity</label>
-                                      <input
-                                        type="text"
-                                        value={logTC}
-                                        onChange={e => setLogTC(e.target.value)}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-mono"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="text-[10px] text-slate-400 font-bold block mb-1">Space Complexity</label>
-                                      <input
-                                        type="text"
-                                        value={logSC}
-                                        onChange={e => setLogSC(e.target.value)}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-slate-200 font-mono"
-                                      />
-                                    </div>
-                                  </div>
 
-                                  <div>
-                                    <label className="text-[10px] text-slate-400 font-bold block mb-1">Run Feeling / Rating</label>
-                                    <div className="flex gap-2">
-                                      {(['Smooth', 'Struggled', 'Stuck'] as const).map(r => (
-                                        <button
-                                          type="button"
-                                          key={r}
-                                          onClick={() => setLogRating(r)}
-                                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                                            logRating === r 
-                                              ? r === 'Smooth' ? 'bg-emerald-600 text-white' : r === 'Struggled' ? 'bg-amber-600 text-white' : 'bg-rose-600 text-white'
-                                              : 'bg-slate-950 text-slate-400 border border-slate-800'
-                                          }`}
-                                        >
-                                          {r === 'Smooth' ? '🟢 Smooth' : r === 'Struggled' ? '🟡 Struggled' : '🔴 Stuck'}
-                                        </button>
-                                      ))}
+                                    <div className="flex items-center gap-2">
+                                      {log.timeTakenMinutes && (
+                                        <span className="text-[10px] font-mono font-bold text-slate-500 flex items-center gap-1">
+                                          <Clock className="w-3 h-3" /> {log.timeTakenMinutes}m
+                                        </span>
+                                      )}
+                                      {log.timeComplexity && (
+                                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
+                                          TC: {log.timeComplexity}
+                                        </span>
+                                      )}
+                                      {log.spaceComplexity && (
+                                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
+                                          SC: {log.spaceComplexity}
+                                        </span>
+                                      )}
+                                      <button
+                                        onClick={() => handleDeleteRunLog(question.id, log.id)}
+                                        className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition p-1"
+                                        title="Delete Run Log entry"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </div>
 
-                                  <div>
-                                    <label className="text-[10px] text-slate-400 font-bold block mb-1">Approach & Thoughts</label>
-                                    <textarea
-                                      placeholder="What approach did you take? What edge cases caught you?"
-                                      value={logNotes}
-                                      onChange={e => setLogNotes(e.target.value)}
-                                      rows={3}
-                                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 font-mono"
-                                    />
-                                  </div>
-
-                                  <button
-                                    type="button"
-                                    onClick={() => handleAddRunLog(question.id)}
-                                    className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition"
-                                  >
-                                    Save Run Log & Increment Revision (+1)
-                                  </button>
+                                  <p className="text-xs font-mono text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                    {log.approachNotes}
+                                  </p>
                                 </div>
-                              )}
-
-                              {/* Run History Timeline */}
-                              {qProgress.runLogs && qProgress.runLogs.length > 0 ? (
-                                <div className="space-y-3">
-                                  {qProgress.runLogs.map((log) => (
-                                    <div 
-                                      key={log.id} 
-                                      className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2 relative group"
-                                    >
-                                      <div className="flex items-center justify-between text-xs">
-                                        <div className="flex items-center gap-2">
-                                          <span className="font-bold text-slate-800 flex items-center gap-1">
-                                            <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                                            {log.date}
-                                          </span>
-                                          {log.rating && (
-                                            <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                                              log.rating === 'Smooth' ? 'bg-emerald-100 text-emerald-800' :
-                                              log.rating === 'Struggled' ? 'bg-amber-100 text-amber-800' :
-                                              'bg-rose-100 text-rose-800'
-                                            }`}>
-                                              {log.rating}
-                                            </span>
-                                          )}
-                                        </div>
-
-                                        <div className="flex items-center gap-2">
-                                          {log.timeTakenMinutes && (
-                                            <span className="text-[10px] font-mono font-bold text-slate-500 flex items-center gap-1">
-                                              <Clock className="w-3 h-3" /> {log.timeTakenMinutes}m
-                                            </span>
-                                          )}
-                                          {log.timeComplexity && (
-                                            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
-                                              TC: {log.timeComplexity}
-                                            </span>
-                                          )}
-                                          {log.spaceComplexity && (
-                                            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
-                                              SC: {log.spaceComplexity}
-                                            </span>
-                                          )}
-                                          <button
-                                            onClick={() => handleDeleteRunLog(question.id, log.id)}
-                                            className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition p-1"
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </button>
-                                        </div>
-                                      </div>
-
-                                      <p className="text-xs font-mono text-slate-700 whitespace-pre-wrap leading-relaxed">
-                                        {log.approachNotes}
-                                      </p>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="text-xs text-slate-400 italic text-center py-4">No run log entries recorded yet. Click "Log New Run" to document your solution attempt.</p>
-                              )}
-
+                              ))}
                             </div>
+                          ) : (
+                            <p className="text-xs text-slate-400 italic text-center py-3">No run log entries recorded yet. Click "Log New Run" or "+" to document your solution attempt.</p>
                           )}
-
                         </div>
                       )}
 
@@ -959,6 +871,127 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
           Reset All Progress
         </button>
       </div>
+
+      {/* ── Run Log Creation Pop-up Modal (Triggered by + Click) ── */}
+      {activeModalQuestionId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-md p-6 shadow-2xl space-y-4 relative">
+            
+            <button 
+              onClick={() => setActiveModalQuestionId(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="space-y-1">
+              <div className="flex items-center gap-1.5 text-xs font-extrabold text-blue-600 uppercase tracking-wider">
+                <Zap className="w-4 h-4 text-amber-500" />
+                Log Solution Run
+              </div>
+              <h3 className="text-lg font-extrabold text-slate-900">
+                #{activeModalQuestionId} - {BLIND75_QUESTIONS.find(q => q.id === activeModalQuestionId)?.title}
+              </h3>
+            </div>
+
+            <form onSubmit={handleSubmitRunLogModal} className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Attempt Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={logDate}
+                    onChange={e => setLogDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Time Taken (mins)</label>
+                  <input
+                    type="number"
+                    value={logTime}
+                    onChange={e => setLogTime(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Time Complexity</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. O(N log N)"
+                    value={logTC}
+                    onChange={e => setLogTC(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Space Complexity</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. O(1)"
+                    value={logSC}
+                    onChange={e => setLogSC(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1.5">Attempt Feeling / Rating</label>
+                <div className="flex gap-2">
+                  {(['Smooth', 'Struggled', 'Stuck'] as const).map(r => (
+                    <button
+                      type="button"
+                      key={r}
+                      onClick={() => setLogRating(r)}
+                      className={`flex-1 py-2 rounded-xl text-xs font-bold border transition ${
+                        logRating === r 
+                          ? r === 'Smooth' ? 'bg-emerald-600 text-white border-emerald-600' : r === 'Struggled' ? 'bg-amber-600 text-white border-amber-600' : 'bg-rose-600 text-white border-rose-600'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {r === 'Smooth' ? '🟢 Smooth' : r === 'Struggled' ? '🟡 Struggled' : '🔴 Stuck'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Approach & Thoughts *</label>
+                <textarea
+                  required
+                  placeholder="Document your algorithm approach, key insights, or edge cases encountered during this run..."
+                  value={logNotes}
+                  onChange={e => setLogNotes(e.target.value)}
+                  rows={4}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveModalQuestionId(null)}
+                  className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition"
+                >
+                  Submit Run & Increase Revision (+1)
+                </button>
+              </div>
+            </form>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );
