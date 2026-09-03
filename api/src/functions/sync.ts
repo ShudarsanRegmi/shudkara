@@ -7,6 +7,7 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
   try {
     const database = await connectToMongo();
     const col = database.collection('userData');
+    const historyCol = database.collection('userData_history');
 
     if (method === 'GET') {
       const syncKey = request.query.get('key');
@@ -61,20 +62,80 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
         return { status: 400, jsonBody: { error: 'Sync key is required to save data.' } };
       }
 
-      const updatedData = {
-        syncKey: syncKey.trim(),
-        leetcodeProgress: leetcodeProgress || {},
-        leetcodeNotes: leetcodeNotes || {},
-        prompts: prompts || [],
-        todos: todos || [],
-        todoBoardPrivate: !!todoBoardPrivate,
-        lists: lists || [],
+      const key = syncKey.trim();
+
+      // Fetch existing document to prevent accidental empty state overwrites
+      const existingDoc = await col.findOne({ syncKey: key });
+
+      // Automatically store a historical backup snapshot in MongoDB before updating
+      if (existingDoc) {
+        const { _id, ...backupData } = existingDoc;
+        await historyCol.insertOne({
+          ...backupData,
+          snapshotAt: new Date(),
+          reason: 'auto-save-backup'
+        }).catch(err => context.error('Failed to save history snapshot:', err));
+      }
+
+      // Build safe $set payload preserving existing data if incoming payload is empty/undefined
+      const setPayload: Record<string, any> = {
+        syncKey: key,
         updatedAt: new Date()
       };
 
+      // Safeguard leetcodeProgress
+      if (leetcodeProgress !== undefined && (Object.keys(leetcodeProgress).length > 0 || !existingDoc?.leetcodeProgress)) {
+        setPayload.leetcodeProgress = leetcodeProgress;
+      } else if (existingDoc?.leetcodeProgress) {
+        setPayload.leetcodeProgress = existingDoc.leetcodeProgress;
+      } else {
+        setPayload.leetcodeProgress = {};
+      }
+
+      // Safeguard leetcodeNotes
+      if (leetcodeNotes !== undefined) {
+        setPayload.leetcodeNotes = leetcodeNotes;
+      } else if (existingDoc?.leetcodeNotes) {
+        setPayload.leetcodeNotes = existingDoc.leetcodeNotes;
+      }
+
+      // Safeguard prompts
+      if (Array.isArray(prompts) && (prompts.length > 0 || !existingDoc?.prompts)) {
+        setPayload.prompts = prompts;
+      } else if (existingDoc?.prompts) {
+        setPayload.prompts = existingDoc.prompts;
+      } else {
+        setPayload.prompts = [];
+      }
+
+      // Safeguard todos
+      if (Array.isArray(todos) && (todos.length > 0 || !existingDoc?.todos)) {
+        setPayload.todos = todos;
+      } else if (existingDoc?.todos) {
+        setPayload.todos = existingDoc.todos;
+      } else {
+        setPayload.todos = [];
+      }
+
+      // Safeguard todoBoardPrivate
+      if (todoBoardPrivate !== undefined) {
+        setPayload.todoBoardPrivate = !!todoBoardPrivate;
+      } else if (existingDoc?.todoBoardPrivate !== undefined) {
+        setPayload.todoBoardPrivate = !!existingDoc.todoBoardPrivate;
+      }
+
+      // Safeguard lists
+      if (Array.isArray(lists) && (lists.length > 0 || !existingDoc?.lists)) {
+        setPayload.lists = lists;
+      } else if (existingDoc?.lists) {
+        setPayload.lists = existingDoc.lists;
+      } else {
+        setPayload.lists = [];
+      }
+
       await col.updateOne(
-        { syncKey: updatedData.syncKey },
-        { $set: updatedData },
+        { syncKey: key },
+        { $set: setPayload },
         { upsert: true }
       );
 
@@ -82,7 +143,7 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
         status: 200,
         jsonBody: {
           success: true,
-          message: 'Data synced successfully.'
+          message: 'Data synced safely to MongoDB with backup snapshot.'
         }
       };
     }
