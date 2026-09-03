@@ -746,7 +746,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
                                 value={qProgress.notes}
                                 onChange={(e) => updateNotes(question.id, e.target.value)}
                                 rows={4}
-                                className="w-full text-xs font-mono bg-slate-900 text-slate-100 p-4 rounded-2xl border border-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-inner"
+                                className="w-full text-xs font-mono bg-white text-slate-900 p-4 rounded-2xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none shadow-sm placeholder:text-slate-400"
                               />
                             </div>
                           ) : (
@@ -897,51 +897,51 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
             <form onSubmit={handleSubmitRunLogModal} className="space-y-4 text-xs">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Attempt Date</label>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Attempt Date</label>
                   <input
                     type="date"
                     required
                     value={logDate}
                     onChange={e => setLogDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Time Taken (mins)</label>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Time Taken (mins)</label>
                   <input
                     type="number"
                     value={logTime}
                     onChange={e => setLogTime(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Time Complexity</label>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Time Complexity</label>
                   <input
                     type="text"
                     placeholder="e.g. O(N log N)"
                     value={logTC}
                     onChange={e => setLogTC(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm placeholder:text-slate-400"
                   />
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Space Complexity</label>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Space Complexity</label>
                   <input
                     type="text"
                     placeholder="e.g. O(1)"
                     value={logSC}
                     onChange={e => setLogSC(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full bg-white border border-slate-300 rounded-xl p-2.5 font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm placeholder:text-slate-400"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1.5">Attempt Feeling / Rating</label>
+                <label className="text-xs font-bold text-slate-800 block mb-1.5">Attempt Feeling / Rating</label>
                 <div className="flex gap-2">
                   {(['Smooth', 'Struggled', 'Stuck'] as const).map(r => (
                     <button
@@ -950,8 +950,8 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
                       onClick={() => setLogRating(r)}
                       className={`flex-1 py-2 rounded-xl text-xs font-bold border transition ${
                         logRating === r 
-                          ? r === 'Smooth' ? 'bg-emerald-600 text-white border-emerald-600' : r === 'Struggled' ? 'bg-amber-600 text-white border-amber-600' : 'bg-rose-600 text-white border-rose-600'
-                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                          ? r === 'Smooth' ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : r === 'Struggled' ? 'bg-amber-600 text-white border-amber-600 shadow-sm' : 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                       }`}
                     >
                       {r === 'Smooth' ? '🟢 Smooth' : r === 'Struggled' ? '🟡 Struggled' : '🔴 Stuck'}
@@ -961,14 +961,14 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
               </div>
 
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Approach & Thoughts *</label>
+                <label className="text-xs font-bold text-slate-800 block mb-1">Approach & Thoughts *</label>
                 <textarea
                   required
                   placeholder="Document your algorithm approach, key insights, or edge cases encountered during this run..."
                   value={logNotes}
                   onChange={e => setLogNotes(e.target.value)}
                   rows={4}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs text-slate-900 font-mono font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm placeholder:text-slate-400"
                 />
               </div>
 
