@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
@@ -79,7 +79,7 @@ function App() {
   const [todoBoardPrivate, setTodoBoardPrivate] = useState<boolean>(false);
   const [lists, setLists] = useState<ListCategory[]>([]);
   
-  const isInitializedRef = useRef(false);
+  const [isCloudLoaded, setIsCloudLoaded] = useState(false);
 
   // Active Dropdown state for Desktop Navbar
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -128,17 +128,14 @@ function App() {
     }
   }, []);
 
-  // Sync prompts and cloud data
+  // Sync prompts and cloud data on mount
   useEffect(() => {
     loadCloudData();
   }, []);
 
-  // Debounced auto-save for cloud state
+  // Debounced auto-save for cloud state (ONLY runs after isCloudLoaded is true)
   useEffect(() => {
-    if (!isInitializedRef.current) {
-      isInitializedRef.current = true;
-      return;
-    }
+    if (!isCloudLoaded) return;
 
     const delayDebounce = setTimeout(() => {
       fetch('/api/sync', {
@@ -159,11 +156,10 @@ function App() {
     }, 1200);
 
     return () => clearTimeout(delayDebounce);
-  }, [leetcodeProgress, prompts, todos, todoBoardPrivate, lists]);
+  }, [leetcodeProgress, prompts, todos, todoBoardPrivate, lists, isCloudLoaded]);
 
   // Load database data helper
   const loadCloudData = async () => {
-    isInitializedRef.current = false;
     try {
       const response = await fetch(`/api/sync?key=${encodeURIComponent(GLOBAL_SYNC_KEY)}`);
       if (!response.ok) throw new Error('Fetch failed');
@@ -176,8 +172,10 @@ function App() {
         setTodoBoardPrivate(!!data.todoBoardPrivate);
         setLists(data.lists || []);
       }
+      setIsCloudLoaded(true);
     } catch (err) {
       console.error('Failed to load cloud data:', err);
+      setIsCloudLoaded(true);
     }
   };
 
