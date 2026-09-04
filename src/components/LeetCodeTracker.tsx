@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
-import { BLIND75_QUESTIONS } from '../data/blind75';
+import { SHEETS_REGISTRY, type SheetDefinition } from '../data/sheets';
 import { 
   Search, Star, BookOpen, ExternalLink, Calendar, Plus, 
   ChevronDown, ChevronUp, Download, Upload, AlertTriangle, Check,
   Compass, Eye, Flame, Award, ShieldCheck, Clock, Zap,
-  AlertCircle, FileText, Sparkles, Trash2, X
+  AlertCircle, FileText, Sparkles, Trash2, X, Layers, Navigation
 } from 'lucide-react';
 
 export interface RunLogEntry {
@@ -37,7 +37,7 @@ const DEFAULT_PROGRESS: QuestionProgress = {
   runLogs: []
 };
 
-// ── Sanskrit Mastery Tier Definition with Color Gamification ──
+// ── Sanskrit Mastery Tier Definition ──
 export interface SanskritTier {
   name: string;
   script: string;
@@ -113,18 +113,20 @@ export function getSanskritTier(runs: number): SanskritTier {
   };
 }
 
-interface LeetCodeTrackerProps {
+interface TrackerProps {
   progress: TrackerState;
   onProgressChange: (updated: TrackerState) => void;
 }
 
-export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onProgressChange }) => {
+export const LeetCodeTracker: React.FC<TrackerProps> = ({ progress, onProgressChange }) => {
+  const [activeSheetId, setActiveSheetId] = useState<string>('blind75');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('All');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedTier, setSelectedTier] = useState<string>('All');
   const [showOnlyFavorites, setShowOnlyFavorites] = useState(false);
-  
+  const [showSideNav, setShowSideNav] = useState(true);
+
   // Independent expander states for Notes vs Logs
   const [openNotesPanel, setOpenNotesPanel] = useState<Record<string, boolean>>({});
   const [openLogsPanel, setOpenLogsPanel] = useState<Record<string, boolean>>({});
@@ -142,6 +144,8 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
   // Notification banner state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
+  const activeSheet: SheetDefinition = SHEETS_REGISTRY.find(s => s.id === activeSheetId) || SHEETS_REGISTRY[0];
+
   const triggerToast = (message: string, type: 'success' | 'info' | 'error' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -151,6 +155,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     onProgressChange(updated);
   };
 
+  // Universal Question Registry Access
   const getQuestionProgress = (id: string): QuestionProgress => {
     const existing = progress[id];
     if (!existing) return { ...DEFAULT_PROGRESS, runLogs: [] };
@@ -203,7 +208,6 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     );
   };
 
-  // Open the Run Log modal when (+) button is clicked
   const handleOpenRunLogModal = (questionId: string) => {
     setActiveModalQuestionId(questionId);
     setLogDate(new Date().toISOString().split('T')[0]);
@@ -214,7 +218,6 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     setLogNotes('');
   };
 
-  // Submit modal form -> saves log entry AND increases revision count (+1)
   const handleSubmitRunLogModal = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeModalQuestionId) return;
@@ -262,7 +265,6 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     }
   };
 
-  // Delete run log entry (optionally decrease count if confirmed)
   const handleDeleteRunLog = (questionId: string, logId: string) => {
     const current = getQuestionProgress(questionId);
     const updatedLogs = (current.runLogs || []).filter(l => l.id !== logId);
@@ -289,7 +291,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(progress, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `blind75_leetcode_backup_${new Date().toISOString().split('T')[0]}.json`);
+    downloadAnchor.setAttribute("download", `tracker_backup_${new Date().toISOString().split('T')[0]}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -328,8 +330,17 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     updateNotes(id, formatted);
   };
 
-  // Filter questions
-  const filteredQuestions = BLIND75_QUESTIONS.filter((q) => {
+  const scrollToSection = (catName: string) => {
+    const elemId = `section-${catName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
+    const elem = document.getElementById(elemId);
+    if (elem) {
+      elem.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // Filter questions for active sheet
+  const activeQuestions = activeSheet.questions;
+  const filteredQuestions = activeQuestions.filter((q) => {
     const p = getQuestionProgress(q.id);
     const tier = getSanskritTier(p.revisedCount);
     
@@ -342,16 +353,16 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
     return matchesSearch && matchesDifficulty && matchesStatus && matchesTier && matchesFavorite;
   });
 
-  const categories = Array.from(new Set(BLIND75_QUESTIONS.map(q => q.category)));
+  const categories = Array.from(new Set(activeQuestions.map(q => q.category)));
 
-  // Statistics Calculation
-  const totalQuestions = BLIND75_QUESTIONS.length;
-  const solvedCount = BLIND75_QUESTIONS.filter(q => getQuestionProgress(q.id).status === 'Solved').length;
-  const reviewCount = BLIND75_QUESTIONS.filter(q => getQuestionProgress(q.id).status === 'Needs Review').length;
-  const siddhiCount = BLIND75_QUESTIONS.filter(q => getQuestionProgress(q.id).revisedCount >= 5).length;
+  // Statistics Calculation for active sheet
+  const totalQuestions = activeQuestions.length;
+  const solvedCount = activeQuestions.filter(q => getQuestionProgress(q.id).status === 'Solved').length;
+  const reviewCount = activeQuestions.filter(q => getQuestionProgress(q.id).status === 'Needs Review').length;
+  const siddhiCount = activeQuestions.filter(q => getQuestionProgress(q.id).revisedCount >= 5).length;
 
   return (
-    <div className="space-y-6 animate-fade-in pb-16 select-none">
+    <div className="space-y-6 animate-fade-in pb-16 select-none relative">
       
       {/* Toast Alert */}
       {toast && (
@@ -370,13 +381,13 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
         <div>
           <div className="flex items-center gap-2 text-blue-600 text-xs font-extrabold uppercase tracking-wider mb-1">
             <Sparkles className="w-4 h-4 text-amber-500" />
-            Sanskrit Abhyasa Tracker
+            Universal Preparation Hub
           </div>
           <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-            Blind 75 Mastery & Abhyasa Journal
+            Tracker & Abhyasa Journal
           </h2>
           <p className="text-xs text-slate-500 max-w-xl">
-            Track solution approaches, log run histories, and ascend through the 5 Sanskrit Mastery Tiers.
+            Single note & progress registry across all interview sheets. Ascend through the 5 Sanskrit Mastery Tiers.
           </p>
         </div>
 
@@ -404,14 +415,55 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
         </div>
       </div>
 
-      {/* Stat Bar with Sanskrit Siddhi Counter */}
+      {/* ── Multi-Sheet Selector Tabs ── */}
+      <div className="bg-white border border-slate-200 p-2 rounded-2xl shadow-sm flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
+          {SHEETS_REGISTRY.map((sheet) => {
+            const isSelected = activeSheetId === sheet.id;
+            const sheetSolved = sheet.questions.filter(q => getQuestionProgress(q.id).status === 'Solved').length;
+
+            return (
+              <button
+                key={sheet.id}
+                onClick={() => setActiveSheetId(sheet.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-extrabold transition ${
+                  isSelected
+                    ? 'bg-blue-600 text-white shadow-md'
+                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/80'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>{sheet.title}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] ${
+                  isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'
+                }`}>
+                  {sheetSolved}/{sheet.questions.length}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          onClick={() => setShowSideNav(!showSideNav)}
+          className={`flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-bold border transition ${
+            showSideNav ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-slate-50 border-slate-200 text-slate-600'
+          }`}
+          title="Toggle Section Navigator"
+        >
+          <Navigation className="w-3.5 h-3.5" />
+          <span>Section Widget</span>
+        </button>
+      </div>
+
+      {/* Stat Bar for Active Sheet */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-3">
           <div className="p-3 bg-blue-50 text-blue-600 rounded-xl">
             <BookOpen className="w-5 h-5" />
           </div>
           <div>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Solved</p>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Solved ({activeSheet.title})</p>
             <p className="text-lg font-extrabold text-slate-900">{solvedCount} / {totalQuestions}</p>
           </div>
         </div>
@@ -443,7 +495,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
           <div>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Favorites</p>
             <p className="text-lg font-extrabold text-slate-900">
-              {BLIND75_QUESTIONS.filter(q => getQuestionProgress(q.id).isFavorite).length}
+              {activeQuestions.filter(q => getQuestionProgress(q.id).isFavorite).length}
             </p>
           </div>
         </div>
@@ -528,338 +580,388 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
         </div>
       </div>
 
-      {/* Questions list by Category */}
-      <div className="space-y-8">
-        {categories.map((category) => {
-          const categoryQuestions = filteredQuestions.filter(q => q.category === category);
-          if (categoryQuestions.length === 0) return null;
+      {/* Main View Area: Main Content + Sticky Section Quick-Nav Side Widget */}
+      <div className="flex gap-6 items-start">
+        
+        {/* Questions List View */}
+        <div className="flex-1 space-y-8 min-w-0">
+          {categories.map((category) => {
+            const categoryQuestions = filteredQuestions.filter(q => q.category === category);
+            if (categoryQuestions.length === 0) return null;
 
-          return (
-            <div key={category} className="space-y-3">
-              <h3 className="text-base font-extrabold text-slate-800 border-b border-slate-200 pb-2 flex items-center justify-between">
-                <span>{category}</span>
-                <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2.5 py-0.5 rounded-full">
-                  {categoryQuestions.length} questions
-                </span>
-              </h3>
+            const categorySolved = categoryQuestions.filter(q => getQuestionProgress(q.id).status === 'Solved').length;
+            const categoryId = `section-${category.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
 
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm divide-y divide-slate-100">
-                {categoryQuestions.map((question) => {
-                  const qProgress = getQuestionProgress(question.id);
-                  const isSiddhiMastered = qProgress.revisedCount >= 5;
-                  const tier = getSanskritTier(qProgress.revisedCount);
-                  const TierIcon = tier.icon;
+            return (
+              <div key={category} id={categoryId} className="space-y-3 scroll-mt-24">
+                <h3 className="text-base font-extrabold text-slate-800 border-b border-slate-200 pb-2 flex items-center justify-between">
+                  <span>{category}</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 font-bold px-2.5 py-0.5 rounded-full">
+                    {categorySolved} / {categoryQuestions.length} solved
+                  </span>
+                </h3>
 
-                  const isNotesOpen = !!openNotesPanel[question.id];
-                  const isLogsOpen = !!openLogsPanel[question.id];
-                  const isNotesEditing = !!notesEditMode[question.id];
+                <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm divide-y divide-slate-100">
+                  {categoryQuestions.map((question) => {
+                    const qProgress = getQuestionProgress(question.id);
+                    const isSiddhiMastered = qProgress.revisedCount >= 5;
+                    const tier = getSanskritTier(qProgress.revisedCount);
+                    const TierIcon = tier.icon;
 
-                  return (
-                    <div 
-                      key={question.id} 
-                      className={`p-4 transition-colors space-y-3 ${tier.rowBg || 'bg-white'} ${isSiddhiMastered ? 'opacity-90' : ''}`}
-                    >
-                      
-                      {/* Top Row: Title, Sanskrit Tier, Controls */}
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        {/* Title & difficulty */}
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <button
-                            onClick={() => toggleFavorite(question.id)}
-                            className="text-slate-300 hover:text-amber-400 transition-colors shrink-0"
-                          >
-                            <Star className={`w-5 h-5 ${qProgress.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
-                          </button>
-                          
-                          <div className="min-w-0 space-y-1">
-                            <div className="flex items-center flex-wrap gap-2">
-                              <span className="text-slate-400 font-bold text-xs">#{question.id}</span>
-                              
-                              {/* Strikethrough when Siddhi (5+ runs) reached */}
-                              <a
-                                href={question.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className={`font-extrabold text-sm hover:underline inline-flex items-center gap-1 ${
-                                  isSiddhiMastered 
-                                    ? 'line-through text-slate-400 font-semibold' 
-                                    : 'text-slate-900 hover:text-blue-600'
-                                }`}
-                              >
-                                {question.title}
-                                <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              </a>
+                    const isNotesOpen = !!openNotesPanel[question.id];
+                    const isLogsOpen = !!openLogsPanel[question.id];
+                    const isNotesEditing = !!notesEditMode[question.id];
 
-                              {/* Siddhi Mastered Stamp */}
-                              {isSiddhiMastered && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black tracking-wide shadow-sm">
-                                  <Check className="w-3 h-3 text-amber-700" />
-                                  Siddhi Mastered
-                                </span>
-                              )}
-
-                              {/* Sanskrit Tier Badge with level-based color gamification */}
-                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold transition-all duration-300 ${tier.bg} ${tier.border} ${tier.text} ${tier.glow || ''}`}>
-                                <TierIcon className="w-3.5 h-3.5 shrink-0" />
-                                <span>{tier.name}</span>
-                                <span className="opacity-70 text-[9px] font-mono">({tier.script})</span>
-                              </span>
-                            </div>
-                            
-                            <div className="flex items-center gap-2">
-                              {/* Difficulty tag */}
-                              <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-md ${
-                                question.difficulty === 'Easy' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
-                                question.difficulty === 'Medium' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                                'bg-rose-50 text-rose-700 border border-rose-200'
-                              }`}>
-                                {question.difficulty}
-                              </span>
-
-                              {/* Last revised date */}
-                              {qProgress.lastRevised && (
-                                <span className="text-[11px] text-slate-400 flex items-center gap-1 font-medium">
-                                  <Calendar className="w-3 h-3" />
-                                  Last Run: {qProgress.lastRevised}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Controls */}
-                        <div className="flex items-center flex-wrap gap-3 shrink-0">
-                          
-                          {/* (+) Button: Opens Run Log Modal & Increases Runs */}
-                          <button
-                            onClick={() => handleOpenRunLogModal(question.id)}
-                            className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition shadow-sm"
-                            title="Log a new solution attempt and increase revision (+1)"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            <span>{qProgress.revisedCount} {qProgress.revisedCount === 1 ? 'run' : 'runs'}</span>
-                          </button>
-
-                          {/* Status dropdown */}
-                          <select
-                            value={qProgress.status}
-                            onChange={(e) => updateStatus(question.id, e.target.value as QuestionProgress['status'])}
-                            className={`text-xs font-extrabold rounded-xl px-2.5 py-1.5 border focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer ${
-                              qProgress.status === 'Solved' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
-                              qProgress.status === 'In Progress' ? 'bg-blue-50 border-blue-200 text-blue-800' :
-                              qProgress.status === 'Needs Review' ? 'bg-rose-50 border-rose-200 text-rose-800' :
-                              'bg-slate-100 border-slate-200 text-slate-600'
-                            }`}
-                          >
-                            <option value="Not Started">Not Started</option>
-                            <option value="In Progress">In Progress</option>
-                            <option value="Solved">Solved</option>
-                            <option value="Needs Review">Needs Review</option>
-                          </select>
-
-                          {/* Separate Notes Expander Button */}
-                          <button
-                            onClick={() => setOpenNotesPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
-                              isNotesOpen
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : qProgress.notes.trim() !== ''
-                                  ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
-                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                            }`}
-                          >
-                            <FileText className="w-3.5 h-3.5" />
-                            <span>Notes</span>
-                            {isNotesOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                          </button>
-
-                          {/* Separate Logs Expander Button */}
-                          <button
-                            onClick={() => setOpenLogsPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
-                              isLogsOpen
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : qProgress.runLogs && qProgress.runLogs.length > 0
-                                  ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
-                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                            }`}
-                          >
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>Logs</span>
-                            {qProgress.runLogs && qProgress.runLogs.length > 0 && (
-                              <span className="px-1.5 py-0.2 bg-amber-600 text-white rounded-full text-[9px] font-bold">
-                                {qProgress.runLogs.length}
-                              </span>
-                            )}
-                            {isLogsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* ── Separate Panel 1: General Solution Notes ── */}
-                      {isNotesOpen && (
-                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 animate-in fade-in duration-150">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-extrabold text-slate-700 flex items-center gap-1">
-                              <FileText className="w-3.5 h-3.5 text-blue-600" /> Solution Approach & Notes
-                            </span>
+                    return (
+                      <div 
+                        key={question.id} 
+                        className={`p-4 transition-colors space-y-3 ${tier.rowBg || 'bg-white'} ${isSiddhiMastered ? 'opacity-90' : ''}`}
+                      >
+                        
+                        {/* Top Row: Title, Sanskrit Tier, Controls */}
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                          {/* Title & difficulty */}
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
                             <button
-                              onClick={() => setNotesEditMode(prev => ({ ...prev, [question.id]: !isNotesEditing }))}
-                              className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                              onClick={() => toggleFavorite(question.id)}
+                              className="text-slate-300 hover:text-amber-400 transition-colors shrink-0"
                             >
-                              {isNotesEditing ? '👁️ Preview' : '✏️ Edit Notes'}
+                              <Star className={`w-5 h-5 ${qProgress.isFavorite ? 'fill-amber-400 text-amber-400' : ''}`} />
                             </button>
+                            
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center flex-wrap gap-2">
+                                <span className="text-slate-400 font-bold text-xs">#{question.id}</span>
+                                
+                                {/* Strikethrough when Siddhi (5+ runs) reached */}
+                                <a
+                                  href={question.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={`font-extrabold text-sm hover:underline inline-flex items-center gap-1 ${
+                                    isSiddhiMastered 
+                                      ? 'line-through text-slate-400 font-semibold' 
+                                      : 'text-slate-900 hover:text-blue-600'
+                                  }`}
+                                >
+                                  {question.title}
+                                  <ExternalLink className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                </a>
+
+                                {/* Siddhi Mastered Stamp */}
+                                {isSiddhiMastered && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10px] font-black tracking-wide shadow-sm">
+                                    <Check className="w-3 h-3 text-amber-700" />
+                                    Siddhi Mastered
+                                  </span>
+                                )}
+
+                                {/* Sanskrit Tier Badge with level-based color gamification */}
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg border text-[11px] font-bold transition-all duration-300 ${tier.bg} ${tier.border} ${tier.text} ${tier.glow || ''}`}>
+                                  <TierIcon className="w-3.5 h-3.5 shrink-0" />
+                                  <span>{tier.name}</span>
+                                  <span className="opacity-70 text-[9px] font-mono">({tier.script})</span>
+                                </span>
+                              </div>
+                              
+                              <div className="flex items-center gap-2">
+                                {/* Difficulty tag */}
+                                <span className={`text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-md ${
+                                  question.difficulty === 'Easy' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                                  question.difficulty === 'Medium' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                                  'bg-rose-50 text-rose-700 border border-rose-200'
+                                }`}>
+                                  {question.difficulty}
+                                </span>
+
+                                {/* Last revised date */}
+                                {qProgress.lastRevised && (
+                                  <span className="text-[11px] text-slate-400 flex items-center gap-1 font-medium">
+                                    <Calendar className="w-3 h-3" />
+                                    Last Run: {qProgress.lastRevised}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
 
-                          {isNotesEditing ? (
-                            <div className="space-y-2">
-                              {/* Formatting Toolbar */}
-                              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
-                                <button 
-                                  onClick={() => insertFormat(question.id, '**Bold Text**')}
-                                  className="px-2 py-1 font-bold bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                >
-                                  B
-                                </button>
-                                <button 
-                                  onClick={() => insertFormat(question.id, '`code`')}
-                                  className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                >
-                                  `code`
-                                </button>
-                                <button 
-                                  onClick={() => insertFormat(question.id, '```\n// Code block here\n```')}
-                                  className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                >
-                                  ``` block
-                                </button>
-                                <button 
-                                  onClick={() => insertFormat(question.id, '- ')}
-                                  className="px-2 py-1 bg-white rounded border border-slate-200 hover:bg-slate-50"
-                                >
-                                  • List
-                                </button>
-                              </div>
-
-                              <textarea
-                                placeholder="Write your solution approach, time/space complexity notes, or code snippet..."
-                                value={qProgress.notes}
-                                onChange={(e) => updateNotes(question.id, e.target.value)}
-                                rows={4}
-                                className="w-full text-xs font-mono bg-white text-slate-900 p-4 rounded-2xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none shadow-sm placeholder:text-slate-400"
-                              />
-                            </div>
-                          ) : (
-                            <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl min-h-[70px]">
-                              {qProgress.notes.trim() ? (
-                                <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed">
-                                  {qProgress.notes}
-                                </pre>
-                              ) : (
-                                <p className="text-xs text-slate-400 italic">No general notes added yet. Click "Edit Notes" to write your solution notes.</p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* ── Separate Panel 2: Abhyasa Run Log Timeline ── */}
-                      {isLogsOpen && (
-                        <div className="mt-3 pt-3 border-t border-slate-200 space-y-3 animate-in fade-in duration-150">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1">
-                              <Clock className="w-3.5 h-3.5 text-amber-600" /> Abhyasa Run History Journal
-                            </span>
+                          {/* Controls */}
+                          <div className="flex items-center flex-wrap gap-3 shrink-0">
+                            
+                            {/* (+) Button: Opens Run Log Modal & Increases Runs */}
                             <button
                               onClick={() => handleOpenRunLogModal(question.id)}
-                              className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold transition shadow-sm"
+                              title="Log a new solution attempt and increase revision (+1)"
                             >
                               <Plus className="w-3.5 h-3.5" />
-                              Log New Run
+                              <span>{qProgress.revisedCount} {qProgress.revisedCount === 1 ? 'run' : 'runs'}</span>
+                            </button>
+
+                            {/* Status dropdown */}
+                            <select
+                              value={qProgress.status}
+                              onChange={(e) => updateStatus(question.id, e.target.value as QuestionProgress['status'])}
+                              className={`text-xs font-extrabold rounded-xl px-2.5 py-1.5 border focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer ${
+                                qProgress.status === 'Solved' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' :
+                                qProgress.status === 'In Progress' ? 'bg-blue-50 border-blue-200 text-blue-800' :
+                                qProgress.status === 'Needs Review' ? 'bg-rose-50 border-rose-200 text-rose-800' :
+                                'bg-slate-100 border-slate-200 text-slate-600'
+                              }`}
+                            >
+                              <option value="Not Started">Not Started</option>
+                              <option value="In Progress">In Progress</option>
+                              <option value="Solved">Solved</option>
+                              <option value="Needs Review">Needs Review</option>
+                            </select>
+
+                            {/* Separate Notes Expander Button */}
+                            <button
+                              onClick={() => setOpenNotesPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                                isNotesOpen
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : qProgress.notes.trim() !== ''
+                                    ? 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Notes</span>
+                              {isNotesOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </button>
+
+                            {/* Separate Logs Expander Button */}
+                            <button
+                              onClick={() => setOpenLogsPanel(prev => ({ ...prev, [question.id]: !prev[question.id] }))}
+                              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-extrabold transition ${
+                                isLogsOpen
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : qProgress.runLogs && qProgress.runLogs.length > 0
+                                    ? 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                                    : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              <Clock className="w-3.5 h-3.5" />
+                              <span>Logs</span>
+                              {qProgress.runLogs && qProgress.runLogs.length > 0 && (
+                                <span className="px-1.5 py-0.2 bg-amber-600 text-white rounded-full text-[9px] font-bold">
+                                  {qProgress.runLogs.length}
+                                </span>
+                              )}
+                              {isLogsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                             </button>
                           </div>
-
-                          {/* History timeline entries */}
-                          {qProgress.runLogs && qProgress.runLogs.length > 0 ? (
-                            <div className="space-y-3">
-                              {qProgress.runLogs.map((log) => (
-                                <div 
-                                  key={log.id} 
-                                  className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2 relative group"
-                                >
-                                  <div className="flex items-center justify-between text-xs">
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-bold text-slate-800 flex items-center gap-1">
-                                        <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                                        {log.date}
-                                      </span>
-                                      {log.rating && (
-                                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
-                                          log.rating === 'Smooth' ? 'bg-emerald-100 text-emerald-800' :
-                                          log.rating === 'Struggled' ? 'bg-amber-100 text-amber-800' :
-                                          'bg-rose-100 text-rose-800'
-                                        }`}>
-                                          {log.rating}
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    <div className="flex items-center gap-2">
-                                      {log.timeTakenMinutes && (
-                                        <span className="text-[10px] font-mono font-bold text-slate-500 flex items-center gap-1">
-                                          <Clock className="w-3 h-3" /> {log.timeTakenMinutes}m
-                                        </span>
-                                      )}
-                                      {log.timeComplexity && (
-                                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
-                                          TC: {log.timeComplexity}
-                                        </span>
-                                      )}
-                                      {log.spaceComplexity && (
-                                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
-                                          SC: {log.spaceComplexity}
-                                        </span>
-                                      )}
-                                      <button
-                                        onClick={() => handleDeleteRunLog(question.id, log.id)}
-                                        className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition p-1"
-                                        title="Delete Run Log entry"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </div>
-                                  </div>
-
-                                  <p className="text-xs font-mono text-slate-700 whitespace-pre-wrap leading-relaxed">
-                                    {log.approachNotes}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <p className="text-xs text-slate-400 italic text-center py-3">No run log entries recorded yet. Click "Log New Run" or "+" to document your solution attempt.</p>
-                          )}
                         </div>
-                      )}
 
-                    </div>
-                  );
-                })}
+                        {/* ── Separate Panel 1: General Solution Notes ── */}
+                        {isNotesOpen && (
+                          <div className="mt-3 pt-3 border-t border-slate-200 space-y-2 animate-in fade-in duration-150">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-extrabold text-slate-700 flex items-center gap-1">
+                                <FileText className="w-3.5 h-3.5 text-blue-600" /> Solution Approach & Notes
+                              </span>
+                              <button
+                                onClick={() => setNotesEditMode(prev => ({ ...prev, [question.id]: !isNotesEditing }))}
+                                className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-blue-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                              >
+                                {isNotesEditing ? '👁️ Preview' : '✏️ Edit Notes'}
+                              </button>
+                            </div>
+
+                            {isNotesEditing ? (
+                              <div className="space-y-2">
+                                {/* Formatting Toolbar */}
+                                <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs">
+                                  <button 
+                                    onClick={() => insertFormat(question.id, '**Bold Text**')}
+                                    className="px-2 py-1 font-bold bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                  >
+                                    B
+                                  </button>
+                                  <button 
+                                    onClick={() => insertFormat(question.id, '`code`')}
+                                    className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                  >
+                                    `code`
+                                  </button>
+                                  <button 
+                                    onClick={() => insertFormat(question.id, '```\n// Code block here\n```')}
+                                    className="px-2 py-1 font-mono bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                  >
+                                    ``` block
+                                  </button>
+                                  <button 
+                                    onClick={() => insertFormat(question.id, '- ')}
+                                    className="px-2 py-1 bg-white rounded border border-slate-200 hover:bg-slate-50"
+                                  >
+                                    • List
+                                  </button>
+                                </div>
+
+                                <textarea
+                                  placeholder="Write your solution approach, time/space complexity notes, or code snippet..."
+                                  value={qProgress.notes}
+                                  onChange={(e) => updateNotes(question.id, e.target.value)}
+                                  rows={4}
+                                  className="w-full text-xs font-mono bg-white text-slate-900 p-4 rounded-2xl border-2 border-slate-200 focus:border-blue-500 focus:outline-none shadow-sm placeholder:text-slate-400"
+                                />
+                              </div>
+                            ) : (
+                              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl min-h-[70px]">
+                                {qProgress.notes.trim() ? (
+                                  <pre className="text-xs font-mono text-slate-800 whitespace-pre-wrap leading-relaxed">
+                                    {qProgress.notes}
+                                  </pre>
+                                ) : (
+                                  <p className="text-xs text-slate-400 italic">No general notes added yet. Click "Edit Notes" to write your solution notes.</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* ── Separate Panel 2: Abhyasa Run Log Timeline ── */}
+                        {isLogsOpen && (
+                          <div className="mt-3 pt-3 border-t border-slate-200 space-y-3 animate-in fade-in duration-150">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-amber-600" /> Abhyasa Run History Journal
+                              </span>
+                              <button
+                                onClick={() => handleOpenRunLogModal(question.id)}
+                                className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                Log New Run
+                              </button>
+                            </div>
+
+                            {/* History timeline entries */}
+                            {qProgress.runLogs && qProgress.runLogs.length > 0 ? (
+                              <div className="space-y-3">
+                                {qProgress.runLogs.map((log) => (
+                                  <div 
+                                    key={log.id} 
+                                    className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4 space-y-2 relative group"
+                                  >
+                                    <div className="flex items-center justify-between text-xs">
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-slate-800 flex items-center gap-1">
+                                          <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                                          {log.date}
+                                        </span>
+                                        {log.rating && (
+                                          <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-full ${
+                                            log.rating === 'Smooth' ? 'bg-emerald-100 text-emerald-800' :
+                                            log.rating === 'Struggled' ? 'bg-amber-100 text-amber-800' :
+                                            'bg-rose-100 text-rose-800'
+                                          }`}>
+                                            {log.rating}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        {log.timeTakenMinutes && (
+                                          <span className="text-[10px] font-mono font-bold text-slate-500 flex items-center gap-1">
+                                            <Clock className="w-3 h-3" /> {log.timeTakenMinutes}m
+                                          </span>
+                                        )}
+                                        {log.timeComplexity && (
+                                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
+                                            TC: {log.timeComplexity}
+                                          </span>
+                                        )}
+                                        {log.spaceComplexity && (
+                                          <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 bg-slate-200 rounded text-slate-700">
+                                            SC: {log.spaceComplexity}
+                                          </span>
+                                        )}
+                                        <button
+                                          onClick={() => handleDeleteRunLog(question.id, log.id)}
+                                          className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-600 transition p-1"
+                                          title="Delete Run Log entry"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+
+                                    <p className="text-xs font-mono text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                      {log.approachNotes}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-slate-400 italic text-center py-3">No run log entries recorded yet. Click "Log New Run" or "+" to document your solution attempt.</p>
+                            )}
+                          </div>
+                        )}
+
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
 
-        {/* Empty state */}
-        {filteredQuestions.length === 0 && (
-          <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-3">
-            <AlertTriangle className="w-10 h-10 text-slate-400 mx-auto" />
-            <h4 className="text-lg font-bold text-slate-700">No questions found</h4>
-            <p className="text-sm text-slate-500 max-w-sm mx-auto">
-              No questions matched your search query or filters. Try adjusting your query or filter criteria.
-            </p>
-          </div>
+          {/* Empty state */}
+          {filteredQuestions.length === 0 && (
+            <div className="text-center py-16 bg-white rounded-2xl border border-slate-200 shadow-sm space-y-3">
+              <AlertTriangle className="w-10 h-10 text-slate-400 mx-auto" />
+              <h4 className="text-lg font-bold text-slate-700">No questions found</h4>
+              <p className="text-sm text-slate-500 max-w-sm mx-auto">
+                No questions matched your search query or filters. Try adjusting your query or filter criteria.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── Sticky Section Quick-Nav Side Widget ── */}
+        {showSideNav && (
+          <aside className="w-64 shrink-0 hidden lg:block sticky top-24 space-y-3 bg-white border border-slate-200 rounded-3xl p-4 shadow-sm animate-in fade-in duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                <Navigation className="w-3 h-3 text-blue-600" /> Section Nav ({categories.length})
+              </span>
+              <button onClick={() => setShowSideNav(false)} className="text-slate-400 hover:text-slate-600 p-0.5">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5 max-h-[calc(100vh-200px)] overflow-y-auto pr-1">
+              {categories.map((cat) => {
+                const catQuestions = activeQuestions.filter(q => q.category === cat);
+                const catSolved = catQuestions.filter(q => getQuestionProgress(q.id).status === 'Solved').length;
+                const percent = Math.round((catSolved / catQuestions.length) * 100);
+
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => scrollToSection(cat)}
+                    className="w-full text-left p-2.5 rounded-xl hover:bg-slate-50 transition border border-transparent hover:border-slate-200 group space-y-1"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-800 truncate group-hover:text-blue-600">{cat}</span>
+                      <span className="text-[10px] font-extrabold text-slate-500 font-mono">{catSolved}/{catQuestions.length}</span>
+                    </div>
+
+                    <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                      <div 
+                        className={`h-full transition-all duration-300 ${percent === 100 ? 'bg-amber-500' : 'bg-blue-600'}`} 
+                        style={{ width: `${percent}%` }}
+                      />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
         )}
+
       </div>
 
       {/* Discrete Bottom Reset */}
@@ -890,7 +992,7 @@ export const LeetCodeTracker: React.FC<LeetCodeTrackerProps> = ({ progress, onPr
                 Log Solution Run
               </div>
               <h3 className="text-lg font-extrabold text-slate-900">
-                #{activeModalQuestionId} - {BLIND75_QUESTIONS.find(q => q.id === activeModalQuestionId)?.title}
+                #{activeModalQuestionId} - {activeQuestions.find(q => q.id === activeModalQuestionId)?.title}
               </h3>
             </div>
 
