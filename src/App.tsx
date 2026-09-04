@@ -41,7 +41,7 @@ const NAV_GROUPS = [
       { key: 'prompts', label: 'PromptVault', description: 'AI prompt library & links', icon: Bookmark, requiresLogin: false },
       { key: 'links', label: 'LinkManager', description: 'Tree bookmark manager', icon: LinkIcon, requiresLogin: false },
       { key: 'timeline', label: 'Timeline', description: 'Lifetime Line personal feed', icon: Sparkles, requiresLogin: true },
-      { key: 'leetcode', label: 'Tracker', description: 'Multi-sheet interview prep & notes', icon: BookOpen, requiresLogin: true },
+      { key: 'leetcode', label: 'Tracker', description: 'Multi-sheet interview prep & notes', icon: BookOpen, requiresLogin: false },
     ]
   }
 ];
@@ -51,7 +51,7 @@ const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: 
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
   todos: { requiresLogin: false, label: 'Todos', icon: CheckSquare },
   lists: { requiresLogin: false, label: 'Lists', icon: ListOrdered },
-  leetcode: { requiresLogin: true, label: 'Tracker', icon: BookOpen },
+  leetcode: { requiresLogin: false, label: 'Tracker', icon: BookOpen },
   airdrop: { requiresLogin: false, label: 'Airdrop', icon: Share2 },
   textroom: { requiresLogin: false, label: 'Rooms', icon: FileText },
   prompts: { requiresLogin: false, label: 'PromptVault', icon: Bookmark },

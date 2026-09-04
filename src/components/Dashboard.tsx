@@ -3,6 +3,7 @@ import {
   BookOpen, Share2, FileText, ArrowRight, Award, 
   Shield, Check, Copy, RefreshCw, Smartphone
 } from 'lucide-react';
+import { BLIND75_QUESTIONS } from '../data/blind75';
 
 interface DashboardProps {
   setActiveTab: (tab: string) => void;
@@ -103,110 +104,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
     }
   };
 
-  // Process Leetcode stats
-  const leetcodeQuestions = [
-    // Array, Hashing
-    { id: 'two-sum', difficulty: 'Easy' },
-    { id: 'contains-duplicate', difficulty: 'Easy' },
-    { id: 'valid-anagram', difficulty: 'Easy' },
-    { id: 'two-sum-ii', difficulty: 'Medium' },
-    { id: 'group-anagrams', difficulty: 'Medium' },
-    { id: 'top-k-frequent-elements', difficulty: 'Medium' },
-    { id: 'product-of-array-except-self', difficulty: 'Medium' },
-    { id: 'longest-consecutive-sequence', difficulty: 'Medium' },
-    
-    // Two Pointers
-    { id: 'valid-palindrome', difficulty: 'Easy' },
-    { id: 'two-sum-ii-input-array-is-sorted', difficulty: 'Medium' },
-    { id: '3sum', difficulty: 'Medium' },
-    { id: 'container-with-most-water', difficulty: 'Medium' },
-    
-    // Sliding Window
-    { id: 'best-time-to-buy-and-sell-stock', difficulty: 'Easy' },
-    { id: 'longest-substring-without-repeating-characters', difficulty: 'Medium' },
-    { id: 'longest-repeating-character-replacement', difficulty: 'Medium' },
-    { id: 'minimum-window-substring', difficulty: 'Hard' },
-    
-    // Stack
-    { id: 'valid-parentheses', difficulty: 'Easy' },
-    { id: 'min-stack', difficulty: 'Medium' },
-    { id: 'evaluate-reverse-polish-notation', difficulty: 'Medium' },
-    { id: 'generate-parentheses', difficulty: 'Medium' },
-    { id: 'daily-temperatures', difficulty: 'Medium' },
-    
-    // Binary Search
-    { id: 'binary-search', difficulty: 'Easy' },
-    { id: 'search-a-2d-matrix', difficulty: 'Medium' },
-    { id: 'koko-eating-bananas', difficulty: 'Medium' },
-    { id: 'find-minimum-in-rotated-sorted-array', difficulty: 'Medium' },
-    { id: 'search-in-rotated-sorted-array', difficulty: 'Medium' },
-    { id: 'time-based-key-value-store', difficulty: 'Medium' },
-    
-    // Linked List
-    { id: 'reverse-linked-list', difficulty: 'Easy' },
-    { id: 'merge-two-sorted-lists', difficulty: 'Easy' },
-    { id: 'linked-list-cycle', difficulty: 'Easy' },
-    { id: 'reorder-list', difficulty: 'Medium' },
-    { id: 'remove-nth-node-from-end-of-list', difficulty: 'Medium' },
-    { id: 'copy-list-with-random-pointer', difficulty: 'Medium' },
-    { id: 'add-two-numbers', difficulty: 'Medium' },
-    { id: 'find-the-duplicate-number', difficulty: 'Medium' },
-    { id: 'lru-cache', difficulty: 'Medium' },
-    
-    // Trees
-    { id: 'invert-binary-tree', difficulty: 'Easy' },
-    { id: 'maximum-depth-of-binary-tree', difficulty: 'Easy' },
-    { id: 'same-tree', difficulty: 'Easy' },
-    { id: 'subtree-of-another-tree', difficulty: 'Easy' },
-    { id: 'lowest-common-ancestor-of-a-binary-search-tree', difficulty: 'Easy' },
-    { id: 'binary-tree-level-order-traversal', difficulty: 'Medium' },
-    { id: 'binary-tree-right-side-view', difficulty: 'Medium' },
-    { id: 'count-good-nodes-in-binary-tree', difficulty: 'Medium' },
-    { id: 'validate-binary-search-tree', difficulty: 'Medium' },
-    { id: 'kth-smallest-element-in-a-bst', difficulty: 'Medium' },
-    { id: 'construct-binary-tree-from-preorder-and-inorder-traversal', difficulty: 'Medium' },
-    
-    // Heap / Priority Queue
-    { id: 'kth-largest-element-in-a-stream', difficulty: 'Easy' },
-    { id: 'last-stone-weight', difficulty: 'Easy' },
-    { id: 'k-closest-points-to-origin', difficulty: 'Medium' },
-    { id: 'kth-largest-element-in-an-array', difficulty: 'Medium' },
-    { id: 'task-scheduler', difficulty: 'Medium' },
-    { id: 'design-twitter', difficulty: 'Medium' },
-    
-    // Backtracking
-    { id: 'subsets', difficulty: 'Medium' },
-    { id: 'combination-sum', difficulty: 'Medium' },
-    { id: 'permutations', difficulty: 'Medium' },
-    { id: 'subsets-ii', difficulty: 'Medium' },
-    { id: 'word-search', difficulty: 'Medium' },
-    
-    // Graphs
-    { id: 'number-of-islands', difficulty: 'Medium' },
-    { id: 'clone-graph', difficulty: 'Medium' },
-    { id: 'max-area-of-island', difficulty: 'Medium' },
-    { id: 'course-schedule', difficulty: 'Medium' },
-    { id: 'pacific-atlantic-water-flow', difficulty: 'Medium' },
-    
-    // Advanced Graphs
-    { id: 'reconstruct-itinerary', difficulty: 'Hard' },
-    { id: 'min-cost-to-connect-all-points', difficulty: 'Medium' },
-    { id: 'network-delay-time', difficulty: 'Medium' },
-    
-    // Dynamic Programming
-    { id: 'climbing-stairs', difficulty: 'Easy' },
-    { id: 'min-cost-climbing-stairs', difficulty: 'Easy' },
-    { id: 'house-robber', difficulty: 'Medium' },
-    { id: 'house-robber-ii', difficulty: 'Medium' },
-    { id: 'longest-palindromic-substring', difficulty: 'Medium' },
-    { id: 'palindromic-substrings', difficulty: 'Medium' },
-    { id: 'decode-ways', difficulty: 'Medium' },
-    { id: 'coin-change', difficulty: 'Medium' },
-    { id: 'maximum-product-subarray', difficulty: 'Medium' },
-    { id: 'word-break', difficulty: 'Medium' },
-    { id: 'longest-increasing-subsequence', difficulty: 'Medium' }
-  ];
-
   const getStats = () => {
     let solved = 0;
     let inProgress = 0;
@@ -218,22 +115,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
       hard: { solved: 0, total: 0 }
     };
 
-    leetcodeQuestions.forEach(q => {
+    BLIND75_QUESTIONS.forEach(q => {
       const qStatus = progress[q.id]?.status;
       const diffKey = q.difficulty.toLowerCase() as 'easy' | 'medium' | 'hard';
       breakdown[diffKey].total++;
       
-      if (qStatus === 'solved') {
+      if (qStatus === 'Solved') {
         solved++;
         breakdown[diffKey].solved++;
-      } else if (qStatus === 'learning') {
+      } else if (qStatus === 'In Progress') {
         inProgress++;
-      } else if (qStatus === 'review') {
+      } else if (qStatus === 'Needs Review') {
         needsReview++;
       }
     });
 
-    return { solved, inProgress, needsReview, total: leetcodeQuestions.length, ...breakdown };
+    return { solved, inProgress, needsReview, total: BLIND75_QUESTIONS.length, ...breakdown };
   };
 
   const stats = getStats();
