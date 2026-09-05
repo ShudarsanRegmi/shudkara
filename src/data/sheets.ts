@@ -1,4 +1,5 @@
 import { BLIND75_QUESTIONS, type LeetCodeQuestion } from './blind75';
+import { STRIVER_A2Z_QUESTIONS } from './striverA2Z';
 
 export type { LeetCodeQuestion };
 
@@ -117,5 +118,12 @@ export const SHEETS_REGISTRY: SheetDefinition[] = [
     badge: 'Amazon Curated',
     description: 'High-frequency Amazon SDE intern & full-time interview preparation sheet compiled from Soumika notes.',
     questions: AZ_SOUMIKA_QUESTIONS
+  },
+  {
+    id: 'striver_a2z',
+    title: 'Striver A2Z DSA Sheet',
+    badge: 'Comprehensive A2Z',
+    description: 'Striver\'s step-by-step master roadmap covering 16 comprehensive steps from basics to advanced DSA.',
+    questions: STRIVER_A2Z_QUESTIONS
   }
 ];
