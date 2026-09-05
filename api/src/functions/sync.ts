@@ -83,14 +83,35 @@ export async function syncHandler(request: HttpRequest, context: InvocationConte
         updatedAt: new Date()
       };
 
-      // Safeguard leetcodeProgress
-      if (leetcodeProgress !== undefined && (Object.keys(leetcodeProgress).length > 0 || !existingDoc?.leetcodeProgress)) {
-        setPayload.leetcodeProgress = leetcodeProgress;
-      } else if (existingDoc?.leetcodeProgress) {
-        setPayload.leetcodeProgress = existingDoc.leetcodeProgress;
-      } else {
-        setPayload.leetcodeProgress = {};
+      // Safeguard leetcodeProgress with Deep Merging
+      const existingProg = existingDoc?.leetcodeProgress || {};
+      const incomingProg = (leetcodeProgress && typeof leetcodeProgress === 'object') ? leetcodeProgress : {};
+
+      const mergedProg: Record<string, any> = { ...existingProg };
+
+      for (const [id, inc] of Object.entries(incomingProg)) {
+        const incObj = inc as any;
+        if (!mergedProg[id]) {
+          mergedProg[id] = incObj;
+        } else {
+          mergedProg[id] = {
+            ...mergedProg[id],
+            ...incObj,
+            notes: (incObj.notes && incObj.notes.trim() !== '') ? incObj.notes : (mergedProg[id].notes || ''),
+            runLogs: (() => {
+              const existingLogs = mergedProg[id].runLogs || [];
+              const incomingLogs = incObj.runLogs || [];
+              const logMap = new Map();
+              [...existingLogs, ...incomingLogs].forEach((l: any) => {
+                if (l && l.id) logMap.set(l.id, l);
+              });
+              return Array.from(logMap.values());
+            })()
+          };
+        }
       }
+
+      setPayload.leetcodeProgress = mergedProg;
 
       // Safeguard leetcodeNotes
       if (leetcodeNotes !== undefined) {
