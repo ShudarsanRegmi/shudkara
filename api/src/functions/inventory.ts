@@ -24,6 +24,8 @@ async function getOrCreateInventoryFolderId(): Promise<string> {
 
   const res = await drive.files.list({
     q: query,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
     fields: 'files(id, name)',
     pageSize: 1
   });

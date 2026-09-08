@@ -36,6 +36,7 @@ export async function createFolderInDrive(folderName: string): Promise<string> {
   try {
     folder = await drive.files.create({
       requestBody: fileMetadata,
+      supportsAllDrives: true,
       fields: 'id'
     });
   } catch (err: any) {
@@ -44,6 +45,7 @@ export async function createFolderInDrive(folderName: string): Promise<string> {
       delete fileMetadata.parents;
       folder = await drive.files.create({
         requestBody: fileMetadata,
+        supportsAllDrives: true,
         fields: 'id'
       });
     } else {
@@ -86,6 +88,7 @@ export async function uploadToFolder(
   const response = await drive.files.create({
     requestBody: fileMetadata,
     media: media,
+    supportsAllDrives: true,
     fields: 'id, thumbnailLink'
   });
 
