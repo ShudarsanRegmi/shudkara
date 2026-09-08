@@ -2,7 +2,7 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/fu
 import { ObjectId } from 'mongodb';
 import { connectToMongo, verifySession, extractToken } from './db';
 import { 
-  getAuthClient, FOLDER_ID, createFolderInDrive, uploadToFolder, ensureFilePublic 
+  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, ensureFilePublic 
 } from './gdrive';
 import { google } from 'googleapis';
 
@@ -17,8 +17,9 @@ async function getOrCreateInventoryFolderId(): Promise<string> {
   const drive = google.drive({ version: 'v3', auth });
 
   // Search if "Inventory" folder already exists
-  const query = FOLDER_ID 
-    ? `'${FOLDER_ID}' in parents and name = 'Inventory' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
+  const parentFolderId = getFolderId();
+  const query = parentFolderId 
+    ? `'${parentFolderId}' in parents and name = 'Inventory' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
     : `name = 'Inventory' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
 
   const res = await drive.files.list({

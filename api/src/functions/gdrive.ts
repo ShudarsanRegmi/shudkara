@@ -1,17 +1,21 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
-export const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || '';
-const CLIENT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
-const PRIVATE_KEY = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+export function getFolderId(): string {
+  return process.env.GOOGLE_DRIVE_FOLDER_ID || '';
+}
 
 export function getAuthClient() {
-  if (!CLIENT_EMAIL || !PRIVATE_KEY) {
+  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '';
+  const privateKey = rawKey.replace(/\\n/g, '\n').replace(/\\n/g, '\n');
+
+  if (!clientEmail || !privateKey) {
     throw new Error('Google Service Account credentials are not fully configured in env.');
   }
   return new google.auth.JWT({
-    email: CLIENT_EMAIL,
-    key: PRIVATE_KEY,
+    email: clientEmail,
+    key: privateKey,
     scopes: ['https://www.googleapis.com/auth/drive']
   });
 }
@@ -21,10 +25,11 @@ export async function createFolderInDrive(folderName: string): Promise<string> {
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
 
+  const folderId = getFolderId();
   const fileMetadata = {
     name: folderName,
     mimeType: 'application/vnd.google-apps.folder',
-    parents: FOLDER_ID ? [FOLDER_ID] : []
+    parents: folderId ? [folderId] : []
   };
 
   const folder = await drive.files.create({
@@ -96,8 +101,9 @@ export async function listSubFolders(): Promise<{ id: string; name: string }[]> 
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
 
-  const query = FOLDER_ID 
-    ? `'${FOLDER_ID}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
+  const folderId = getFolderId();
+  const query = folderId 
+    ? `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
     : `mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
 
   const res = await drive.files.list({
