@@ -77,30 +77,76 @@ export const Todos: React.FC<TodosProps> = ({
     onTodosChange([newItem, ...todos]);
     setNewText('');
     setNewIsPrivate(false);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch('/api/todos', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(newItem)
+    }).catch(console.error);
   };
 
   const handleToggleComplete = (id: string) => {
-    const updated = todos.map(t => t.id === id ? { ...t, completed: !t.completed } : t);
+    const target = todos.find(t => t.id === id);
+    if (!target) return;
+    const updatedCompleted = !target.completed;
+    const updated = todos.map(t => t.id === id ? { ...t, completed: updatedCompleted } : t);
     onTodosChange(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/todos/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ completed: updatedCompleted })
+    }).catch(console.error);
   };
 
   const handleToggleItemPrivacy = (id: string) => {
     if (!isLoggedIn) return;
-    const updated = todos.map(t => t.id === id ? { ...t, isPrivate: !t.isPrivate } : t);
+    const target = todos.find(t => t.id === id);
+    if (!target) return;
+    const updatedPrivate = !target.isPrivate;
+    const updated = todos.map(t => t.id === id ? { ...t, isPrivate: updatedPrivate } : t);
     onTodosChange(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/todos/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isPrivate: updatedPrivate })
+    }).catch(console.error);
   };
 
   const handleDelete = (id: string) => {
     if (window.confirm('Delete this task?')) {
       onTodosChange(todos.filter(t => t.id !== id));
+
+      const headers: Record<string, string> = {};
+      if (authToken) headers['X-Session-Token'] = authToken;
+      fetch(`/api/todos/${id}`, {
+        method: 'DELETE',
+        headers
+      }).catch(console.error);
     }
   };
 
   const handleSaveEdit = (id: string) => {
     if (!editText.trim()) return;
-    const updated = todos.map(t => t.id === id ? { ...t, text: editText.trim() } : t);
+    const newTitle = editText.trim();
+    const updated = todos.map(t => t.id === id ? { ...t, text: newTitle } : t);
     onTodosChange(updated);
     setEditingId(null);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/todos/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ text: newTitle })
+    }).catch(console.error);
   };
 
   // Lockpad banner if board is set private and visitor is nologin

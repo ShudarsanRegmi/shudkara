@@ -153,6 +153,11 @@ export const LeetCodeTracker: React.FC<TrackerProps> = ({ progress, onProgressCh
 
   const saveProgress = (updated: TrackerState) => {
     onProgressChange(updated);
+    fetch('/api/tracker', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batchProgress: updated })
+    }).catch(console.error);
   };
 
   // Universal Question Registry Access

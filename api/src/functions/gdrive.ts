@@ -1,11 +1,11 @@
 import { google } from 'googleapis';
 import { Readable } from 'stream';
 
-const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || '';
+export const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID || '';
 const CLIENT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
 const PRIVATE_KEY = (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-function getAuthClient() {
+export function getAuthClient() {
   if (!CLIENT_EMAIL || !PRIVATE_KEY) {
     throw new Error('Google Service Account credentials are not fully configured in env.');
   }

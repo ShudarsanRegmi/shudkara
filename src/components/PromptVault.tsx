@@ -57,13 +57,24 @@ export const PromptVault: React.FC<PromptVaultProps> = ({ prompts, onPromptsChan
   // Toggle Public / Private (Lockpad)
   const handleTogglePrivate = (id: string) => {
     if (!authToken) return;
+    const target = prompts.find(p => p.id === id);
+    if (!target) return;
+    const updatedPrivate = !target.isPrivate;
     const updated = prompts.map(p => {
       if (p.id === id) {
-        return { ...p, isPrivate: !p.isPrivate };
+        return { ...p, isPrivate: updatedPrivate };
       }
       return p;
     });
     savePrompts(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/prompts/${id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isPrivate: updatedPrivate })
+    }).catch(console.error);
   };
 
   // Open modal for Create
@@ -93,6 +104,13 @@ export const PromptVault: React.FC<PromptVaultProps> = ({ prompts, onPromptsChan
     if (window.confirm('Are you sure you want to delete this prompt?')) {
       const updated = prompts.filter(p => p.id !== id);
       savePrompts(updated);
+
+      const headers: Record<string, string> = {};
+      if (authToken) headers['X-Session-Token'] = authToken;
+      fetch(`/api/prompts/${id}`, {
+        method: 'DELETE',
+        headers
+      }).catch(console.error);
     }
   };
 
@@ -109,22 +127,35 @@ export const PromptVault: React.FC<PromptVaultProps> = ({ prompts, onPromptsChan
       .map(tag => tag.trim())
       .filter(tag => tag.length > 0);
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+
     if (editingPrompt) {
       // Edit mode
+      const updatedPrompt = {
+        title: formTitle.trim(),
+        prompt: formPrompt.trim(),
+        description: formDesc.trim(),
+        tags: processedTags,
+        isPrivate: formIsPrivate
+      };
+
       const updated = prompts.map(p => {
         if (p.id === editingPrompt.id) {
           return {
             ...p,
-            title: formTitle.trim(),
-            prompt: formPrompt.trim(),
-            description: formDesc.trim(),
-            tags: processedTags,
-            isPrivate: formIsPrivate
+            ...updatedPrompt
           };
         }
         return p;
       });
       savePrompts(updated);
+
+      fetch(`/api/prompts/${editingPrompt.id}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(updatedPrompt)
+      }).catch(console.error);
     } else {
       // Create mode
       const newPrompt: AIPrompt = {
@@ -137,6 +168,12 @@ export const PromptVault: React.FC<PromptVaultProps> = ({ prompts, onPromptsChan
         isPrivate: formIsPrivate
       };
       savePrompts([newPrompt, ...prompts]);
+
+      fetch('/api/prompts', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(newPrompt)
+      }).catch(console.error);
     }
 
     setIsModalOpen(false);

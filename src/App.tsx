@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -17,8 +17,7 @@ import { LifetimeLine } from './components/LifetimeLine';
 import { SharedPromptViewer } from './components/SharedPromptViewer';
 import { Todos, type TodoItem } from './components/Todos';
 import { Lists, type ListCategory } from './components/Lists';
-
-const GLOBAL_SYNC_KEY = 'global_user';
+import { Inventory } from './components/Inventory';
 
 // Categorized Navigation Architecture for Scalable Tool Integration
 const NAV_GROUPS = [
@@ -37,6 +36,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'inventory', label: 'Inventory', description: 'Private personal belongings & vault', icon: Package, requiresLogin: true },
       { key: 'lists', label: 'Lists', description: 'Static reference collections & notes', icon: ListOrdered, requiresLogin: false },
       { key: 'prompts', label: 'PromptVault', description: 'AI prompt library & links', icon: Bookmark, requiresLogin: false },
       { key: 'links', label: 'LinkManager', description: 'Tree bookmark manager', icon: LinkIcon, requiresLogin: false },
@@ -49,6 +49,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  inventory: { requiresLogin: true, label: 'Inventory', icon: Package },
   todos: { requiresLogin: false, label: 'Todos', icon: CheckSquare },
   lists: { requiresLogin: false, label: 'Lists', icon: ListOrdered },
   leetcode: { requiresLogin: false, label: 'Tracker', icon: BookOpen },
@@ -78,8 +79,6 @@ function App() {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [todoBoardPrivate, setTodoBoardPrivate] = useState<boolean>(false);
   const [lists, setLists] = useState<ListCategory[]>([]);
-  
-  const [isCloudLoaded, setIsCloudLoaded] = useState(false);
 
   // Active Dropdown state for Desktop Navbar
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -128,55 +127,49 @@ function App() {
     }
   }, []);
 
-  // Sync prompts and cloud data on mount
+  // Independent Modular REST Data Hydration on Startup
   useEffect(() => {
-    loadCloudData();
-  }, []);
+    loadAllModuleData(authToken);
+  }, [authToken]);
 
-  // Debounced auto-save for cloud state (ONLY runs after isCloudLoaded is true)
-  useEffect(() => {
-    if (!isCloudLoaded) return;
+  const loadAllModuleData = async (token: string | null) => {
+    const headers: Record<string, string> = {};
+    if (token) headers['X-Session-Token'] = token;
 
-    const delayDebounce = setTimeout(() => {
-      fetch('/api/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          syncKey: GLOBAL_SYNC_KEY,
-          leetcodeProgress,
-          prompts,
-          todos,
-          todoBoardPrivate,
-          lists
-        })
+    // Load Todos
+    fetch('/api/todos', { headers })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          if (Array.isArray(data.todos)) setTodos(data.todos);
+          setTodoBoardPrivate(!!data.isBoardPrivate);
+        }
       })
-      .catch(err => {
-        console.error('Auto-save failed:', err);
-      });
-    }, 1200);
+      .catch(err => console.error('Failed to load todos:', err));
 
-    return () => clearTimeout(delayDebounce);
-  }, [leetcodeProgress, prompts, todos, todoBoardPrivate, lists, isCloudLoaded]);
+    // Load Prompts
+    fetch('/api/prompts', { headers })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (Array.isArray(data)) setPrompts(data);
+      })
+      .catch(err => console.error('Failed to load prompts:', err));
 
-  // Load database data helper
-  const loadCloudData = async () => {
-    try {
-      const response = await fetch(`/api/sync?key=${encodeURIComponent(GLOBAL_SYNC_KEY)}`);
-      if (!response.ok) throw new Error('Fetch failed');
-      const data = await response.json();
-      
-      if (data.exists) {
-        setLeetcodeProgress(data.leetcodeProgress || {});
-        setPrompts(data.prompts || []);
-        setTodos(data.todos || []);
-        setTodoBoardPrivate(!!data.todoBoardPrivate);
-        setLists(data.lists || []);
-      }
-      setIsCloudLoaded(true);
-    } catch (err) {
-      console.error('Failed to load cloud data:', err);
-      setIsCloudLoaded(true);
-    }
+    // Load Lists
+    fetch('/api/lists', { headers })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (Array.isArray(data)) setLists(data);
+      })
+      .catch(err => console.error('Failed to load lists:', err));
+
+    // Load Tracker Progress
+    fetch('/api/tracker')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data && data.progress) setLeetcodeProgress(data.progress);
+      })
+      .catch(err => console.error('Failed to load tracker progress:', err));
   };
 
   // Find shared prompt when sharedPromptId or prompts change
@@ -256,6 +249,8 @@ function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
+      case 'inventory':
+        return <Inventory authToken={authToken} />;
       case 'todos':
         return (
           <Todos 

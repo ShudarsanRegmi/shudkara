@@ -70,13 +70,32 @@ export const Lists: React.FC<ListsProps> = ({ authToken, lists, onListsChange })
     setCatDesc('');
     setCatIsPrivate(false);
     setIsCatModalOpen(false);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch('/api/lists', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(newCat)
+    }).catch(console.error);
   };
 
   // Toggle Category Privacy (Lockpad)
   const handleToggleCatPrivacy = (catId: string) => {
     if (!isLoggedIn) return;
-    const updated = lists.map(c => c.id === catId ? { ...c, isPrivate: !c.isPrivate } : c);
+    const target = lists.find(c => c.id === catId);
+    if (!target) return;
+    const updatedPrivate = !target.isPrivate;
+    const updated = lists.map(c => c.id === catId ? { ...c, isPrivate: updatedPrivate } : c);
     onListsChange(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/lists/${catId}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isPrivate: updatedPrivate })
+    }).catch(console.error);
   };
 
   // Delete Category
@@ -87,6 +106,13 @@ export const Lists: React.FC<ListsProps> = ({ authToken, lists, onListsChange })
       if (selectedCatId === catId) {
         setSelectedCatId(updated[0]?.id || null);
       }
+
+      const headers: Record<string, string> = {};
+      if (authToken) headers['X-Session-Token'] = authToken;
+      fetch(`/api/lists/${catId}`, {
+        method: 'DELETE',
+        headers
+      }).catch(console.error);
     }
   };
 
@@ -103,9 +129,10 @@ export const Lists: React.FC<ListsProps> = ({ authToken, lists, onListsChange })
       createdAt: new Date().toLocaleDateString()
     };
 
+    const updatedItems = [newItem, ...activeCategory.items];
     const updated = lists.map(c => {
       if (c.id === activeCategory.id) {
-        return { ...c, items: [newItem, ...c.items] };
+        return { ...c, items: updatedItems };
       }
       return c;
     });
@@ -114,33 +141,59 @@ export const Lists: React.FC<ListsProps> = ({ authToken, lists, onListsChange })
     setItemText('');
     setItemNote('');
     setItemIsPrivate(false);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/lists/${activeCategory.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ items: updatedItems })
+    }).catch(console.error);
   };
 
   // Toggle Item Privacy
   const handleToggleItemPrivacy = (itemId: string) => {
     if (!isLoggedIn || !activeCategory) return;
+    const updatedItems = activeCategory.items.map(it => it.id === itemId ? { ...it, isPrivate: !it.isPrivate } : it);
     const updated = lists.map(c => {
       if (c.id === activeCategory.id) {
         return {
           ...c,
-          items: c.items.map(it => it.id === itemId ? { ...it, isPrivate: !it.isPrivate } : it)
+          items: updatedItems
         };
       }
       return c;
     });
     onListsChange(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/lists/${activeCategory.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ items: updatedItems })
+    }).catch(console.error);
   };
 
   // Delete Item
   const handleDeleteItem = (itemId: string) => {
     if (!activeCategory) return;
+    const updatedItems = activeCategory.items.filter(it => it.id !== itemId);
     const updated = lists.map(c => {
       if (c.id === activeCategory.id) {
-        return { ...c, items: c.items.filter(it => it.id !== itemId) };
+        return { ...c, items: updatedItems };
       }
       return c;
     });
     onListsChange(updated);
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/lists/${activeCategory.id}`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ items: updatedItems })
+    }).catch(console.error);
   };
 
   return (
