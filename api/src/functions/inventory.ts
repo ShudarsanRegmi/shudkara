@@ -180,8 +180,12 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
         return { status: 400, jsonBody: { error: 'fileName and base64Data are required.' } };
       }
 
+      context.log(`Attempting inventory image upload for file: ${fileName}`);
+
       // Get or create "Inventory" subfolder under main GOOGLE_DRIVE_FOLDER_ID
       const inventoryFolderId = await getOrCreateInventoryFolderId();
+
+      context.log(`Target Google Drive Inventory Folder ID: ${inventoryFolderId}`);
 
       // Upload file directly into Google Drive "Inventory" folder
       const result = await uploadToFolder(
@@ -204,10 +208,14 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
 
     return { status: 405, jsonBody: { error: `Method ${method} not allowed.` } };
   } catch (err: any) {
-    context.error('Error in inventoryHandler:', err);
+    context.error('Error in inventoryHandler:', err?.stack || err?.message || err);
     return {
       status: 500,
-      jsonBody: { error: 'Internal server error.', details: err.message }
+      jsonBody: { 
+        error: 'Internal server error.', 
+        details: err?.message || 'Unknown error during operation.',
+        stack: err?.stack
+      }
     };
   }
 }

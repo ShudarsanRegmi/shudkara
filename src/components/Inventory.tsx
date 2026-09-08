@@ -224,10 +224,12 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
           }]);
           triggerToast('Image uploaded directly to Google Drive (Inventory folder)');
         } else {
-          triggerToast('Failed to upload image to Google Drive', 'error');
+          const errData = await res.json().catch(() => ({}));
+          const errMsg = errData.details || errData.error || `HTTP ${res.status}`;
+          triggerToast(`Upload failed: ${errMsg}`, 'error');
         }
-      } catch (err) {
-        triggerToast('Error uploading image', 'error');
+      } catch (err: any) {
+        triggerToast(`Error uploading image: ${err.message || err}`, 'error');
       } finally {
         setUploadingImage(false);
       }
