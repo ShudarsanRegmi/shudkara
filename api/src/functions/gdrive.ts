@@ -26,16 +26,30 @@ export async function createFolderInDrive(folderName: string): Promise<string> {
   const drive = google.drive({ version: 'v3', auth });
 
   const folderId = getFolderId();
-  const fileMetadata = {
+  const fileMetadata: any = {
     name: folderName,
     mimeType: 'application/vnd.google-apps.folder',
     parents: folderId ? [folderId] : []
   };
 
-  const folder = await drive.files.create({
-    requestBody: fileMetadata,
-    fields: 'id'
-  });
+  let folder;
+  try {
+    folder = await drive.files.create({
+      requestBody: fileMetadata,
+      fields: 'id'
+    });
+  } catch (err: any) {
+    // If parent folder ID is inaccessible/not found, create folder at root level
+    if (folderId && err.message?.includes('File not found')) {
+      delete fileMetadata.parents;
+      folder = await drive.files.create({
+        requestBody: fileMetadata,
+        fields: 'id'
+      });
+    } else {
+      throw err;
+    }
+  }
 
   if (!folder.data.id) {
     throw new Error('Failed to create folder in Google Drive');
