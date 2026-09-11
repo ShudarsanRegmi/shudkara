@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Clock, Plus, Search, Pin, PinOff, Lock, Unlock, Share2, 
-  Trash2, Edit3, X, Check, Calendar, AlertCircle, Sparkles, Maximize2
+  Trash2, Edit3, X, Check, Calendar, AlertCircle, Sparkles, Maximize2,
+  GripVertical, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 export interface CountdownTimer {
@@ -13,6 +14,7 @@ export interface CountdownTimer {
   color?: string; // indigo, rose, emerald, amber, purple, cyan, slate
   isPinned?: boolean;
   isPrivate?: boolean;
+  order?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -359,6 +361,93 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
     return { isExpired: false, days, hours, minutes, seconds, diffMs: diff };
   };
 
+  // Calculate equivalent date breakdown in years, months, and days
+  const getHumanizedDuration = (targetIso: string): string | null => {
+    const target = new Date(targetIso);
+    const from = new Date(now);
+    const diffMs = target.getTime() - from.getTime();
+    if (diffMs <= 0) return null;
+
+    let years = target.getFullYear() - from.getFullYear();
+    let months = target.getMonth() - from.getMonth();
+    let days = target.getDate() - from.getDate();
+
+    if (days < 0) {
+      months -= 1;
+      const prevMonth = new Date(target.getFullYear(), target.getMonth(), 0);
+      days += prevMonth.getDate();
+    }
+
+    if (months < 0) {
+      years -= 1;
+      months += 12;
+    }
+
+    const parts: string[] = [];
+    if (years > 0) parts.push(`${years} ${years === 1 ? 'year' : 'years'}`);
+    if (months > 0) parts.push(`${months} ${months === 1 ? 'month' : 'months'}`);
+    if (days > 0 || parts.length === 0) parts.push(`${days} ${days === 1 ? 'day' : 'days'}`);
+
+    return parts.join(', ');
+  };
+
+  // Drag & drop / Reorder handlers
+  const [draggedTimerId, setDraggedTimerId] = useState<string | null>(null);
+
+  const handleReorderTimers = async (reordered: CountdownTimer[]) => {
+    setTimers(reordered);
+    if (!authToken) return;
+    const payloadItems = reordered.map((t, idx) => ({ id: t.id, order: idx }));
+    try {
+      await fetch('/api/timers/reorder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken
+        },
+        body: JSON.stringify({ items: payloadItems })
+      });
+    } catch (err) {
+      console.error('Failed to save reordered timers:', err);
+    }
+  };
+
+  const handleMoveTimer = (timerId: string, direction: 'prev' | 'next', e: React.MouseEvent) => {
+    e.stopPropagation();
+    const currIndex = timers.findIndex(t => t.id === timerId);
+    if (currIndex === -1) return;
+    const targetIndex = direction === 'prev' ? currIndex - 1 : currIndex + 1;
+    if (targetIndex < 0 || targetIndex >= timers.length) return;
+
+    const newTimers = [...timers];
+    const [moved] = newTimers.splice(currIndex, 1);
+    newTimers.splice(targetIndex, 0, moved);
+    handleReorderTimers(newTimers);
+    triggerToast('Timer order updated');
+  };
+
+  const handleDragStart = (timerId: string) => {
+    setDraggedTimerId(timerId);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (targetTimerId: string) => {
+    if (!draggedTimerId || draggedTimerId === targetTimerId) return;
+    const fromIdx = timers.findIndex(t => t.id === draggedTimerId);
+    const toIdx = timers.findIndex(t => t.id === targetTimerId);
+    if (fromIdx === -1 || toIdx === -1) return;
+
+    const newTimers = [...timers];
+    const [moved] = newTimers.splice(fromIdx, 1);
+    newTimers.splice(toIdx, 0, moved);
+    setDraggedTimerId(null);
+    handleReorderTimers(newTimers);
+    triggerToast('Timer reordered successfully!');
+  };
+
   // Filtered list
   const filteredTimers = timers.filter(t => {
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -515,6 +604,16 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
                         </div>
                       </div>
                     )}
+
+                    {/* Equivalent Date duration in months/days/years */}
+                    {(() => {
+                      const humanized = getHumanizedDuration(t.targetDate);
+                      return humanized ? (
+                        <div className="text-[10px] font-medium text-indigo-200 text-center bg-white/10 rounded-lg py-1 px-2 border border-white/10 mt-1">
+                          ⏳ Approx. <strong className="text-white font-bold">{humanized}</strong> remaining
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                 );
               })}
@@ -617,8 +716,14 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
               return (
                 <div
                   key={t.id}
+                  draggable={!!authToken}
+                  onDragStart={() => handleDragStart(t.id)}
+                  onDragOver={handleDragOver}
+                  onDrop={() => handleDrop(t.id)}
                   onClick={() => setFocusedTimer(t)}
-                  className={`group bg-white border ${theme.border} rounded-3xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden hover:-translate-y-1`}
+                  className={`group bg-white border ${theme.border} rounded-3xl p-6 shadow-sm hover:shadow-xl transition-all duration-300 cursor-pointer flex flex-col justify-between relative overflow-hidden hover:-translate-y-1 ${
+                    draggedTimerId === t.id ? 'opacity-40 scale-95 border-dashed border-indigo-400' : ''
+                  }`}
                 >
                   {/* Accent Top Border Bar */}
                   <div className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${theme.gradient}`} />
@@ -627,6 +732,14 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
                   <div>
                     <div className="flex items-start justify-between gap-2 mb-3">
                       <div className="flex items-center gap-2">
+                        {authToken && (
+                          <div 
+                            className="p-1 text-slate-300 group-hover:text-slate-500 cursor-grab active:cursor-grabbing hover:bg-slate-100 rounded-lg transition-colors"
+                            title="Drag to reorder"
+                          >
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </div>
+                        )}
                         <span className={`text-[10px] font-bold uppercase px-2.5 py-1 rounded-full ${theme.badge}`}>
                           {t.category || 'Personal'}
                         </span>
@@ -639,6 +752,25 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
 
                       {/* Action Menu Buttons */}
                       <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                        {authToken && (
+                          <>
+                            <button
+                              onClick={(e) => handleMoveTimer(t.id, 'prev', e)}
+                              className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 transition-colors"
+                              title="Move Left"
+                            >
+                              <ChevronLeft className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={(e) => handleMoveTimer(t.id, 'next', e)}
+                              className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 transition-colors"
+                              title="Move Right"
+                            >
+                              <ChevronRight className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+
                         {authToken && (
                           <button
                             onClick={(e) => handleTogglePin(t, e)}
@@ -732,7 +864,18 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+                        {/* Equivalent Date duration in months/days/years */}
+                        {(() => {
+                          const humanized = getHumanizedDuration(t.targetDate);
+                          return humanized ? (
+                            <div className="text-[11px] font-medium text-slate-600 bg-indigo-50/70 rounded-xl py-1.5 px-3 border border-indigo-100/80 flex items-center justify-center gap-1.5 text-center">
+                              <Clock className="w-3 h-3 text-indigo-500 shrink-0" />
+                              <span>Approx. <strong className="text-slate-900 font-semibold">{humanized}</strong> remaining</span>
+                            </div>
+                          ) : null;
+                        })()}
+
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium pt-1">
                           <span className="flex items-center gap-1">
                             <Calendar className="w-3.5 h-3.5" /> {formattedDate}
                           </span>
@@ -834,6 +977,16 @@ export const Timers: React.FC<TimersProps> = ({ authToken, initialTimerId }) => 
                     </div>
                   </div>
                 );
+              })()}
+
+              {/* Equivalent Date duration in months/days/years */}
+              {(() => {
+                const humanized = getHumanizedDuration(focusedTimer.targetDate);
+                return humanized ? (
+                  <div className="mt-4 py-3 px-5 bg-indigo-500/10 border border-indigo-500/30 rounded-2xl text-center text-sm text-indigo-200 font-medium backdrop-blur-sm">
+                    ⏳ Equivalent duration: <strong className="text-white font-bold text-base">{humanized}</strong> remaining
+                  </div>
+                ) : null;
               })()}
             </div>
 

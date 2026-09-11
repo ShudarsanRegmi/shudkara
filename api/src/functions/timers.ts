@@ -35,7 +35,7 @@ export async function timersHandler(request: HttpRequest, context: InvocationCon
         };
       }
 
-      const timers = await col.find({}).sort({ isPinned: -1, targetDate: 1 }).toArray();
+      const timers = await col.find({}).sort({ isPinned: -1, order: 1, targetDate: 1 }).toArray();
 
       // Fetch board privacy setting
       const privacyDoc = await settingsCol.findOne({ key: 'timerBoardPrivate' });
@@ -74,18 +74,39 @@ export async function timersHandler(request: HttpRequest, context: InvocationCon
       return { status: 200, jsonBody: { success: true, isBoardPrivate } };
     }
 
+    // ── 3. POST /api/timers/reorder — Bulk Reorder Timers ─────────────────────
+    if (timerId === 'reorder' || path.endsWith('/reorder')) {
+      if (!isAuthorized) return { status: 401, jsonBody: { error: 'Unauthorized.' } };
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
+
+      const items: Array<{ id: string; order: number }> = Array.isArray(body.items) ? body.items : [];
+      const bulkOps = items.map(item => ({
+        updateOne: {
+          filter: { id: item.id },
+          update: { $set: { order: item.order, updatedAt: new Date().toISOString() } }
+        }
+      }));
+
+      if (bulkOps.length > 0) {
+        await col.bulkWrite(bulkOps);
+      }
+      return { status: 200, jsonBody: { success: true } };
+    }
+
     // ── Writes & Deletes require Auth ─────────────────────────────────────────
     if (!isAuthorized) {
       return { status: 401, jsonBody: { error: 'Unauthorized. Login required to edit timers.' } };
     }
 
-    // ── 3. POST - Create new countdown timer ──────────────────────────────────
+    // ── 4. POST - Create new countdown timer ──────────────────────────────────
     if (method === 'POST') {
       let body: any;
       try { body = await request.json(); }
       catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
 
-      const { title, targetDate, description, category, color, isPinned, isPrivate } = body;
+      const { title, targetDate, description, category, color, isPinned, isPrivate, order } = body;
       if (!title || typeof title !== 'string' || !title.trim()) {
         return { status: 400, jsonBody: { error: 'Title is required.' } };
       }
@@ -103,6 +124,7 @@ export async function timersHandler(request: HttpRequest, context: InvocationCon
         color: color || 'indigo',
         isPinned: !!isPinned,
         isPrivate: !!isPrivate,
+        order: typeof order === 'number' ? order : Date.now(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -111,7 +133,7 @@ export async function timersHandler(request: HttpRequest, context: InvocationCon
       return { status: 201, jsonBody: newTimer };
     }
 
-    // ── 4. PUT - Update timer ─────────────────────────────────────────────────
+    // ── 5. PUT - Update timer ─────────────────────────────────────────────────
     if (method === 'PUT' && timerId) {
       let body: any;
       try { body = await request.json(); }
@@ -130,6 +152,7 @@ export async function timersHandler(request: HttpRequest, context: InvocationCon
       if (body.color !== undefined) updateFields.color = body.color;
       if (body.isPinned !== undefined) updateFields.isPinned = !!body.isPinned;
       if (body.isPrivate !== undefined) updateFields.isPrivate = !!body.isPrivate;
+      if (body.order !== undefined) updateFields.order = body.order;
 
       await col.updateOne({ id: timerId }, { $set: updateFields });
       const updated = await col.findOne({ id: timerId });
