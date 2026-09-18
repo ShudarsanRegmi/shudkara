@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { Mail, Smartphone, RefreshCw, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mail, Smartphone, RefreshCw, Lock, ArrowRight, ShieldCheck, KeyRound, Eye, EyeOff, Sparkles } from 'lucide-react';
 
 interface LoginProps {
   onLoginSuccess: (token: string) => void;
 }
 
-type LoginMode = 'totp' | 'email-otp';
+type LoginMode = 'totp' | 'email-otp' | 'password';
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-  // Default to 'totp' immediately for instant form rendering without blocking network spinner delay
   const [mode, setMode] = useState<LoginMode>('totp');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -20,7 +19,34 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
 
-  // Silently verify if TOTP is configured in the background without blocking rendering
+  // Master Password state (Unlocked after 10 taps)
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [passwordUnlocked, setPasswordUnlocked] = useState(false);
+
+  // 10-tap detector state
+  const [tapCount, setTapCount] = useState(0);
+  const tapResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleHeaderTap = () => {
+    setTapCount(prev => {
+      const nextCount = prev + 1;
+      if (nextCount >= 10) {
+        setPasswordUnlocked(true);
+        setMode('password');
+        setError('');
+        return 0;
+      }
+      return nextCount;
+    });
+
+    if (tapResetTimer.current) clearTimeout(tapResetTimer.current);
+    tapResetTimer.current = setTimeout(() => {
+      setTapCount(0);
+    }, 4000);
+  };
+
+  // Silently check TOTP setup status in background
   useEffect(() => {
     let isMounted = true;
     (async () => {
@@ -28,12 +54,12 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         const res = await fetch('/api/auth/totp-setup');
         if (res.ok) {
           const data = await res.json();
-          if (isMounted && data.configured === false) {
+          if (isMounted && data.configured === false && mode !== 'password') {
             setMode('email-otp');
           }
         }
       } catch {
-        // Fallback gracefully without throwing UI errors
+        // Fallback gracefully
       }
     })();
     return () => { isMounted = false; };
@@ -115,28 +141,135 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     }
   };
 
+  // ── Master Password — Verify Secret Password ──────────────────────────────
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!password.trim()) return;
+
+    setIsLoading(true);
+    setError('');
+    try {
+      const res = await fetch('/api/auth/verify-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: password.trim() })
+      });
+      const data = await res.json();
+      if (res.ok && data.token) {
+        onLoginSuccess(data.token);
+      } else {
+        setError(data.error || 'Invalid password.');
+        setPassword('');
+      }
+    } catch {
+      setError('Network error verifying password.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="max-w-sm mx-auto bg-white border border-slate-200 rounded-3xl p-8 shadow-sm space-y-6 text-slate-800 my-12">
-      {/* Header */}
-      <div className="text-center space-y-1.5">
-        <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-50 rounded-2xl mb-2">
+    <div className="max-w-sm mx-auto bg-white border border-slate-200 rounded-3xl p-8 shadow-sm space-y-6 text-slate-800 my-12 relative overflow-hidden">
+      
+      {/* 10-Tap Interactive Trigger Header */}
+      <div 
+        onClick={handleHeaderTap}
+        className="text-center space-y-1.5 cursor-pointer select-none transition-transform active:scale-95 group"
+        title="Tap 10 times to unlock secret mode"
+      >
+        <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-50 rounded-2xl mb-2 group-hover:bg-blue-100 transition-colors relative">
           <Lock className="w-6 h-6 text-blue-600" />
+          {tapCount > 0 && tapCount < 10 && (
+            <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shadow">
+              {tapCount}
+            </span>
+          )}
         </div>
         <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">
-          {mode === 'totp' ? 'Authenticator Login' : 'Email Verification'}
+          {mode === 'password'
+            ? 'Master Password Login'
+            : mode === 'totp'
+            ? 'Authenticator Login'
+            : 'Email Verification'}
         </h2>
         <p className="text-xs text-slate-500 leading-relaxed">
-          {mode === 'totp'
+          {mode === 'password'
+            ? 'Enter your master environment password to gain instant access.'
+            : mode === 'totp'
             ? 'Enter the 6-digit code from your Authenticator app.'
             : 'Enter the 6-digit verification code sent to your registered email.'}
         </p>
       </div>
+
+      {/* Secret Password Unlocked Notification Banner */}
+      {passwordUnlocked && mode === 'password' && (
+        <div className="p-2.5 text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl font-medium flex items-center justify-center space-x-2 animate-fadeIn">
+          <Sparkles className="w-4 h-4 text-indigo-500 flex-shrink-0" />
+          <span>Secret Password Authentication Mode Unlocked!</span>
+        </div>
+      )}
 
       {/* Error Banner */}
       {error && (
         <div className="p-3 text-xs bg-rose-50 border border-rose-200 text-rose-700 rounded-xl font-medium text-center">
           {error}
         </div>
+      )}
+
+      {/* ── Password Mode ── */}
+      {mode === 'password' && (
+        <form onSubmit={handlePasswordSubmit} className="space-y-4">
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-center space-x-2 text-indigo-600 mb-1">
+              <KeyRound className="w-6 h-6" />
+              <span className="text-xs font-bold uppercase tracking-wider">Secret Password</span>
+            </div>
+            
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                autoFocus
+                required
+                placeholder="Enter Master Password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                className="w-full text-center text-base font-semibold py-3 pl-4 pr-10 bg-slate-50 border border-slate-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-slate-900"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(prev => !prev)}
+                className="absolute right-3 top-3.5 text-slate-400 hover:text-slate-600 p-1"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!password.trim() || isLoading}
+            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-2xl shadow-lg shadow-indigo-500/20 text-xs transition-all flex items-center justify-center gap-2"
+          >
+            {isLoading ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <span>Authenticate Password</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={() => { setError(''); setMode('totp'); }}
+              className="text-xs text-slate-500 hover:text-indigo-600 font-medium"
+            >
+              Switch back to Authenticator TOTP
+            </button>
+          </div>
+        </form>
       )}
 
       {/* ── TOTP Mode ── */}
@@ -172,14 +305,24 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             )}
           </button>
 
-          <div className="pt-2 text-center">
+          <div className="pt-2 flex items-center justify-between text-xs">
             <button
               type="button"
               onClick={() => { setError(''); setMode('email-otp'); }}
-              className="text-xs text-slate-500 hover:text-blue-600 font-medium"
+              className="text-slate-500 hover:text-blue-600 font-medium"
             >
-              Use Email OTP instead
+              Use Email OTP
             </button>
+
+            {passwordUnlocked && (
+              <button
+                type="button"
+                onClick={() => { setError(''); setMode('password'); }}
+                className="text-indigo-600 hover:text-indigo-700 font-semibold"
+              >
+                Use Password
+              </button>
+            )}
           </div>
         </form>
       )}
@@ -234,14 +377,24 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             </form>
           )}
 
-          <div className="pt-2 text-center">
+          <div className="pt-2 flex items-center justify-between text-xs">
             <button
               type="button"
               onClick={() => { setError(''); setMode('totp'); }}
-              className="text-xs text-slate-500 hover:text-blue-600 font-medium"
+              className="text-slate-500 hover:text-blue-600 font-medium"
             >
-              Use Authenticator TOTP instead
+              Use Authenticator TOTP
             </button>
+
+            {passwordUnlocked && (
+              <button
+                type="button"
+                onClick={() => { setError(''); setMode('password'); }}
+                className="text-indigo-600 hover:text-indigo-700 font-semibold"
+              >
+                Use Password
+              </button>
+            )}
           </div>
         </div>
       )}

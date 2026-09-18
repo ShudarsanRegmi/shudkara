@@ -204,6 +204,68 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
       return { status: 200, jsonBody: { success: true, message: 'Logged out.' } };
     }
 
+    // ── 8. Secret Master Password Verification (10-Tap Access Mode) ─────────
+    if (method === 'POST' && path.endsWith('/verify-password')) {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
+
+      const { password } = body;
+      if (!password || typeof password !== 'string') {
+        return { status: 400, jsonBody: { error: 'Password is required.' } };
+      }
+
+      const clientIp = request.headers.get('x-forwarded-for') || request.headers.get('client-ip') || 'unknown-ip';
+      const attemptsCol = db.collection('auth_login_attempts');
+
+      // 1. Rate limiting & Brute force protection (Max 5 failed attempts per 15 minutes)
+      const windowStart = new Date(Date.now() - 15 * 60 * 1000);
+      const recentFailures = await attemptsCol.countDocuments({
+        ip: clientIp,
+        success: false,
+        timestamp: { $gte: windowStart }
+      });
+
+      if (recentFailures >= 5) {
+        return {
+          status: 429,
+          jsonBody: {
+            error: 'Too many failed password attempts. Password authentication locked for 15 minutes.'
+          }
+        };
+      }
+
+      const masterPassword = process.env.MASTER_PASSWORD;
+      if (!masterPassword) {
+        return { status: 500, jsonBody: { error: 'MASTER_PASSWORD environment secret is not configured in Azure.' } };
+      }
+
+      // 2. Cryptographic PBKDF2 constant-time hashing & comparison
+      const salt = 'shudkara_master_salt_v1';
+      const inputHash = crypto.pbkdf2Sync(password.trim(), salt, 10000, 32, 'sha256');
+      const targetHash = crypto.pbkdf2Sync(masterPassword.trim(), salt, 10000, 32, 'sha256');
+
+      const isMatch = crypto.timingSafeEqual(inputHash, targetHash);
+
+      if (!isMatch) {
+        // Record failed attempt for rate limiting
+        await attemptsCol.insertOne({ ip: clientIp, success: false, timestamp: new Date() });
+        // Artificial delay to mitigate rapid timing / automated attacks
+        await new Promise(resolve => setTimeout(resolve, 300));
+        return { status: 401, jsonBody: { error: 'Invalid master password.' } };
+      }
+
+      // Record success & clear failed attempts for this client IP
+      await attemptsCol.deleteMany({ ip: clientIp });
+
+      // 3. Create 365-day session
+      const sessionToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      await db.collection('sessions').insertOne({ token: sessionToken, createdAt: new Date(), expiresAt });
+
+      return { status: 200, jsonBody: { success: true, token: sessionToken } };
+    }
+
     return { status: 404, jsonBody: { error: 'Route not found.' } };
   } catch (err: any) {
     context.error('Auth handler error:', err);
