@@ -132,19 +132,31 @@ function App() {
   useEffect(() => {
     const token = localStorage.getItem('shudkara_auth_token');
     if (token) {
+      // Optimistically initialize token so app is immediately responsive without waiting for network
+      setAuthToken(token);
+
       fetch('/api/auth/check', {
         headers: { 'X-Session-Token': token }
       })
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          // Keep token on HTTP 500 / 502 / 503 error
+          return null;
+        }
+        return res.json();
+      })
       .then(data => {
-        if (data.authenticated) {
+        if (!data) return;
+        if (data.authenticated === true) {
           setAuthToken(token);
-        } else {
+        } else if (data.authenticated === false) {
+          // Server explicitly verified token is invalid or deleted
           localStorage.removeItem('shudkara_auth_token');
           setAuthToken(null);
         }
       })
-      .catch(() => {
+      .catch(err => {
+        console.warn('Network error checking auth status, keeping session active:', err);
         setAuthToken(token);
       });
     }

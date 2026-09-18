@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Key, Mail, ShieldAlert, Check, RefreshCw, Smartphone, ArrowRight, Lock } from 'lucide-react';
+import { Mail, Smartphone, RefreshCw, Lock, ArrowRight, ShieldCheck } from 'lucide-react';
 
 interface LoginProps {
   onLoginSuccess: (token: string) => void;
 }
 
-type LoginMode = 'detecting' | 'totp' | 'email-otp';
+type LoginMode = 'totp' | 'email-otp';
 
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
-  const [mode, setMode] = useState<LoginMode>('detecting');
+  // Default to 'totp' immediately for instant form rendering without blocking network spinner delay
+  const [mode, setMode] = useState<LoginMode>('totp');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -19,29 +20,29 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [otpCode, setOtpCode] = useState('');
   const [otpSent, setOtpSent] = useState(false);
 
-  // On mount: check if TOTP is configured to decide which login to show
+  // Silently verify if TOTP is configured in the background without blocking rendering
   useEffect(() => {
+    let isMounted = true;
     (async () => {
       try {
         const res = await fetch('/api/auth/totp-setup');
-        const data = await res.json();
-        // If TOTP is configured, show TOTP login directly as primary auth
-        if (data.configured) {
-          setMode('totp');
-        } else {
-          // Not configured yet — require email OTP first (bootstrap)
-          setMode('email-otp');
+        if (res.ok) {
+          const data = await res.json();
+          if (isMounted && data.configured === false) {
+            setMode('email-otp');
+          }
         }
       } catch {
-        setMode('email-otp'); // fallback
+        // Fallback gracefully without throwing UI errors
       }
     })();
+    return () => { isMounted = false; };
   }, []);
 
-  // ── TOTP Login ────────────────────────────────────────────────────────────
+  // ── TOTP Login Submit ──────────────────────────────────────────────────────
   const handleTotpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (totpCode.length !== 6) return;
+    if (totpCode.trim().length !== 6) return;
 
     setIsLoading(true);
     setError('');
@@ -49,17 +50,17 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       const res = await fetch('/api/auth/verify-totp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: totpCode })
+        body: JSON.stringify({ code: totpCode.trim() })
       });
       const data = await res.json();
       if (res.ok && data.token) {
         onLoginSuccess(data.token);
       } else {
-        setError(data.error || 'Invalid code. Try again.');
+        setError(data.error || 'Invalid code. Check your authenticator app.');
         setTotpCode('');
       }
     } catch {
-      setError('Network error. Check your connection.');
+      setError('Network error. Check connection and try again.');
     } finally {
       setIsLoading(false);
     }
@@ -78,10 +79,10 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       if (res.ok) {
         setOtpSent(true);
       } else {
-        setError(data.error || 'Failed to send code.');
+        setError(data.error || 'Failed to send verification email.');
       }
     } catch {
-      setError('Network error sending code.');
+      setError('Network error sending verification code.');
     } finally {
       setIsLoading(false);
     }
@@ -90,7 +91,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   // ── Email OTP — Verify Code ───────────────────────────────────────────────
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (otpCode.length !== 6) return;
+    if (otpCode.trim().length !== 6) return;
 
     setIsLoading(true);
     setError('');
@@ -98,35 +99,24 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: otpCode })
+        body: JSON.stringify({ code: otpCode.trim() })
       });
       const data = await res.json();
       if (res.ok && data.token) {
         onLoginSuccess(data.token);
       } else {
-        setError(data.error || 'Invalid code. Try again.');
+        setError(data.error || 'Invalid OTP code. Try again.');
         setOtpCode('');
       }
     } catch {
-      setError('Network error. Check your connection.');
+      setError('Network error verifying code.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // ── Detecting state ───────────────────────────────────────────────────────
-  if (mode === 'detecting') {
-    return (
-      <div className="max-w-sm mx-auto my-16 flex flex-col items-center gap-3 text-slate-500">
-        <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
-        <span className="text-xs font-semibold">Checking authentication status...</span>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-sm mx-auto bg-white border border-slate-200 rounded-3xl p-8 shadow-sm space-y-6 text-slate-800 my-12">
-
       {/* Header */}
       <div className="text-center space-y-1.5">
         <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-50 rounded-2xl mb-2">
@@ -137,10 +127,17 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         </h2>
         <p className="text-xs text-slate-500 leading-relaxed">
           {mode === 'totp'
-            ? 'Open Microsoft Authenticator and enter the current 6-digit code.'
-            : 'No TOTP set up yet. Verify your identity via email to continue setup.'}
+            ? 'Enter the 6-digit code from your Authenticator app.'
+            : 'Enter the 6-digit verification code sent to your registered email.'}
         </p>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="p-3 text-xs bg-rose-50 border border-rose-200 text-rose-700 rounded-xl font-medium text-center">
+          {error}
+        </div>
+      )}
 
       {/* ── TOTP Mode ── */}
       {mode === 'totp' && (
@@ -150,39 +147,40 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             <input
               type="text"
               inputMode="numeric"
-              placeholder="000000"
+              pattern="[0-9]*"
               maxLength={6}
-              value={totpCode}
-              onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
-              className="w-full px-4 py-4 border border-slate-200 rounded-2xl text-center font-mono text-3xl tracking-widest font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
               autoFocus
-              disabled={isLoading}
+              placeholder="000000"
+              value={totpCode}
+              onChange={e => setTotpCode(e.target.value.replace(/\D/g, ''))}
+              className="w-full text-center text-3xl font-extrabold tracking-widest py-3 px-4 bg-slate-50 border border-slate-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 font-mono"
             />
           </div>
 
-          {error && (
-            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
-              <ShieldAlert className="w-4 h-4 shrink-0" />
-              {error}
-            </div>
-          )}
-
           <button
             type="submit"
-            disabled={isLoading || totpCode.length !== 6}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2"
+            disabled={totpCode.length !== 6 || isLoading}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-2xl shadow-lg shadow-blue-500/20 text-xs transition-all flex items-center justify-center gap-2"
           >
-            {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
-            {isLoading ? 'Verifying...' : 'Log In'}
+            {isLoading ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <>
+                <span>Authenticate</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
           </button>
 
-          <button
-            type="button"
-            onClick={() => setMode('email-otp')}
-            className="w-full text-xs text-slate-400 hover:text-slate-600 text-center py-1 transition"
-          >
-            Use email OTP instead
-          </button>
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={() => { setError(''); setMode('email-otp'); }}
+              className="text-xs text-slate-500 hover:text-blue-600 font-medium"
+            >
+              Use Email OTP instead
+            </button>
+          </div>
         </form>
       )}
 
@@ -190,85 +188,61 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       {mode === 'email-otp' && (
         <div className="space-y-4">
           {!otpSent ? (
-            <>
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-center space-y-1">
-                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Sending code to</span>
-                <p className="font-mono text-sm font-bold text-slate-800">shudarsanregmi555@gmail.com</p>
+            <div className="space-y-3">
+              <div className="flex flex-col items-center gap-3 py-2">
+                <Mail className="w-8 h-8 text-blue-500" />
+                <span className="text-xs text-slate-600 text-center">
+                  Click below to receive a 6-digit login code via email.
+                </span>
               </div>
-
-              {error && (
-                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  {error}
-                </div>
-              )}
-
               <button
+                type="button"
                 onClick={handleSendOtp}
                 disabled={isLoading}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-2xl shadow-lg shadow-blue-500/20 text-xs transition-all flex items-center justify-center gap-2"
               >
-                {isLoading
-                  ? <><RefreshCw className="w-4 h-4 animate-spin" />Sending...</>
-                  : <><Mail className="w-4 h-4" />Send Code to My Email</>
-                }
+                {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Send Login Code'}
               </button>
-            </>
+            </div>
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-4">
-              <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-100 rounded-xl text-xs text-emerald-700 font-semibold">
-                <Check className="w-4 h-4 shrink-0 text-emerald-600" />
-                Code sent! Check your Gmail inbox.
-              </div>
-
-              <div className="flex flex-col items-center gap-2">
+              <div className="flex flex-col items-center gap-3">
+                <ShieldCheck className="w-8 h-8 text-emerald-500" />
+                <span className="text-xs text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full font-medium">
+                  Code sent! Check your inbox.
+                </span>
                 <input
                   type="text"
                   inputMode="numeric"
-                  placeholder="000000"
+                  pattern="[0-9]*"
                   maxLength={6}
-                  value={otpCode}
-                  onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                  className="w-full px-4 py-4 border border-slate-200 rounded-2xl text-center font-mono text-3xl tracking-widest font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
                   autoFocus
-                  disabled={isLoading}
+                  placeholder="000000"
+                  value={otpCode}
+                  onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                  className="w-full text-center text-3xl font-extrabold tracking-widest py-3 px-4 bg-slate-50 border border-slate-300 rounded-2xl focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 font-mono"
                 />
-                <button
-                  type="button"
-                  onClick={() => { setOtpSent(false); setOtpCode(''); setError(''); }}
-                  className="text-[10px] text-slate-400 hover:text-slate-600 transition"
-                >
-                  Resend code
-                </button>
               </div>
-
-              {error && (
-                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  {error}
-                </div>
-              )}
 
               <button
                 type="submit"
-                disabled={isLoading || otpCode.length !== 6}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2"
+                disabled={otpCode.length !== 6 || isLoading}
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold rounded-2xl shadow-lg shadow-blue-500/20 text-xs transition-all flex items-center justify-center gap-2"
               >
-                {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
-                {isLoading ? 'Verifying...' : 'Verify & Log In'}
+                {isLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Verify Code & Log In'}
               </button>
             </form>
           )}
 
-          {/* Switch to TOTP if already configured */}
-          <button
-            type="button"
-            onClick={() => setMode('totp')}
-            className="w-full text-xs text-slate-400 hover:text-slate-600 text-center py-1 transition flex items-center justify-center gap-1"
-          >
-            <Smartphone className="w-3.5 h-3.5" />
-            Use Authenticator app instead
-          </button>
+          <div className="pt-2 text-center">
+            <button
+              type="button"
+              onClick={() => { setError(''); setMode('totp'); }}
+              className="text-xs text-slate-500 hover:text-blue-600 font-medium"
+            >
+              Use Authenticator TOTP instead
+            </button>
+          </div>
         </div>
       )}
     </div>

@@ -26,11 +26,15 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
     // ── 1. Session Check ─────────────────────────────────────────────────────
     if (method === 'GET' && path.endsWith('/check')) {
       const token = extractToken(request);
+      if (!token) {
+        return { status: 200, jsonBody: { authenticated: false } };
+      }
       try {
         const isValid = await verifySession(token);
         return { status: 200, jsonBody: { authenticated: isValid } };
       } catch (err: any) {
-        return { status: 200, jsonBody: { authenticated: false, error: err.message } };
+        context.error('Session check DB error:', err);
+        return { status: 500, jsonBody: { error: 'Internal server error checking session.', details: err.message } };
       }
     }
 
@@ -110,7 +114,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
       }
 
       const sessionToken = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 Year (365 days)
       await db.collection('sessions').insertOne({ token: sessionToken, createdAt: new Date(), expiresAt });
 
       return { status: 200, jsonBody: { success: true, token: sessionToken } };
@@ -185,7 +189,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
 
       // Create session
       const sessionToken = crypto.randomBytes(32).toString('hex');
-      const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 Year (365 days)
       await db.collection('sessions').insertOne({ token: sessionToken, createdAt: new Date(), expiresAt });
 
       return { status: 200, jsonBody: { success: true, token: sessionToken } };
