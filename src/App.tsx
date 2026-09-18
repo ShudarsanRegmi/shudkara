@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -19,6 +19,7 @@ import { Todos, type TodoItem } from './components/Todos';
 import { Lists, type ListCategory } from './components/Lists';
 import { Inventory } from './components/Inventory';
 import { Timers } from './components/Timers';
+import { Pastebin } from './components/Pastebin';
 
 // Categorized Navigation Architecture for Scalable Tool Integration
 const NAV_GROUPS = [
@@ -26,6 +27,7 @@ const NAV_GROUPS = [
     category: 'Tools & Utilities',
     icon: Wrench,
     items: [
+      { key: 'pastebin', label: 'Pastebin', description: 'Ephemeral & persistent code pastes', icon: FileCode, requiresLogin: false },
       { key: 'timers', label: 'Timers', description: 'Countdown timers & whiteboard canvas', icon: Clock, requiresLogin: false },
       { key: 'todos', label: 'Todos', description: 'Aesthetic Whiteboard & Flat Task List', icon: CheckSquare, requiresLogin: false },
       { key: 'airdrop', label: 'Airdrop', description: 'Direct P2P file sharing', icon: Share2, requiresLogin: false },
@@ -51,6 +53,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  pastebin: { requiresLogin: false, label: 'Pastebin', icon: FileCode },
   timers: { requiresLogin: false, label: 'Timers', icon: Clock },
   inventory: { requiresLogin: true, label: 'Inventory', icon: Package },
   todos: { requiresLogin: false, label: 'Todos', icon: CheckSquare },
@@ -69,6 +72,7 @@ function App() {
   const [activeTab, setActiveTab] = useState<string>('dashboard');
   const [urlRoomId, setUrlRoomId] = useState<string | null>(null);
   const [urlTimerId, setUrlTimerId] = useState<string | null>(null);
+  const [urlPasteId, setUrlPasteId] = useState<string | null>(null);
 
   // Standalone Prompt Share URL handling
   const [sharedPromptId, setSharedPromptId] = useState<string | null>(null);
@@ -106,6 +110,12 @@ function App() {
     if (timerId) {
       setUrlTimerId(timerId);
       setActiveTab('timers');
+    }
+
+    const pasteId = params.get('pasteId');
+    if (pasteId) {
+      setUrlPasteId(pasteId);
+      setActiveTab('pastebin');
     }
   }, []);
 
@@ -259,6 +269,8 @@ function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
+      case 'pastebin':
+        return <Pastebin authToken={authToken} initialPasteId={urlPasteId} />;
       case 'timers':
         return <Timers authToken={authToken} initialTimerId={urlTimerId} />;
       case 'inventory':
