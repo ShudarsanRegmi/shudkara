@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -20,6 +20,7 @@ import { Lists, type ListCategory } from './components/Lists';
 import { Inventory } from './components/Inventory';
 import { Timers } from './components/Timers';
 import { Pastebin } from './components/Pastebin';
+import { ConcurrencyManager } from './components/ConcurrencyManager';
 
 // Categorized Navigation Architecture for Scalable Tool Integration
 const NAV_GROUPS = [
@@ -27,6 +28,7 @@ const NAV_GROUPS = [
     category: 'Tools & Utilities',
     icon: Wrench,
     items: [
+      { key: 'concurrency', label: 'Concurrency', description: 'Parallel workstreams & context manager', icon: Workflow, requiresLogin: false },
       { key: 'pastebin', label: 'Pastebin', description: 'Ephemeral & persistent code pastes', icon: FileCode, requiresLogin: false },
       { key: 'timers', label: 'Timers', description: 'Countdown timers & whiteboard canvas', icon: Clock, requiresLogin: false },
       { key: 'todos', label: 'Todos', description: 'Aesthetic Whiteboard & Flat Task List', icon: CheckSquare, requiresLogin: false },
@@ -53,6 +55,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  concurrency: { requiresLogin: false, label: 'Concurrency', icon: Workflow },
   pastebin: { requiresLogin: false, label: 'Pastebin', icon: FileCode },
   timers: { requiresLogin: false, label: 'Timers', icon: Clock },
   inventory: { requiresLogin: true, label: 'Inventory', icon: Package },
@@ -269,6 +272,8 @@ function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
+      case 'concurrency':
+        return <ConcurrencyManager authToken={authToken} />;
       case 'pastebin':
         return <Pastebin authToken={authToken} initialPasteId={urlPasteId} />;
       case 'timers':
