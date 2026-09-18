@@ -105,9 +105,9 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
     if (!text || !text.trim()) return;
 
     const trimmed = text.trim();
-    // Use first line truncated as title, or fallback to 'Instant Paste'
+    const isImageData = trimmed.startsWith('data:image/');
     const firstLine = trimmed.split('\n')[0].replace(/[\r\n]/g, '').trim();
-    const title = firstLine.length > 40 ? `${firstLine.substring(0, 40)}...` : (firstLine || 'Instant Paste');
+    const title = isImageData ? 'Pasted Image' : (firstLine.length > 40 ? `${firstLine.substring(0, 40)}...` : (firstLine || 'Instant Paste'));
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
@@ -115,10 +115,10 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
     const payload = {
       title,
       content: trimmed,
-      language: 'plaintext',
-      category: 'General',
+      language: isImageData ? 'image' : 'plaintext',
+      category: isImageData ? 'Images' : 'General',
       type: 'ephemeral',
-      expiryOption: '24h', // Default 24h retention as requested
+      expiryOption: '24h',
       isPrivate: false,
       isPinned: false
     };
@@ -133,23 +133,76 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
         const created = await res.json();
         setPastes(prev => [created, ...prev]);
         setActiveSubTab('ephemeral');
-        triggerToast('Clipboard content pasted instantly! Expiration: 24 Hours', 'success');
+        triggerToast(isImageData ? 'Image pasted instantly!' : 'Clipboard content pasted instantly!', 'success');
       }
     } catch (err) {
       triggerToast('Failed to save instant paste', 'error');
     }
   };
 
-  // Listen for global Ctrl + V paste events anywhere on page
+  const handleInstantImagePaste = async (dataUrl: string, name = 'Pasted Image') => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+
+    const payload = {
+      title: name,
+      content: dataUrl,
+      language: 'image',
+      category: 'Images',
+      type: 'ephemeral',
+      expiryOption: '24h',
+      isPrivate: false,
+      isPinned: false
+    };
+
+    try {
+      const res = await fetch('/api/pastebin', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setPastes(prev => [created, ...prev]);
+        setActiveSubTab('ephemeral');
+        triggerToast('Image pasted instantly! Expiration: 24 Hours', 'success');
+      }
+    } catch {
+      triggerToast('Failed to save pasted image', 'error');
+    }
+  };
+
+  // Listen for global Ctrl + V paste events anywhere on page (Text & Images)
   useEffect(() => {
     const handleGlobalPaste = (e: ClipboardEvent) => {
-      // Ignore if user is currently typing in an input or textarea
       const target = e.target as HTMLElement;
       if (
         target && 
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
+      }
+
+      // Check for Image item in clipboard
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith('image/')) {
+            e.preventDefault();
+            const blob = items[i].getAsFile();
+            if (blob) {
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const dataUrl = event.target?.result as string;
+                if (dataUrl) {
+                  handleInstantImagePaste(dataUrl, blob.name || 'Pasted Image');
+                }
+              };
+              reader.readAsDataURL(blob);
+              return;
+            }
+          }
+        }
       }
 
       const pastedText = e.clipboardData?.getData('text');
@@ -636,10 +689,14 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
                   </div>
 
                   {/* Snippet Preview Box */}
-                  <div className="bg-slate-900 text-slate-200 rounded-2xl p-4 font-mono text-xs overflow-hidden relative max-h-36 border border-slate-800">
-                    <pre className="line-clamp-4 leading-relaxed whitespace-pre-wrap break-all">
-                      {p.content}
-                    </pre>
+                  <div className="bg-slate-900 text-slate-100 rounded-2xl p-4 font-mono text-xs overflow-hidden relative max-h-36 border border-slate-800">
+                    {(p.language === 'image' || p.content.startsWith('data:image/')) ? (
+                      <img src={p.content} alt={p.title} className="max-h-28 w-full object-contain rounded-lg mx-auto" />
+                    ) : (
+                      <pre className="line-clamp-4 leading-relaxed whitespace-pre-wrap break-all text-slate-100">
+                        {p.content}
+                      </pre>
+                    )}
                   </div>
 
                   {/* Footer Meta info */}
@@ -658,7 +715,7 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
 
       {/* VIEW PASTE MODAL */}
       {viewingPaste && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xl flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-fade-in">
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-xl flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-fade-in">
           <div className="relative w-full max-w-4xl bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-white shadow-2xl space-y-6 my-auto overflow-hidden">
             {/* Top Bar */}
             <div className="flex items-center justify-between gap-4 border-b border-slate-800 pb-4">
@@ -706,11 +763,15 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
               </p>
             </div>
 
-            {/* Code View Area */}
-            <div className="bg-slate-950 rounded-2xl p-5 border border-slate-800 font-mono text-xs sm:text-sm text-slate-200 overflow-x-auto max-h-[60vh] leading-relaxed relative">
-              <pre className="whitespace-pre-wrap break-all">
-                {viewingPaste.content}
-              </pre>
+            {/* Code / Image View Area */}
+            <div className="bg-slate-950 rounded-2xl p-5 border border-slate-800 font-mono text-xs sm:text-sm text-slate-100 overflow-x-auto max-h-[60vh] leading-relaxed relative">
+              {(viewingPaste.language === 'image' || viewingPaste.content.startsWith('data:image/')) ? (
+                <img src={viewingPaste.content} alt={viewingPaste.title} className="max-h-[50vh] w-full object-contain rounded-xl mx-auto" />
+              ) : (
+                <pre className="whitespace-pre-wrap break-all text-slate-100 font-mono">
+                  {viewingPaste.content}
+                </pre>
+              )}
             </div>
           </div>
         </div>

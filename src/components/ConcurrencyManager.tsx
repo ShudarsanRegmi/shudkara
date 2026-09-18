@@ -3,8 +3,9 @@ import {
   Workflow, Plus, Search, Pin, Lock, Unlock,
   Trash2, Edit3, X, Sparkles,
   Play, Pause, Shield, ShieldOff, Activity, ArrowRight,
-  CheckCircle2, Circle, Clock, ExternalLink, HelpCircle,
-  Brain, FileText, CornerDownRight, Link as LinkIcon
+  CheckCircle2, Circle, ExternalLink, HelpCircle,
+  Brain, FileText, CornerDownRight, Link as LinkIcon,
+  BellRing, Layers, BarChart2
 } from 'lucide-react';
 
 export type WorkstreamState = 'ACTIVE' | 'PAUSED' | 'WAITING' | 'SUSPENDED';
@@ -16,16 +17,6 @@ export interface MicroTask {
   createdAt: string;
 }
 
-export interface WorkstreamTimer {
-  id: string;
-  type: 'focus' | 'deadline' | 'background';
-  label: string;
-  durationSeconds: number;
-  elapsedSeconds: number;
-  isRunning: boolean;
-  isCompleted: boolean;
-}
-
 export interface ParkedThought {
   id: string;
   content: string;
@@ -35,6 +26,23 @@ export interface ParkedThought {
 export interface ContextLink {
   label: string;
   url: string;
+}
+
+export interface TimeLog {
+  id: string;
+  startTime: string;
+  endTime?: string | null;
+  durationSeconds: number;
+  taskName?: string;
+}
+
+export interface BackgroundAlarm {
+  id: string;
+  message: string;
+  triggerTime: number; // Unix timestamp ms
+  durationMinutes: number;
+  active: boolean;
+  triggered?: boolean;
 }
 
 export interface Workstream {
@@ -56,13 +64,22 @@ export interface Workstream {
   whereILeftOff?: string;
   filesOrLinks?: ContextLink[];
 
-  // Lists
+  // Lists & Granular Time Logs
   microTasks?: MicroTask[];
-  timers?: WorkstreamTimer[];
   parkingLot?: ParkedThought[];
+  timeLogs?: TimeLog[];
+  backgroundAlarms?: BackgroundAlarm[];
 
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface Sitting {
+  id: string;
+  title: string;
+  workstreamIds: string[];
+  active: boolean;
+  createdAt?: string;
 }
 
 export interface ConcurrencyConfig {
@@ -70,16 +87,6 @@ export interface ConcurrencyConfig {
   focusModeEnabled: boolean;
   soundAlerts: boolean;
   isBoardPrivate: boolean;
-}
-
-export interface ConcurrencyNotification {
-  id: string;
-  workstreamId?: string;
-  workstreamTitle?: string;
-  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-  message: string;
-  timestamp: string;
-  read: boolean;
 }
 
 export interface ConcurrencySession {
@@ -90,14 +97,11 @@ export interface ConcurrencySession {
   durationMinutes?: number;
   totalContextSwitches: number;
   switchesHistory: Array<{ fromId: string; toId: string; timestamp: string; reason?: string }>;
-  parkedThoughtsCount?: number;
-  microTasksCompleted?: number;
   attentionHealthScore?: number;
 }
 
 interface ConcurrencyManagerProps {
   authToken?: string | null;
-  initialWorkstreamId?: string | null;
 }
 
 const STATE_BADGES: Record<WorkstreamState, { label: string; bg: string; text: string; dotBg: string }> = {
@@ -109,6 +113,9 @@ const STATE_BADGES: Record<WorkstreamState, { label: string; bg: string; text: s
 
 export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToken }) => {
   const [workstreams, setWorkstreams] = useState<Workstream[]>([]);
+  const [sittings, setSittings] = useState<Sitting[]>([]);
+  const [activeSitting, setActiveSitting] = useState<Sitting | null>(null);
+
   const [config, setConfig] = useState<ConcurrencyConfig>({
     maxActiveWorkstreams: 3,
     focusModeEnabled: false,
@@ -126,12 +133,19 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   // Modals & Panels
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
+  const [showSittingModal, setShowSittingModal] = useState<boolean>(false);
+  const [showTimeLogsModal, setShowTimeLogsModal] = useState<Workstream | null>(null);
   const [showSessionModal, setShowSessionModal] = useState<boolean>(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState<boolean>(false);
   const [editingWorkstream, setEditingWorkstream] = useState<Workstream | null>(null);
   const [resumingWorkstream, setResumingWorkstream] = useState<{ workstream: Workstream; previous?: Workstream } | null>(null);
+  const [triggeredAlarm, setTriggeredAlarm] = useState<{ workstreamTitle: string; message: string } | null>(null);
 
-  // Form State
+  // Sitting Form State
+  const [sittingTitle, setSittingTitle] = useState('');
+  const [sittingSelectedIds, setSittingSelectedIds] = useState<string[]>([]);
+
+  // Workstream Form State
   const [formTitle, setFormTitle] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formCategory, setFormCategory] = useState('General');
@@ -140,6 +154,11 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   const [formNextAction, setFormNextAction] = useState('');
   const [formWhereILeftOff, setFormWhereILeftOff] = useState('');
   const [formIsPrivate, setFormIsPrivate] = useState(true);
+
+  // Background Alarm Form State per Workstream
+  const [alarmMinutes, setAlarmMinutes] = useState<Record<string, number>>({});
+  const [alarmMessage, setAlarmMessage] = useState<Record<string, string>>({});
+  const [showAddAlarm, setShowAddAlarm] = useState<Record<string, boolean>>({});
 
   // Inline Quick Inputs
   const [quickThought, setQuickThought] = useState<Record<string, string>>({});
@@ -157,6 +176,35 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Web Audio API Chime Synthesizer
+  const playChimeSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, now); // D5
+      osc.frequency.setValueAtTime(880.00, now + 0.15); // A5
+      osc.frequency.setValueAtTime(1174.66, now + 0.35); // D6
+
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(now);
+      osc.stop(now + 0.8);
+    } catch {
+      // Ignore audio autoplay restrictions
+    }
+  };
+
   // ── Fetch Concurrency State ────────────────────────────────────────────────
   const fetchState = useCallback(async () => {
     try {
@@ -168,6 +216,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       if (res.ok) {
         const data = await res.json();
         setWorkstreams(data.workstreams || []);
+        if (data.sittings) setSittings(data.sittings);
+        if (data.activeSitting !== undefined) setActiveSitting(data.activeSitting);
         if (data.config) setConfig(data.config);
         if (data.activeSession !== undefined) setActiveSession(data.activeSession);
         if (data.recentSessions) setRecentSessions(data.recentSessions);
@@ -183,38 +233,41 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     fetchState();
   }, [fetchState]);
 
-  // ── Timer Interval Tick (for Active Workstream Stopwatch & Timers) ──────────
+  // ── Timer Interval Tick (Stopwatch, Active Duration & Background Alarms) ──
   useEffect(() => {
     const interval = setInterval(() => {
+      const nowMs = Date.now();
+
       setWorkstreams(prev =>
         prev.map(ws => {
-          if (ws.state !== 'ACTIVE' && (!ws.timers || !ws.timers.some(t => t.isRunning))) {
-            return ws;
-          }
-
           let updatedActiveSeconds = ws.totalActiveSeconds || 0;
           if (ws.state === 'ACTIVE') {
             updatedActiveSeconds += 1;
           }
 
-          let timersChanged = false;
-          const updatedTimers = (ws.timers || []).map(timer => {
-            if (!timer.isRunning || timer.isCompleted) return timer;
-            timersChanged = true;
-            const newElapsed = timer.elapsedSeconds + 1;
-            const isCompleted = timer.durationSeconds > 0 && newElapsed >= timer.durationSeconds;
-            return {
-              ...timer,
-              elapsedSeconds: newElapsed,
-              isCompleted,
-              isRunning: isCompleted ? false : timer.isRunning
-            };
+          // Check Background Alarms
+          let alarmTriggered = false;
+          const updatedAlarms = (ws.backgroundAlarms || []).map(alarm => {
+            if (alarm.active && !alarm.triggered && nowMs >= alarm.triggerTime) {
+              alarmTriggered = true;
+              setTriggeredAlarm({
+                workstreamTitle: ws.title,
+                message: alarm.message || `Background alarm call triggered for ${ws.title}`
+              });
+              playChimeSound();
+              return { ...alarm, active: false, triggered: true };
+            }
+            return alarm;
           });
+
+          if (alarmTriggered) {
+            showToast(`🔔 Alarm Callback Triggered for "${ws.title}"!`);
+          }
 
           return {
             ...ws,
             totalActiveSeconds: updatedActiveSeconds,
-            timers: timersChanged ? updatedTimers : ws.timers
+            backgroundAlarms: updatedAlarms
           };
         })
       );
@@ -321,6 +374,13 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
 
       const created = await res.json();
       setWorkstreams(prev => [created, ...prev]);
+
+      // If a sitting is active, automatically attach new workstream to sitting
+      if (activeSitting) {
+        const updatedIds = [...activeSitting.workstreamIds, created.id];
+        await handleSaveSittingUpdate(activeSitting.id, activeSitting.title, updatedIds, true);
+      }
+
       setShowCreateModal(false);
       resetForm();
       showToast(`Created workstream "${created.title}"`);
@@ -350,6 +410,116 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     } catch (err) {
       console.error('Error deleting workstream:', err);
     }
+  };
+
+  // ── Current Sitting (Sitting Session Management) ───────────────────────────
+  const handleSaveSittingSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sittingTitle.trim()) return;
+
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+
+      const res = await fetch('/api/concurrency/sittings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'create',
+          title: sittingTitle.trim(),
+          workstreamIds: sittingSelectedIds,
+          active: true
+        })
+      });
+
+      if (res.ok) {
+        const createdSitting = await res.json();
+        setSittings(prev => [createdSitting, ...prev.map(s => ({ ...s, active: false }))]);
+        setActiveSitting(createdSitting);
+        setShowSittingModal(false);
+        setSittingTitle('');
+        setSittingSelectedIds([]);
+        showToast(`Switched sitting to "${createdSitting.title}" (${sittingSelectedIds.length} workstreams)`);
+      }
+    } catch (err) {
+      console.error('Failed to create sitting:', err);
+    }
+  };
+
+  const handleActivateSitting = async (sittingId: string | null) => {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+
+      await fetch('/api/concurrency/sittings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'activate', id: sittingId })
+      });
+
+      if (sittingId === null) {
+        setActiveSitting(null);
+        setSittings(prev => prev.map(s => ({ ...s, active: false })));
+        showToast('Showing all workstreams');
+      } else {
+        const target = sittings.find(s => s.id === sittingId);
+        setActiveSitting(target || null);
+        setSittings(prev => prev.map(s => ({ ...s, active: s.id === sittingId })));
+        if (target) showToast(`Active sitting: "${target.title}"`);
+      }
+    } catch (err) {
+      console.error('Failed to activate sitting:', err);
+    }
+  };
+
+  const handleSaveSittingUpdate = async (id: string, title: string, workstreamIds: string[], active: boolean) => {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+
+      const res = await fetch('/api/concurrency/sittings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'update', id, title, workstreamIds, active })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setSittings(prev => prev.map(s => (s.id === id ? updated : s)));
+        if (active) setActiveSitting(updated);
+      }
+    } catch (err) {
+      console.error('Failed to update sitting:', err);
+    }
+  };
+
+  const toggleWorkstreamInCurrentSitting = async (wsId: string) => {
+    if (!activeSitting) {
+      // Create new active sitting on the fly
+      const newTitle = `Current Sitting (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+
+      const res = await fetch('/api/concurrency/sittings', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ action: 'create', title: newTitle, workstreamIds: [wsId], active: true })
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setSittings(prev => [created, ...prev.map(s => ({ ...s, active: false }))]);
+        setActiveSitting(created);
+        showToast(`Created sitting "${newTitle}" with 1 workstream`);
+      }
+      return;
+    }
+
+    const exists = activeSitting.workstreamIds.includes(wsId);
+    const updatedIds = exists
+      ? activeSitting.workstreamIds.filter(id => id !== wsId)
+      : [...activeSitting.workstreamIds, wsId];
+
+    await handleSaveSittingUpdate(activeSitting.id, activeSitting.title, updatedIds, true);
+    showToast(exists ? 'Removed from sitting' : 'Added to current sitting');
   };
 
   // ── Context Switch Flow ────────────────────────────────────────────────────
@@ -385,17 +555,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         })
       });
 
-      setWorkstreams(prev =>
-        prev.map(w => {
-          if (w.id === targetWs.id) return { ...w, state: 'ACTIVE', lastActiveTime: new Date().toISOString() };
-          if (prevWs && w.id === prevWs.id) return { ...w, state: 'PAUSED' };
-          return w;
-        })
-      );
-
-      await saveWorkstreamUpdate(targetWs.id, { state: 'ACTIVE' });
-      if (prevWs) await saveWorkstreamUpdate(prevWs.id, { state: 'PAUSED' });
-
       showToast(`Switched focus to "${targetWs.title}"`);
       setResumingWorkstream(null);
       setSwitchReasonInput('');
@@ -411,9 +570,56 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       return;
     }
 
-    setWorkstreams(prev => prev.map(w => (w.id === ws.id ? { ...w, state: newState } : w)));
-    await saveWorkstreamUpdate(ws.id, { state: newState });
+    // Add time log entry if turning off ACTIVE
+    const nowIso = new Date().toISOString();
+    let updatedTimeLogs = ws.timeLogs || [];
+    if (ws.state === 'ACTIVE' && updatedTimeLogs.length > 0) {
+      updatedTimeLogs = updatedTimeLogs.map(log => {
+        if (!log.endTime) {
+          const duration = Math.max(0, Math.round((new Date(nowIso).getTime() - new Date(log.startTime).getTime()) / 1000));
+          return { ...log, endTime: nowIso, durationSeconds: duration };
+        }
+        return log;
+      });
+    }
+
+    setWorkstreams(prev => prev.map(w => (w.id === ws.id ? { ...w, state: newState, timeLogs: updatedTimeLogs } : w)));
+    await saveWorkstreamUpdate(ws.id, { state: newState, timeLogs: updatedTimeLogs });
     showToast(`Workstream "${ws.title}" is now ${newState}`);
+  };
+
+  // ── Background Alarm Callbacks ─────────────────────────────────────────────
+  const handleAddAlarmCallback = async (wsId: string) => {
+    const mins = alarmMinutes[wsId] || 3;
+    const msg = (alarmMessage[wsId] || '').trim();
+
+    const ws = workstreams.find(w => w.id === wsId);
+    if (!ws) return;
+
+    const triggerTime = Date.now() + mins * 60 * 1000;
+    const newAlarm: BackgroundAlarm = {
+      id: crypto.randomUUID(),
+      message: msg || `Background timer callback for "${ws.title}"`,
+      triggerTime,
+      durationMinutes: mins,
+      active: true
+    };
+
+    const updatedAlarms = [...(ws.backgroundAlarms || []), newAlarm];
+    setWorkstreams(prev => prev.map(w => (w.id === wsId ? { ...w, backgroundAlarms: updatedAlarms } : w)));
+    setShowAddAlarm(prev => ({ ...prev, [wsId]: false }));
+    setAlarmMessage(prev => ({ ...prev, [wsId]: '' }));
+    await saveWorkstreamUpdate(wsId, { backgroundAlarms: updatedAlarms });
+    showToast(`🔔 Alarm callback set for ${mins} minute(s)`);
+  };
+
+  const handleCancelAlarm = async (wsId: string, alarmId: string) => {
+    const ws = workstreams.find(w => w.id === wsId);
+    if (!ws) return;
+
+    const updatedAlarms = (ws.backgroundAlarms || []).filter(a => a.id !== alarmId);
+    setWorkstreams(prev => prev.map(w => (w.id === wsId ? { ...w, backgroundAlarms: updatedAlarms } : w)));
+    await saveWorkstreamUpdate(wsId, { backgroundAlarms: updatedAlarms });
   };
 
   // ── Concurrency Level Selector & Config ────────────────────────────────────
@@ -488,7 +694,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       if (res.ok) {
         const session = await res.json();
         setActiveSession(session);
-        showToast('🚀 Concurrency session started!');
+        showToast('🚀 Sitting session timer started!');
       }
     } catch (err) {
       console.error('Failed to start session:', err);
@@ -511,7 +717,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         setActiveSession(null);
         setRecentSessions(prev => [endedSession, ...prev]);
         setShowSessionModal(true);
-        showToast('Session ended. Analytics summary generated.');
+        showToast('Sitting ended. Analytics summary generated.');
       }
     } catch (err) {
       console.error('Failed to end session:', err);
@@ -685,7 +891,13 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   const categories = Array.from(new Set(workstreams.map(w => w.category || 'General')));
   const activeWorkstreamsCount = workstreams.filter(w => w.state === 'ACTIVE').length;
 
+  // Filter workstreams based on Current Sitting + Search + Category + State
   const filteredWorkstreams = workstreams.filter(ws => {
+    // If a sitting is active, enforce sitting inclusion
+    if (activeSitting && !activeSitting.workstreamIds.includes(ws.id)) {
+      return false;
+    }
+
     const matchesSearch =
       ws.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (ws.currentTask && ws.currentTask.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -704,7 +916,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-6 pb-20 font-sans">
+    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-6 pb-20 font-sans w-full">
       {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 animate-bounce">
@@ -713,8 +925,32 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
       )}
 
+      {/* Alarm Triggered Modal Call Popup */}
+      {triggeredAlarm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border-2 border-indigo-500 rounded-3xl max-w-md w-full p-6 shadow-2xl text-center space-y-4 animate-bounce">
+            <div className="w-14 h-14 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center mx-auto text-indigo-400">
+              <BellRing className="w-8 h-8 text-indigo-400 animate-pulse" />
+            </div>
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">Background Callback Triggered</span>
+              <h3 className="text-xl font-extrabold text-white mt-1">{triggeredAlarm.workstreamTitle}</h3>
+              <p className="text-xs text-slate-300 mt-2 bg-slate-900 p-3 rounded-xl border border-slate-700">
+                "{triggeredAlarm.message}"
+              </p>
+            </div>
+            <button
+              onClick={() => setTriggeredAlarm(null)}
+              className="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-indigo-600/30"
+            >
+              Acknowledge & Dismiss Call
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header & Controls Bar */}
-      <header className="max-w-7xl mx-auto mb-8">
+      <header className="w-full mb-8">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg">
           <div className="flex items-center space-x-3">
             <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
@@ -728,13 +964,42 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Preserve context, control interruptions & minimize cognitive context switching costs.
+                Preserve context, manage sitting sessions & switch parallel workstreams without friction.
               </p>
             </div>
           </div>
 
           {/* Action Bar */}
           <div className="flex flex-wrap items-center gap-3">
+            {/* Current Sitting Selector */}
+            <div className="flex items-center bg-slate-900/90 rounded-xl px-2 py-1 border border-slate-700/80">
+              <Layers className="w-4 h-4 text-indigo-400 mr-2" />
+              <select
+                value={activeSitting?.id || 'all'}
+                onChange={e => handleActivateSitting(e.target.value === 'all' ? null : e.target.value)}
+                className="bg-transparent text-xs font-semibold text-indigo-200 focus:outline-none pr-1"
+              >
+                <option value="all" className="bg-slate-900 text-white">All Workstreams</option>
+                {sittings.map(s => (
+                  <option key={s.id} value={s.id} className="bg-slate-900 text-white">
+                    Sitting: {s.title} ({s.workstreamIds.length})
+                  </option>
+                ))}
+              </select>
+
+              <button
+                onClick={() => {
+                  setSittingTitle('');
+                  setSittingSelectedIds(activeSitting ? [...activeSitting.workstreamIds] : []);
+                  setShowSittingModal(true);
+                }}
+                className="ml-2 px-2 py-1 bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 rounded-lg text-xs font-bold"
+                title="Create or edit Sitting session"
+              >
+                + Sitting
+              </button>
+            </div>
+
             {/* Concurrency Level Limit Selector */}
             <div className="flex items-center bg-slate-900/90 rounded-xl p-1 border border-slate-700/80">
               <span className="text-xs text-slate-400 px-2 font-medium">Slots:</span>
@@ -762,7 +1027,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-lg shadow-emerald-500/10'
                   : 'bg-slate-900/80 text-slate-300 border-slate-700 hover:bg-slate-800'
               }`}
-              title="Focus Shield queues background alerts to keep you in flow state"
             >
               {config.focusModeEnabled ? <Shield className="w-4 h-4 text-emerald-400" /> : <ShieldOff className="w-4 h-4 text-slate-400" />}
               <span>{config.focusModeEnabled ? 'Focus Shield ON' : 'Focus Shield'}</span>
@@ -775,7 +1039,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 className="flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-all shadow-md"
               >
                 <Activity className="w-4 h-4 text-rose-400 animate-pulse" />
-                <span>End Session ({activeSession.totalContextSwitches} switches)</span>
+                <span>End Sitting Timer ({activeSession.totalContextSwitches} switches)</span>
               </button>
             ) : (
               <button
@@ -783,7 +1047,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 className="flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30 transition-all shadow-md"
               >
                 <Play className="w-4 h-4 text-indigo-400" />
-                <span>Start Session</span>
+                <span>Start Sitting Timer</span>
               </button>
             )}
 
@@ -791,7 +1055,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             <button
               onClick={toggleBoardPrivacy}
               className="p-2 rounded-xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
-              title={config.isBoardPrivate ? 'Board is Private (Click to make public)' : 'Board is Public (Click to make private)'}
             >
               {config.isBoardPrivate ? <Lock className="w-4 h-4 text-amber-400" /> : <Unlock className="w-4 h-4 text-emerald-400" />}
             </button>
@@ -800,7 +1063,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             <button
               onClick={() => setShowShortcutsModal(true)}
               className="p-2 rounded-xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
-              title="Keyboard Shortcuts (?)"
             >
               <HelpCircle className="w-4 h-4 text-slate-400" />
             </button>
@@ -819,17 +1081,17 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
           </div>
         </div>
 
-        {/* Status & Notification Summary Bar */}
+        {/* Status Bar */}
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400 bg-slate-800/40 px-4 py-2.5 rounded-xl border border-slate-700/40">
           <div className="flex items-center space-x-4">
             <span className="flex items-center space-x-1.5">
               <span className={`w-2 h-2 rounded-full ${activeWorkstreamsCount > 0 ? 'bg-emerald-400 animate-ping' : 'bg-slate-500'}`} />
               <strong className="text-slate-200">Active Workstreams:</strong> {activeWorkstreamsCount} / {config.maxActiveWorkstreams} limit
             </span>
-            {activeSession && (
+            {activeSitting && (
               <span className="flex items-center space-x-1.5 text-indigo-300">
-                <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Session Active since {new Date(activeSession.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Showing Sitting: <strong className="text-white">{activeSitting.title}</strong> ({filteredWorkstreams.length} tasks)</span>
               </span>
             )}
           </div>
@@ -840,8 +1102,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
       </header>
 
-      {/* Main Board Grid */}
-      <main className="max-w-7xl mx-auto">
+      {/* Main Full-Width Horizontal Board */}
+      <main className="w-full">
         {/* Filters & Search */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6">
           <div className="relative w-full sm:w-72">
@@ -883,11 +1145,13 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
 
         {/* Empty State */}
         {filteredWorkstreams.length === 0 && !loading && (
-          <div className="text-center py-16 bg-slate-800/40 rounded-2xl border border-dashed border-slate-700">
+          <div className="text-center py-16 bg-slate-800/40 rounded-2xl border border-dashed border-slate-700 max-w-xl mx-auto">
             <Workflow className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-            <h3 className="text-base font-semibold text-slate-300">No workstreams found</h3>
+            <h3 className="text-base font-semibold text-slate-300">
+              {activeSitting ? `No workstreams in sitting "${activeSitting.title}"` : 'No workstreams found'}
+            </h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto mt-1 mb-4">
-              Create up to 4 parallel workstreams to maintain your focus, preserve context state, and switch frictionlessly.
+              Add workstreams to your sitting session or create a new parallel workstream.
             </p>
             <button
               onClick={() => { resetForm(); setShowCreateModal(true); }}
@@ -898,27 +1162,29 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
           </div>
         )}
 
-        {/* Grid View */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6">
+        {/* Full-Width Horizontal Kanban Board Track */}
+        <div className="flex flex-row items-stretch gap-6 overflow-x-auto pb-6 pt-2 px-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-slate-900/60 [&::-webkit-scrollbar-thumb]:bg-slate-700/80 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
           {filteredWorkstreams.map((ws, idx) => {
             const stateInfo = STATE_BADGES[ws.state] || STATE_BADGES.PAUSED;
             const isSlotShortcut = idx < 4;
+            const isMainFocus = ws.state === 'ACTIVE';
 
             const completedMicroCount = (ws.microTasks || []).filter(m => m.completed).length;
             const totalMicroCount = (ws.microTasks || []).length;
             const microProgressPct = totalMicroCount > 0 ? Math.round((completedMicroCount / totalMicroCount) * 100) : 0;
+            const inSitting = activeSitting?.workstreamIds.includes(ws.id);
 
             return (
               <div
                 key={ws.id}
-                className={`relative flex flex-col rounded-2xl bg-slate-800/90 border transition-all duration-200 shadow-xl overflow-hidden ${
-                  ws.state === 'ACTIVE'
-                    ? 'border-indigo-500/80 ring-2 ring-indigo-500/30 shadow-indigo-950/50'
-                    : 'border-slate-700/80 hover:border-slate-600'
+                className={`relative flex flex-col rounded-3xl bg-slate-800/90 border transition-all duration-300 shadow-2xl overflow-hidden shrink-0 ${
+                  isMainFocus
+                    ? 'w-[440px] md:w-[480px] border-2 border-indigo-500/90 ring-4 ring-indigo-500/20 shadow-indigo-950/60 scale-[1.01]'
+                    : 'w-[350px] md:w-[380px] border-slate-700/80 hover:border-slate-600 opacity-95 hover:opacity-100'
                 }`}
               >
                 {/* Header Banner */}
-                <div className={`p-4 flex items-center justify-between border-b border-slate-700/60 ${ws.state === 'ACTIVE' ? 'bg-gradient-to-r from-indigo-900/50 via-slate-800 to-purple-900/50' : 'bg-slate-800/50'}`}>
+                <div className={`p-4 flex items-center justify-between border-b border-slate-700/60 ${ws.state === 'ACTIVE' ? 'bg-gradient-to-r from-indigo-900/60 via-slate-800 to-purple-900/60' : 'bg-slate-800/60'}`}>
                   <div className="flex items-center space-x-3">
                     {isSlotShortcut && (
                       <span className="w-6 h-6 rounded-lg bg-slate-900/90 border border-slate-700 flex items-center justify-center text-[11px] font-mono font-bold text-slate-300">
@@ -935,8 +1201,20 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     </div>
                   </div>
 
-                  {/* State Badge & Actions */}
+                  {/* State Badge & Sitting Toggle */}
                   <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => toggleWorkstreamInCurrentSitting(ws.id)}
+                      className={`p-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                        inSitting
+                          ? 'bg-indigo-500/30 text-indigo-300 border-indigo-500/40'
+                          : 'bg-slate-900/60 text-slate-400 border-slate-700 hover:text-white'
+                      }`}
+                      title={inSitting ? 'In current sitting (Click to remove)' : 'Add to current sitting'}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                    </button>
+
                     <div className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold ${stateInfo.bg} ${stateInfo.text}`}>
                       <span className={`w-2 h-2 rounded-full ${stateInfo.dotBg}`} />
                       <span>{stateInfo.label}</span>
@@ -945,14 +1223,12 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     <button
                       onClick={() => openEditModal(ws)}
                       className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/60 transition-all"
-                      title="Edit Workstream"
                     >
                       <Edit3 className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => handleDeleteWorkstream(ws.id, ws.title)}
                       className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-slate-700/60 transition-all"
-                      title="Delete Workstream"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -962,19 +1238,17 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 {/* Body Content */}
                 <div className="p-5 flex-1 space-y-4">
                   {/* Context Preservation Cards */}
-                  <div className="bg-slate-900/80 rounded-xl p-3.5 border border-slate-700/70 space-y-2.5">
-                    {/* Current Task */}
+                  <div className="bg-slate-900/80 rounded-2xl p-3.5 border border-slate-700/70 space-y-2.5">
                     <div>
                       <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider flex items-center space-x-1">
                         <FileText className="w-3 h-3 text-indigo-400" />
-                        <span>Current Focus</span>
+                        <span>Current Focus Task</span>
                       </span>
                       <p className="text-xs text-slate-200 font-medium mt-0.5">
                         {ws.currentTask || <span className="text-slate-500 italic">No current task specified...</span>}
                       </p>
                     </div>
 
-                    {/* Immediate Next Action */}
                     <div className="pt-2 border-t border-slate-800">
                       <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider flex items-center space-x-1">
                         <CornerDownRight className="w-3 h-3 text-emerald-400" />
@@ -985,7 +1259,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       </p>
                     </div>
 
-                    {/* Where I Left Off */}
                     {ws.whereILeftOff && (
                       <div className="pt-2 border-t border-slate-800">
                         <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider flex items-center space-x-1">
@@ -999,7 +1272,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     )}
                   </div>
 
-                  {/* Micro Tasks Section */}
+                  {/* Micro Tasks Section with Harmonic Custom Scrollbar */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs font-bold text-slate-300 flex items-center space-x-1.5">
@@ -1009,7 +1282,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       <span className="text-[11px] text-slate-400 font-semibold">{microProgressPct}%</span>
                     </div>
 
-                    {/* Progress Bar */}
                     <div className="w-full bg-slate-900 rounded-full h-1.5 mb-3 overflow-hidden">
                       <div
                         className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full transition-all duration-300"
@@ -1017,12 +1289,11 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       />
                     </div>
 
-                    {/* Task items list */}
-                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-700/60 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
                       {(ws.microTasks || []).map(task => (
                         <div
                           key={task.id}
-                          className="flex items-center justify-between group p-1.5 rounded-lg hover:bg-slate-700/40 text-xs transition-all"
+                          className="flex items-center justify-between group p-1.5 rounded-xl hover:bg-slate-700/40 text-xs transition-all"
                         >
                           <button
                             onClick={() => handleToggleMicroTask(ws.id, task.id)}
@@ -1047,7 +1318,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       ))}
                     </div>
 
-                    {/* Add Task Input */}
                     <div className="mt-2 flex items-center space-x-2">
                       <input
                         type="text"
@@ -1055,33 +1325,94 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                         value={quickMicroTask[ws.id] || ''}
                         onChange={e => setQuickMicroTask(prev => ({ ...prev, [ws.id]: e.target.value }))}
                         onKeyDown={e => e.key === 'Enter' && handleAddMicroTask(ws.id)}
-                        className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                        className="flex-1 bg-slate-900/90 border border-slate-700/80 rounded-xl px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                       />
                       <button
                         onClick={() => handleAddMicroTask(ws.id)}
-                        className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-xs font-semibold transition-all"
+                        className="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-xl text-xs font-semibold transition-all"
                       >
                         Add
                       </button>
                     </div>
                   </div>
 
+                  {/* Background Alarm Callbacks */}
+                  <div className="bg-slate-900/60 rounded-2xl p-3 border border-slate-700/60 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-indigo-300 flex items-center space-x-1.5">
+                        <BellRing className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Background Call Alarms</span>
+                      </span>
+                      <button
+                        onClick={() => setShowAddAlarm(prev => ({ ...prev, [ws.id]: !prev[ws.id] }))}
+                        className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/40"
+                      >
+                        {showAddAlarm[ws.id] ? 'Cancel' : '+ Call Me'}
+                      </button>
+                    </div>
+
+                    {showAddAlarm[ws.id] && (
+                      <div className="p-2.5 bg-slate-900 border border-slate-700 rounded-xl space-y-2">
+                        <div className="flex items-center space-x-1.5">
+                          {[1, 2, 3, 5, 10].map(m => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setAlarmMinutes(prev => ({ ...prev, [ws.id]: m }))}
+                              className={`px-2 py-1 text-[10px] font-bold rounded ${
+                                (alarmMinutes[ws.id] || 3) === m
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-slate-800 text-slate-300'
+                              }`}
+                            >
+                              {m}m
+                            </button>
+                          ))}
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="Alarm message (e.g. Check CI build)"
+                          value={alarmMessage[ws.id] || ''}
+                          onChange={e => setAlarmMessage(prev => ({ ...prev, [ws.id]: e.target.value }))}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500"
+                        />
+                        <button
+                          onClick={() => handleAddAlarmCallback(ws.id)}
+                          className="w-full py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold"
+                        >
+                          Set Call Alarm ({alarmMinutes[ws.id] || 3}m)
+                        </button>
+                      </div>
+                    )}
+
+                    {(ws.backgroundAlarms || []).filter(a => a.active).map(alarm => (
+                      <div key={alarm.id} className="flex items-center justify-between bg-indigo-950/60 p-2 rounded-xl text-xs border border-indigo-800/60 text-indigo-200">
+                        <div className="flex items-center space-x-2 truncate">
+                          <BellRing className="w-3.5 h-3.5 text-indigo-400 animate-pulse shrink-0" />
+                          <span className="truncate">{alarm.message}</span>
+                        </div>
+                        <button onClick={() => handleCancelAlarm(ws.id, alarm.id)} className="text-slate-400 hover:text-rose-400 ml-2">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
                   {/* Parking Lot (Thoughts) */}
-                  <div className="bg-slate-900/50 rounded-xl p-3 border border-slate-700/50">
+                  <div className="bg-slate-900/50 rounded-2xl p-3 border border-slate-700/50">
                     <span className="text-[11px] font-bold text-amber-300 flex items-center space-x-1.5 mb-2">
                       <Brain className="w-3.5 h-3.5 text-amber-400" />
                       <span>Parking Lot (Thoughts)</span>
                     </span>
 
-                    <div className="space-y-1.5 max-h-28 overflow-y-auto">
+                    <div className="space-y-1.5 max-h-28 overflow-y-auto [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-700/60 [&::-webkit-scrollbar-thumb]:rounded-full">
                       {(ws.parkingLot || []).map(thought => (
-                        <div key={thought.id} className="flex items-center justify-between bg-slate-800/80 p-2 rounded-lg text-xs border border-slate-700/60">
+                        <div key={thought.id} className="flex items-center justify-between bg-slate-800/80 p-2 rounded-xl text-xs border border-slate-700/60">
                           <span className="text-slate-300 truncate flex-1 mr-2">{thought.content}</span>
                           <div className="flex items-center space-x-1">
                             <button
                               onClick={() => handleConvertParkedToTask(ws.id, thought)}
-                              className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/40"
-                              title="Convert to micro-task"
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/40 font-bold"
                             >
                               +Task
                             </button>
@@ -1096,7 +1427,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       ))}
                     </div>
 
-                    {/* Park Thought Input */}
                     <div className="mt-2 flex items-center space-x-2">
                       <input
                         id={`parking-input-${ws.id}`}
@@ -1105,18 +1435,18 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                         value={quickThought[ws.id] || ''}
                         onChange={e => setQuickThought(prev => ({ ...prev, [ws.id]: e.target.value }))}
                         onKeyDown={e => e.key === 'Enter' && handleAddParkedThought(ws.id)}
-                        className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                        className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
                       />
                       <button
                         onClick={() => handleAddParkedThought(ws.id)}
-                        className="px-2 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 rounded-lg text-xs font-semibold"
+                        className="px-2 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30 rounded-xl text-xs font-semibold"
                       >
                         Park
                       </button>
                     </div>
                   </div>
 
-                  {/* Context Files / Links */}
+                  {/* Context Links */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-300 flex items-center space-x-1.5">
@@ -1174,12 +1504,16 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                   </div>
                 </div>
 
-                {/* Footer Controls / State Switchers */}
+                {/* Footer Controls & Time Log Details Trigger */}
                 <div className="p-4 bg-slate-900/90 border-t border-slate-700/80 flex items-center justify-between gap-2">
-                  <div className="flex items-center space-x-1.5 text-xs text-slate-400">
-                    <Clock className="w-3.5 h-3.5 text-slate-500" />
-                    <span>{formatSeconds(ws.totalActiveSeconds || 0)} active</span>
-                  </div>
+                  <button
+                    onClick={() => setShowTimeLogsModal(ws)}
+                    className="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-indigo-200 bg-indigo-950/60 border border-indigo-800/60 px-2.5 py-1 rounded-xl transition-all"
+                    title="View detailed task time logs"
+                  >
+                    <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>{formatSeconds(ws.totalActiveSeconds || 0)}</span>
+                  </button>
 
                   <div className="flex items-center space-x-1.5">
                     {ws.state !== 'ACTIVE' ? (
@@ -1218,10 +1552,134 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
       </main>
 
-      {/* ── Modal: Context Resume Snapshot (Immersive Switch Banner) ────────── */}
+      {/* ── Modal: Sitting Management (Current Sitting) ───────────────────── */}
+      {showSittingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 text-left">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
+              <h3 className="text-base font-bold text-white flex items-center space-x-2">
+                <Layers className="w-5 h-5 text-indigo-400" />
+                <span>Create / Select Sitting Session</span>
+              </h3>
+              <button
+                onClick={() => setShowSittingModal(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSittingSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Sitting Title *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Morning Sprint Sitting"
+                  value={sittingTitle}
+                  onChange={e => setSittingTitle(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-2">Select Workstreams for this Sitting:</label>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {workstreams.map(ws => {
+                    const isChecked = sittingSelectedIds.includes(ws.id);
+                    return (
+                      <label key={ws.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-200 cursor-pointer hover:bg-slate-800/80">
+                        <span className="font-semibold">{ws.title} <span className="text-slate-500 text-[10px]">({ws.category})</span></span>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={e => {
+                            if (e.target.checked) setSittingSelectedIds(prev => [...prev, ws.id]);
+                            else setSittingSelectedIds(prev => prev.filter(id => id !== ws.id));
+                          }}
+                          className="rounded bg-slate-800 border-slate-600 text-indigo-600 focus:ring-indigo-500"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSittingModal(false)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-xl text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg"
+                >
+                  Start Sitting Session
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Detailed Time Logs Viewer ──────────────────────────────── */}
+      {showTimeLogsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-left">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Detailed Time Log History</span>
+                <h3 className="text-base font-bold text-white">{showTimeLogsModal.title}</h3>
+              </div>
+              <button
+                onClick={() => setShowTimeLogsModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="bg-slate-900 p-3 rounded-2xl border border-slate-700 flex items-center justify-between text-xs">
+              <span className="text-slate-400">Total Active Recorded Duration:</span>
+              <span className="text-emerald-400 font-extrabold text-sm">{formatSeconds(showTimeLogsModal.totalActiveSeconds || 0)}</span>
+            </div>
+
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {(!showTimeLogsModal.timeLogs || showTimeLogsModal.timeLogs.length === 0) ? (
+                <div className="text-center py-6 text-xs text-slate-500">No time logs recorded yet for this workstream.</div>
+              ) : (
+                showTimeLogsModal.timeLogs.map((log, lIdx) => (
+                  <div key={lIdx} className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                    <div className="flex justify-between items-center text-slate-200">
+                      <span className="font-bold text-white">{log.taskName || 'Focus Task'}</span>
+                      <span className="font-mono text-indigo-300 font-bold">{formatSeconds(log.durationSeconds)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-[10px] text-slate-500">
+                      <span>Start: {new Date(log.startTime).toLocaleTimeString()}</span>
+                      <span>{log.endTime ? `End: ${new Date(log.endTime).toLocaleTimeString()}` : 'Currently Active'}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <button
+              onClick={() => setShowTimeLogsModal(null)}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
+            >
+              Close Time Logs
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Context Resume Snapshot ────────────────────────────────── */}
       {resumingWorkstream && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-800 border border-indigo-500/50 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-left relative">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border border-indigo-500/50 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-left relative">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700">
               <div className="flex items-center space-x-3">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
@@ -1247,7 +1705,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               </div>
             )}
 
-            {/* Context Memory State */}
             <div className="space-y-3 bg-slate-900/80 p-4 rounded-xl border border-slate-700">
               <div>
                 <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Current Focus Task</span>
@@ -1273,7 +1730,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               )}
             </div>
 
-            {/* Switch Reason Input */}
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">Context Switch Trigger / Reason (Optional):</label>
               <input
@@ -1307,7 +1763,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       {/* ── Modal: Create / Edit Workstream ───────────────────────────────── */}
       {(showCreateModal || showEditModal) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto text-left">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto text-left">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700">
               <h3 className="text-base font-bold text-white">
                 {showCreateModal ? 'Create New Workstream' : 'Edit Workstream'}
@@ -1431,7 +1887,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       {/* ── Modal: Keyboard Shortcuts Cheat Sheet ─────────────────────────── */}
       {showShortcutsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4 text-left">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 text-left">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700">
               <h3 className="text-base font-bold text-white flex items-center space-x-2">
                 <HelpCircle className="w-5 h-5 text-indigo-400" />
@@ -1479,11 +1935,11 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       {/* ── Modal: Session Analytics Summary ──────────────────────────────── */}
       {showSessionModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-slate-800 border border-slate-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 text-left">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 text-left">
             <div className="flex items-center justify-between pb-3 border-b border-slate-700">
               <h3 className="text-base font-bold text-white flex items-center space-x-2">
                 <Activity className="w-5 h-5 text-indigo-400" />
-                <span>Session Summary & Behavioral Telemetry</span>
+                <span>Sitting Session Summary & Behavioral Telemetry</span>
               </h3>
               <button
                 onClick={() => setShowSessionModal(false)}

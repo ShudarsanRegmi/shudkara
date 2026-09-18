@@ -12,13 +12,14 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
     const db = await connectToMongo();
     const workstreamsCol = db.collection('workstreams');
     const sessionsCol = db.collection('concurrencySessions');
+    const sittingsCol = db.collection('concurrencySittings');
     const notificationsCol = db.collection('concurrencyNotifications');
     const settingsCol = db.collection('userSettings');
 
     const token = extractToken(request);
     const isAuthorized = await verifySession(token);
 
-    // ── 1. GET - Fetch state, workstreams, sessions, notifications, settings ──────
+    // ── 1. GET - Fetch state, workstreams, sessions, sittings, notifications, settings ──
     if (method === 'GET') {
       const configDoc = await settingsCol.findOne({ key: 'concurrencyConfig' });
       const privacyDoc = await settingsCol.findOne({ key: 'concurrencyBoardPrivate' });
@@ -33,7 +34,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       const config = configDoc ? { ...defaultConfig, ...configDoc.value } : defaultConfig;
 
       // If user requesting specific workstream
-      if (pathSegments.length === 1 && pathSegments[0] !== 'session' && pathSegments[0] !== 'notifications' && pathSegments[0] !== 'telemetry') {
+      if (pathSegments.length === 1 && !['session', 'sittings', 'notifications', 'telemetry', 'config', 'privacy', 'reorder'].includes(pathSegments[0])) {
         const id = pathSegments[0];
         const ws = await workstreamsCol.findOne({ id });
         if (!ws) {
@@ -57,7 +58,19 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         return rest;
       });
 
-      // Fetch active session if any
+      // Fetch sittings (Current Sitting management)
+      let sittings: any[] = [];
+      let activeSitting = null;
+      if (isAuthorized) {
+        const rawSittings = await sittingsCol.find({}).sort({ createdAt: -1 }).toArray();
+        sittings = rawSittings.map(s => {
+          const { _id, ...restS } = s;
+          return restS;
+        });
+        activeSitting = sittings.find(s => s.active) || null;
+      }
+
+      // Fetch active telemetry session if any
       let activeSession = null;
       if (isAuthorized) {
         const sessionDoc = await sessionsCol.findOne({ status: 'ACTIVE' });
@@ -92,6 +105,8 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         headers: { 'Content-Type': 'application/json' },
         jsonBody: {
           workstreams: cleanedWorkstreams,
+          sittings,
+          activeSitting,
           config,
           activeSession,
           notifications,
@@ -141,15 +156,74 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       return { status: 200, jsonBody: { success: true, config: newConfig } };
     }
 
-    // ── 4. POST /api/concurrency/session — Start / End / Switch Session ─────
+    // ── 4. SITTINGS ENDPOINTS (/api/concurrency/sittings) ───────────────────
+    if (pathSegments[0] === 'sittings') {
+      let body: any;
+      try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
+
+      const action = body.action || (method === 'POST' ? 'create' : 'update');
+
+      if (action === 'create') {
+        if (!body.title || !body.title.trim()) {
+          return { status: 400, jsonBody: { error: 'Sitting title is required.' } };
+        }
+
+        if (body.active) {
+          await sittingsCol.updateMany({}, { $set: { active: false } });
+        }
+
+        const newSitting = {
+          id: crypto.randomUUID(),
+          title: body.title.trim(),
+          workstreamIds: Array.isArray(body.workstreamIds) ? body.workstreamIds : [],
+          active: body.active !== undefined ? !!body.active : true,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        await sittingsCol.insertOne(newSitting);
+        const { _id, ...rest } = newSitting;
+        return { status: 201, jsonBody: rest };
+      }
+
+      if (action === 'activate') {
+        const sittingId = body.id;
+        await sittingsCol.updateMany({}, { $set: { active: false } });
+        if (sittingId) {
+          await sittingsCol.updateOne({ id: sittingId }, { $set: { active: true, updatedAt: new Date().toISOString() } });
+        }
+        return { status: 200, jsonBody: { success: true, activeSittingId: sittingId || null } };
+      }
+
+      if (action === 'update' && body.id) {
+        const updateFields: any = { updatedAt: new Date().toISOString() };
+        if (body.title) updateFields.title = body.title.trim();
+        if (body.workstreamIds) updateFields.workstreamIds = body.workstreamIds;
+        if (body.active !== undefined) {
+          if (body.active) await sittingsCol.updateMany({}, { $set: { active: false } });
+          updateFields.active = !!body.active;
+        }
+
+        await sittingsCol.updateOne({ id: body.id }, { $set: updateFields });
+        const updated = await sittingsCol.findOne({ id: body.id });
+        const { _id, ...rest } = updated!;
+        return { status: 200, jsonBody: rest };
+      }
+
+      if (action === 'delete' && body.id) {
+        await sittingsCol.deleteOne({ id: body.id });
+        return { status: 200, jsonBody: { success: true, id: body.id } };
+      }
+    }
+
+    // ── 5. POST /api/concurrency/session — Telemetry Session ─────────────────
     if (pathSegments[0] === 'session') {
       let body: any;
       try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
       
-      const action = body.action; // 'start' | 'end' | 'switch'
+      const action = body.action;
 
       if (action === 'start') {
-        // End any active sessions first
         await sessionsCol.updateMany(
           { status: 'ACTIVE' },
           { $set: { status: 'COMPLETED', endTime: new Date().toISOString() } }
@@ -181,7 +255,6 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         const endTime = new Date().toISOString();
         const durationMinutes = Math.max(1, Math.round((new Date(endTime).getTime() - new Date(activeSession.startTime).getTime()) / 60000));
         
-        // Calculate health score: high switches per min lowers health score
         const switchesPerMin = activeSession.totalContextSwitches / durationMinutes;
         let attentionHealthScore = 100;
         if (switchesPerMin > 0.5) attentionHealthScore = Math.max(30, 100 - Math.round(switchesPerMin * 30));
@@ -224,25 +297,53 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
           );
         }
 
-        // Update active workstream timestamp & state
+        const now = new Date().toISOString();
+
         if (toWorkstreamId) {
+          const wsTo = await workstreamsCol.findOne({ id: toWorkstreamId });
+          const newTimeLog = {
+            id: crypto.randomUUID(),
+            startTime: now,
+            endTime: null,
+            durationSeconds: 0,
+            taskName: wsTo?.currentTask || 'Focus Task'
+          };
           await workstreamsCol.updateOne(
             { id: toWorkstreamId },
-            { $set: { state: 'ACTIVE', lastActiveTime: new Date().toISOString() } }
+            {
+              $set: { state: 'ACTIVE', lastActiveTime: now },
+              $push: { timeLogs: newTimeLog as any }
+            }
           );
         }
+
         if (fromWorkstreamId && fromWorkstreamId !== toWorkstreamId) {
-          await workstreamsCol.updateOne(
-            { id: fromWorkstreamId },
-            { $set: { state: 'PAUSED' } }
-          );
+          const wsFrom = await workstreamsCol.findOne({ id: fromWorkstreamId });
+          if (wsFrom && wsFrom.timeLogs && wsFrom.timeLogs.length > 0) {
+            const updatedLogs = wsFrom.timeLogs.map((log: any) => {
+              if (!log.endTime) {
+                const duration = Math.max(0, Math.round((new Date(now).getTime() - new Date(log.startTime).getTime()) / 1000));
+                return { ...log, endTime: now, durationSeconds: duration };
+              }
+              return log;
+            });
+            await workstreamsCol.updateOne(
+              { id: fromWorkstreamId },
+              { $set: { state: 'PAUSED', timeLogs: updatedLogs } }
+            );
+          } else {
+            await workstreamsCol.updateOne(
+              { id: fromWorkstreamId },
+              { $set: { state: 'PAUSED' } }
+            );
+          }
         }
 
         return { status: 200, jsonBody: { success: true, switchEvent } };
       }
     }
 
-    // ── 5. POST /api/concurrency/notifications — Push or Mark Read ───────────
+    // ── 6. POST /api/concurrency/notifications ──────────────────────────────
     if (pathSegments[0] === 'notifications') {
       let body: any;
       try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
@@ -256,7 +357,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         id: crypto.randomUUID(),
         workstreamId: body.workstreamId,
         workstreamTitle: body.workstreamTitle || 'Workstream',
-        severity: body.severity || 'MEDIUM', // 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+        severity: body.severity || 'MEDIUM',
         message: body.message,
         timestamp: new Date().toISOString(),
         read: false
@@ -266,7 +367,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       return { status: 201, jsonBody: notif };
     }
 
-    // ── 6. POST /api/concurrency/reorder — Bulk Reorder Workstreams ─────────
+    // ── 7. POST /api/concurrency/reorder — Bulk Reorder ─────────────────────
     if (pathSegments[0] === 'reorder') {
       let body: any;
       try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
@@ -283,7 +384,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       return { status: 200, jsonBody: { success: true } };
     }
 
-    // ── 7. POST /api/concurrency/workstreams — Create Workstream ────────────
+    // ── 8. POST /api/concurrency/workstreams — Create Workstream ────────────
     if (method === 'POST' && pathSegments.length === 0) {
       let body: any;
       try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
@@ -292,14 +393,13 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         return { status: 400, jsonBody: { error: 'Title is required.' } };
       }
 
-      // Check max active workstream constraint if new workstream is ACTIVE
       const activeCount = await workstreamsCol.countDocuments({ state: 'ACTIVE' });
       const configDoc = await settingsCol.findOne({ key: 'concurrencyConfig' });
       const maxActive = configDoc?.value?.maxActiveWorkstreams || 3;
 
       let initialState = body.state || 'PAUSED';
       if (initialState === 'ACTIVE' && activeCount >= maxActive) {
-        initialState = 'PAUSED'; // Fallback to PAUSED if active limit reached
+        initialState = 'PAUSED';
       }
 
       const now = new Date().toISOString();
@@ -308,8 +408,8 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         title: body.title.trim(),
         description: (body.description || '').trim(),
         category: (body.category || 'General').trim(),
-        color: body.color || 'blue',
-        state: initialState, // 'ACTIVE' | 'PAUSED' | 'WAITING' | 'SUSPENDED'
+        color: body.color || 'indigo',
+        state: initialState,
         isPinned: !!body.isPinned,
         isPrivate: body.isPrivate !== undefined ? !!body.isPrivate : true,
         order: body.order || 0,
@@ -322,10 +422,12 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         whereILeftOff: (body.whereILeftOff || '').trim(),
         filesOrLinks: Array.isArray(body.filesOrLinks) ? body.filesOrLinks : [],
 
-        // Sub-lists
+        // Sub-lists & Granular Time Logs
         microTasks: Array.isArray(body.microTasks) ? body.microTasks : [],
         timers: Array.isArray(body.timers) ? body.timers : [],
         parkingLot: Array.isArray(body.parkingLot) ? body.parkingLot : [],
+        timeLogs: [],
+        backgroundAlarms: [],
 
         createdAt: now,
         updatedAt: now
@@ -336,7 +438,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       return { status: 201, jsonBody: rest };
     }
 
-    // ── 8. PUT /api/concurrency/workstreams/:id — Update Workstream ──────────
+    // ── 9. PUT /api/concurrency/workstreams/:id — Update Workstream ──────────
     if (method === 'PUT' && pathSegments.length === 1) {
       const workstreamId = pathSegments[0];
       let body: any;
@@ -347,7 +449,6 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         return { status: 404, jsonBody: { error: 'Workstream not found.' } };
       }
 
-      // Check max active constraint if setting to ACTIVE
       if (body.state === 'ACTIVE' && existing.state !== 'ACTIVE') {
         const activeCount = await workstreamsCol.countDocuments({ state: 'ACTIVE', id: { $ne: workstreamId } });
         const configDoc = await settingsCol.findOne({ key: 'concurrencyConfig' });
@@ -356,7 +457,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
           return {
             status: 400,
             jsonBody: {
-              error: `Cannot activate workstream. Active workstream limit (${maxActive}) reached. Pause or suspend another workstream first.`
+              error: `Cannot activate workstream. Active limit (${maxActive}) reached. Pause or suspend another workstream first.`
             }
           };
         }
@@ -383,6 +484,8 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       if (body.microTasks !== undefined) updateFields.microTasks = body.microTasks;
       if (body.timers !== undefined) updateFields.timers = body.timers;
       if (body.parkingLot !== undefined) updateFields.parkingLot = body.parkingLot;
+      if (body.timeLogs !== undefined) updateFields.timeLogs = body.timeLogs;
+      if (body.backgroundAlarms !== undefined) updateFields.backgroundAlarms = body.backgroundAlarms;
 
       if (body.state === 'ACTIVE') {
         updateFields.lastActiveTime = new Date().toISOString();
@@ -394,7 +497,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       return { status: 200, jsonBody: rest };
     }
 
-    // ── 9. DELETE /api/concurrency/workstreams/:id — Delete Workstream ───────
+    // ── 10. DELETE /api/concurrency/workstreams/:id — Delete Workstream ──────
     if (method === 'DELETE' && pathSegments.length === 1) {
       const workstreamId = pathSegments[0];
       const result = await workstreamsCol.deleteOne({ id: workstreamId });

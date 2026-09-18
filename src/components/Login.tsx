@@ -24,25 +24,24 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [passwordUnlocked, setPasswordUnlocked] = useState(false);
 
-  // 10-tap detector state
-  const [tapCount, setTapCount] = useState(0);
+  // 10-tap detector state (No visible counter displayed to user)
+  const tapCountRef = useRef(0);
   const tapResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleHeaderTap = () => {
-    setTapCount(prev => {
-      const nextCount = prev + 1;
-      if (nextCount >= 10) {
-        setPasswordUnlocked(true);
-        setMode('password');
-        setError('');
-        return 0;
-      }
-      return nextCount;
-    });
+    tapCountRef.current += 1;
+    if (tapCountRef.current >= 10) {
+      setPasswordUnlocked(true);
+      setMode('password');
+      setError('');
+      tapCountRef.current = 0;
+      if (tapResetTimer.current) clearTimeout(tapResetTimer.current);
+      return;
+    }
 
     if (tapResetTimer.current) clearTimeout(tapResetTimer.current);
     tapResetTimer.current = setTimeout(() => {
-      setTapCount(0);
+      tapCountRef.current = 0;
     }, 4000);
   };
 
@@ -169,35 +168,29 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="max-w-sm mx-auto bg-white border border-slate-200 rounded-3xl p-8 shadow-sm space-y-6 text-slate-800 my-12 relative overflow-hidden">
+    <div className="max-w-sm mx-auto bg-white border border-slate-200 rounded-3xl p-8 shadow-sm space-y-6 text-slate-800 my-12 relative overflow-hidden select-none">
       
-      {/* 10-Tap Interactive Trigger Header */}
+      {/* 10-Tap Trigger Header (select-none to prevent text selection on fast taps) */}
       <div 
         onClick={handleHeaderTap}
-        className="text-center space-y-1.5 cursor-pointer select-none transition-transform active:scale-95 group"
-        title="Tap 10 times to unlock secret mode"
+        className="text-center space-y-1.5 cursor-pointer select-none transition-transform active:scale-95 group user-select-none"
       >
         <div className="inline-flex items-center justify-center w-12 h-12 bg-blue-50 rounded-2xl mb-2 group-hover:bg-blue-100 transition-colors relative">
           <Lock className="w-6 h-6 text-blue-600" />
-          {tapCount > 0 && tapCount < 10 && (
-            <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center shadow">
-              {tapCount}
-            </span>
-          )}
         </div>
-        <h2 className="text-2xl font-extrabold tracking-tight text-slate-900">
+        <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 select-none">
           {mode === 'password'
             ? 'Master Password Login'
             : mode === 'totp'
             ? 'Authenticator Login'
             : 'Email Verification'}
         </h2>
-        <p className="text-xs text-slate-500 leading-relaxed">
+        <p className="text-xs text-slate-500 leading-relaxed select-none">
           {mode === 'password'
             ? 'Enter your master environment password to gain instant access.'
             : mode === 'totp'
             ? 'Enter the 6-digit code from your Authenticator app.'
-            : 'Enter the 6-digit verification code sent to your registered email.'}
+            : 'Click below to receive a 6-digit verification code.'}
         </p>
       </div>
 
@@ -327,7 +320,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         </form>
       )}
 
-      {/* ── Email OTP Mode ── */}
+      {/* ── Email OTP Mode (No email address shown, only Send OTP option) ── */}
       {mode === 'email-otp' && (
         <div className="space-y-4">
           {!otpSent ? (
@@ -335,7 +328,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               <div className="flex flex-col items-center gap-3 py-2">
                 <Mail className="w-8 h-8 text-blue-500" />
                 <span className="text-xs text-slate-600 text-center">
-                  Click below to receive a 6-digit login code via email.
+                  Click below to send a 6-digit login code.
                 </span>
               </div>
               <button
