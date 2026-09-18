@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   FileCode, Plus, Search, Lock, Unlock, Share2, Copy, Trash2, Edit3, X, Check,
-  Clock, Flame, HardDrive, Sparkles, Maximize2
+  Clock, Flame, HardDrive, Sparkles, Maximize2, Zap, Clipboard
 } from 'lucide-react';
 
 export interface PasteItem {
@@ -99,6 +99,69 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
       }
     }
   }, [initialPasteId, pastes]);
+
+  // Instant Clipboard Paste Handler (Ctrl + V)
+  const handleInstantPaste = async (text: string) => {
+    if (!text || !text.trim()) return;
+
+    const trimmed = text.trim();
+    // Use first line truncated as title, or fallback to 'Instant Paste'
+    const firstLine = trimmed.split('\n')[0].replace(/[\r\n]/g, '').trim();
+    const title = firstLine.length > 40 ? `${firstLine.substring(0, 40)}...` : (firstLine || 'Instant Paste');
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authToken) headers['X-Session-Token'] = authToken;
+
+    const payload = {
+      title,
+      content: trimmed,
+      language: 'plaintext',
+      category: 'General',
+      type: 'ephemeral',
+      expiryOption: '24h', // Default 24h retention as requested
+      isPrivate: false,
+      isPinned: false
+    };
+
+    try {
+      const res = await fetch('/api/pastebin', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setPastes(prev => [created, ...prev]);
+        setActiveSubTab('ephemeral');
+        triggerToast('Clipboard content pasted instantly! Expiration: 24 Hours', 'success');
+      }
+    } catch (err) {
+      triggerToast('Failed to save instant paste', 'error');
+    }
+  };
+
+  // Listen for global Ctrl + V paste events anywhere on page
+  useEffect(() => {
+    const handleGlobalPaste = (e: ClipboardEvent) => {
+      // Ignore if user is currently typing in an input or textarea
+      const target = e.target as HTMLElement;
+      if (
+        target && 
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+
+      const pastedText = e.clipboardData?.getData('text');
+      if (pastedText && pastedText.trim()) {
+        e.preventDefault();
+        handleInstantPaste(pastedText);
+      }
+    };
+
+    window.addEventListener('paste', handleGlobalPaste);
+    return () => window.removeEventListener('paste', handleGlobalPaste);
+  }, [authToken]);
 
   const fetchPastes = async () => {
     setLoading(true);
@@ -362,6 +425,40 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
               <span>New Paste</span>
             </button>
           </div>
+        </div>
+
+        {/* Instant Paste Pro-Tip Banner */}
+        <div className="bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 border border-amber-200/80 rounded-3xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-amber-500/20 text-amber-700 rounded-2xl shrink-0">
+              <Zap className="w-5 h-5 text-amber-600" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                Instant Clipboard Paste (<kbd className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-xs font-mono shadow-xs">Ctrl</kbd> + <kbd className="px-2 py-0.5 bg-white border border-slate-300 rounded-md text-xs font-mono shadow-xs">V</kbd>)
+              </div>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Press <span className="font-semibold text-slate-800">Ctrl + V</span> anywhere on this page to save instantly. Default retention: <span className="font-semibold text-amber-700">24 Hours</span> (no form required).
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                if (text && text.trim()) {
+                  handleInstantPaste(text);
+                } else {
+                  triggerToast('Clipboard is empty', 'error');
+                }
+              } catch {
+                triggerToast('Please press Ctrl + V on your keyboard', 'error');
+              }
+            }}
+            className="px-4 py-2 bg-white hover:bg-slate-50 border border-slate-200 text-slate-800 text-xs font-bold rounded-2xl shadow-xs flex items-center gap-2 shrink-0 transition-all active:scale-95"
+          >
+            <Clipboard className="w-4 h-4 text-indigo-600" /> Paste From Clipboard
+          </button>
         </div>
 
         {/* SUBTABS: EPHEMERAL vs PERSISTENT */}
