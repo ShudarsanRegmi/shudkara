@@ -33,7 +33,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       };
       const config = configDoc ? { ...defaultConfig, ...configDoc.value } : defaultConfig;
 
-      // If user requesting specific workstream
+      // Single workstream fetch
       if (pathSegments.length === 1 && !['session', 'sittings', 'notifications', 'telemetry', 'config', 'privacy', 'reorder'].includes(pathSegments[0])) {
         const id = pathSegments[0];
         const ws = await workstreamsCol.findOne({ id });
@@ -58,7 +58,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         return rest;
       });
 
-      // Fetch sittings (Current Sitting management)
+      // Fetch sittings
       let sittings: any[] = [];
       let activeSitting = null;
       if (isAuthorized) {
@@ -204,7 +204,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
           updateFields.active = !!body.active;
         }
 
-        await sittingsCol.updateOne({ id: body.id }, { $set: updateFields });
+        await sittingsCol.updateOne({ id: body.id }, { $set: { ...updateFields } });
         const updated = await sittingsCol.findOne({ id: body.id });
         const { _id, ...rest } = updated!;
         return { status: 200, jsonBody: rest };
@@ -279,12 +279,13 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       if (action === 'switch') {
         const { fromWorkstreamId, toWorkstreamId, reason } = body;
         const activeSession = await sessionsCol.findOne({ status: 'ACTIVE' });
+        const now = new Date().toISOString();
 
         const switchEvent = {
           fromId: fromWorkstreamId || null,
           toId: toWorkstreamId,
-          timestamp: new Date().toISOString(),
-          reason: reason || 'Manual Switch'
+          timestamp: now,
+          reason: (reason || '').trim() || 'Context Switch'
         };
 
         if (activeSession) {
@@ -297,30 +298,32 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
           );
         }
 
-        const now = new Date().toISOString();
-
+        // Handle Target Workstream Activation (Foreground Focus)
         if (toWorkstreamId) {
           const wsTo = await workstreamsCol.findOne({ id: toWorkstreamId });
-          const newTimeLog = {
+          const newLog = {
             id: crypto.randomUUID(),
+            type: 'FG', // Foreground Focus
             startTime: now,
             endTime: null,
             durationSeconds: 0,
-            taskName: wsTo?.currentTask || 'Focus Task'
+            taskName: wsTo?.currentTask || 'Focus Task',
+            switchReason: (reason || '').trim() || 'Context Switch'
           };
           await workstreamsCol.updateOne(
             { id: toWorkstreamId },
             {
-              $set: { state: 'ACTIVE', lastActiveTime: now },
-              $push: { timeLogs: newTimeLog as any }
+              $set: { state: 'ACTIVE', isBackground: false, lastActiveTime: now },
+              $push: { timeLogs: newLog as any, lineageLogs: newLog as any }
             }
           );
         }
 
+        // Handle Previous Workstream Deactivation
         if (fromWorkstreamId && fromWorkstreamId !== toWorkstreamId) {
           const wsFrom = await workstreamsCol.findOne({ id: fromWorkstreamId });
-          if (wsFrom && wsFrom.timeLogs && wsFrom.timeLogs.length > 0) {
-            const updatedLogs = wsFrom.timeLogs.map((log: any) => {
+          if (wsFrom && wsFrom.lineageLogs && wsFrom.lineageLogs.length > 0) {
+            const updatedLineage = wsFrom.lineageLogs.map((log: any) => {
               if (!log.endTime) {
                 const duration = Math.max(0, Math.round((new Date(now).getTime() - new Date(log.startTime).getTime()) / 1000));
                 return { ...log, endTime: now, durationSeconds: duration };
@@ -329,12 +332,12 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
             });
             await workstreamsCol.updateOne(
               { id: fromWorkstreamId },
-              { $set: { state: 'PAUSED', timeLogs: updatedLogs } }
+              { $set: { state: 'PAUSED', isBackground: false, lineageLogs: updatedLineage } }
             );
           } else {
             await workstreamsCol.updateOne(
               { id: fromWorkstreamId },
-              { $set: { state: 'PAUSED' } }
+              { $set: { state: 'PAUSED', isBackground: false } }
             );
           }
         }
@@ -410,11 +413,14 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         category: (body.category || 'General').trim(),
         color: body.color || 'indigo',
         state: initialState,
+        isBackground: false,
         isPinned: !!body.isPinned,
         isPrivate: body.isPrivate !== undefined ? !!body.isPrivate : true,
         order: body.order || 0,
         lastActiveTime: now,
         totalActiveSeconds: 0,
+        fgActiveSeconds: 0,
+        bgActiveSeconds: 0,
 
         // Context preservation
         currentTask: (body.currentTask || '').trim(),
@@ -422,11 +428,12 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         whereILeftOff: (body.whereILeftOff || '').trim(),
         filesOrLinks: Array.isArray(body.filesOrLinks) ? body.filesOrLinks : [],
 
-        // Sub-lists & Granular Time Logs
+        // Sub-lists & Granular Lineage Logs
         microTasks: Array.isArray(body.microTasks) ? body.microTasks : [],
         timers: Array.isArray(body.timers) ? body.timers : [],
         parkingLot: Array.isArray(body.parkingLot) ? body.parkingLot : [],
         timeLogs: [],
+        lineageLogs: [],
         backgroundAlarms: [],
 
         createdAt: now,
@@ -469,10 +476,13 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       if (body.category !== undefined) updateFields.category = body.category.trim();
       if (body.color !== undefined) updateFields.color = body.color;
       if (body.state !== undefined) updateFields.state = body.state;
+      if (body.isBackground !== undefined) updateFields.isBackground = !!body.isBackground;
       if (body.isPinned !== undefined) updateFields.isPinned = !!body.isPinned;
       if (body.isPrivate !== undefined) updateFields.isPrivate = !!body.isPrivate;
       if (body.order !== undefined) updateFields.order = body.order;
       if (body.totalActiveSeconds !== undefined) updateFields.totalActiveSeconds = body.totalActiveSeconds;
+      if (body.fgActiveSeconds !== undefined) updateFields.fgActiveSeconds = body.fgActiveSeconds;
+      if (body.bgActiveSeconds !== undefined) updateFields.bgActiveSeconds = body.bgActiveSeconds;
 
       // Context preservation fields
       if (body.currentTask !== undefined) updateFields.currentTask = body.currentTask.trim();
@@ -485,6 +495,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       if (body.timers !== undefined) updateFields.timers = body.timers;
       if (body.parkingLot !== undefined) updateFields.parkingLot = body.parkingLot;
       if (body.timeLogs !== undefined) updateFields.timeLogs = body.timeLogs;
+      if (body.lineageLogs !== undefined) updateFields.lineageLogs = body.lineageLogs;
       if (body.backgroundAlarms !== undefined) updateFields.backgroundAlarms = body.backgroundAlarms;
 
       if (body.state === 'ACTIVE') {

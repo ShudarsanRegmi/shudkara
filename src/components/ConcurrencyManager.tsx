@@ -5,10 +5,12 @@ import {
   Play, Pause, Shield, ShieldOff, Activity, ArrowRight,
   CheckCircle2, Circle, ExternalLink, HelpCircle,
   Brain, FileText, CornerDownRight, Link as LinkIcon,
-  BellRing, Layers, BarChart2
+  BellRing, Layers, Maximize2, Minimize2,
+  Radio, History, CheckSquare
 } from 'lucide-react';
 
 export type WorkstreamState = 'ACTIVE' | 'PAUSED' | 'WAITING' | 'SUSPENDED';
+export type AlarmSoundType = 'chime' | 'bell' | 'pulse' | 'gong';
 
 export interface MicroTask {
   id: string;
@@ -28,12 +30,14 @@ export interface ContextLink {
   url: string;
 }
 
-export interface TimeLog {
+export interface LineageLog {
   id: string;
+  type: 'FG' | 'BG';
   startTime: string;
   endTime?: string | null;
   durationSeconds: number;
   taskName?: string;
+  switchReason?: string;
 }
 
 export interface BackgroundAlarm {
@@ -41,6 +45,7 @@ export interface BackgroundAlarm {
   message: string;
   triggerTime: number; // Unix timestamp ms
   durationMinutes: number;
+  soundType: AlarmSoundType;
   active: boolean;
   triggered?: boolean;
 }
@@ -50,13 +55,16 @@ export interface Workstream {
   title: string;
   description?: string;
   category?: string;
-  color?: string; // indigo, emerald, rose, amber, purple, cyan, slate
+  color?: string;
   state: WorkstreamState;
+  isBackground?: boolean;
   isPinned?: boolean;
   isPrivate?: boolean;
   order?: number;
   lastActiveTime?: string;
   totalActiveSeconds?: number;
+  fgActiveSeconds?: number;
+  bgActiveSeconds?: number;
 
   // Context preservation
   currentTask?: string;
@@ -64,10 +72,10 @@ export interface Workstream {
   whereILeftOff?: string;
   filesOrLinks?: ContextLink[];
 
-  // Lists & Granular Time Logs
+  // Lists & Granular Lineage Logs
   microTasks?: MicroTask[];
   parkingLot?: ParkedThought[];
-  timeLogs?: TimeLog[];
+  lineageLogs?: LineageLog[];
   backgroundAlarms?: BackgroundAlarm[];
 
   createdAt?: string;
@@ -130,16 +138,22 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
 
-  // Modals & Panels
+  // Modals & Expanded Views
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
   const [showEditModal, setShowEditModal] = useState<boolean>(false);
   const [showSittingModal, setShowSittingModal] = useState<boolean>(false);
-  const [showTimeLogsModal, setShowTimeLogsModal] = useState<Workstream | null>(null);
+  const [showLineageModal, setShowLineageModal] = useState<Workstream | null>(null);
   const [showSessionModal, setShowSessionModal] = useState<boolean>(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState<boolean>(false);
+  const [maximizedWorkstream, setMaximizedWorkstream] = useState<Workstream | null>(null);
+
   const [editingWorkstream, setEditingWorkstream] = useState<Workstream | null>(null);
   const [resumingWorkstream, setResumingWorkstream] = useState<{ workstream: Workstream; previous?: Workstream } | null>(null);
   const [triggeredAlarm, setTriggeredAlarm] = useState<{ workstreamTitle: string; message: string } | null>(null);
+
+  // Inline "Where I Left Off" Notes Editing State
+  const [editingNotesWsId, setEditingNotesWsId] = useState<string | null>(null);
+  const [inlineNotesText, setInlineNotesText] = useState<string>('');
 
   // Sitting Form State
   const [sittingTitle, setSittingTitle] = useState('');
@@ -158,6 +172,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   // Background Alarm Form State per Workstream
   const [alarmMinutes, setAlarmMinutes] = useState<Record<string, number>>({});
   const [alarmMessage, setAlarmMessage] = useState<Record<string, string>>({});
+  const [alarmSound, setAlarmSound] = useState<Record<string, AlarmSoundType>>({});
   const [showAddAlarm, setShowAddAlarm] = useState<Record<string, boolean>>({});
 
   // Inline Quick Inputs
@@ -176,30 +191,69 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Web Audio API Chime Synthesizer
-  const playChimeSound = () => {
+  // Web Audio API Sound Synthesizer with 4 distinct tones
+  const playAlarmSound = (soundType: AlarmSoundType = 'chime') => {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) return;
       const ctx = new AudioContextClass();
-      
       const now = ctx.currentTime;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
 
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(587.33, now); // D5
-      osc.frequency.setValueAtTime(880.00, now + 0.15); // A5
-      osc.frequency.setValueAtTime(1174.66, now + 0.35); // D6
-
-      gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + 0.8);
+      if (soundType === 'chime') {
+        // Dual-tone chime: D5 -> A5 -> D6
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, now);
+        osc.frequency.setValueAtTime(880.00, now + 0.15);
+        osc.frequency.setValueAtTime(1174.66, now + 0.35);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.9);
+      } else if (soundType === 'bell') {
+        // High crisp bell: E6
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(1318.51, now);
+        gain.gain.setValueAtTime(0.4, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 1.2);
+      } else if (soundType === 'pulse') {
+        // Rhythmic synth pulse
+        [0, 0.2, 0.4].forEach(offset => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'square';
+          osc.frequency.setValueAtTime(659.25, now + offset);
+          gain.gain.setValueAtTime(0.2, now + offset);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.15);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now + offset);
+          osc.stop(now + offset + 0.15);
+        });
+      } else if (soundType === 'gong') {
+        // Low resonant gong: C3 & G3
+        [130.81, 196.00].forEach(freq => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, now);
+          gain.gain.setValueAtTime(0.5, now);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + 2.0);
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start(now);
+          osc.stop(now + 2.0);
+        });
+      }
     } catch {
       // Ignore audio autoplay restrictions
     }
@@ -233,40 +287,53 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     fetchState();
   }, [fetchState]);
 
-  // ── Timer Interval Tick (Stopwatch, Active Duration & Background Alarms) ──
+  // ── Foreground vs Background Timers & Exact Alarm Trigger Tick ────────────
   useEffect(() => {
     const interval = setInterval(() => {
       const nowMs = Date.now();
 
       setWorkstreams(prev =>
         prev.map(ws => {
-          let updatedActiveSeconds = ws.totalActiveSeconds || 0;
-          if (ws.state === 'ACTIVE') {
-            updatedActiveSeconds += 1;
+          if (ws.state !== 'ACTIVE') {
+            return ws;
           }
 
-          // Check Background Alarms
-          let alarmTriggered = false;
+          let fgSec = ws.fgActiveSeconds || 0;
+          let bgSec = ws.bgActiveSeconds || 0;
+          let totalSec = ws.totalActiveSeconds || 0;
+
+          if (ws.isBackground) {
+            bgSec += 1;
+          } else {
+            fgSec += 1;
+          }
+          totalSec += 1;
+
+          // Check Background Alarm Callbacks (Triggers EXACTLY ONCE per alarm)
+          let newAlarmTriggered = false;
+          let alarmMsg = '';
+          let soundToPlay: AlarmSoundType = 'chime';
+
           const updatedAlarms = (ws.backgroundAlarms || []).map(alarm => {
             if (alarm.active && !alarm.triggered && nowMs >= alarm.triggerTime) {
-              alarmTriggered = true;
-              setTriggeredAlarm({
-                workstreamTitle: ws.title,
-                message: alarm.message || `Background alarm call triggered for ${ws.title}`
-              });
-              playChimeSound();
+              newAlarmTriggered = true;
+              alarmMsg = alarm.message || `Callback alarm for "${ws.title}"`;
+              soundToPlay = alarm.soundType || 'chime';
               return { ...alarm, active: false, triggered: true };
             }
             return alarm;
           });
 
-          if (alarmTriggered) {
-            showToast(`🔔 Alarm Callback Triggered for "${ws.title}"!`);
+          if (newAlarmTriggered) {
+            setTriggeredAlarm({ workstreamTitle: ws.title, message: alarmMsg });
+            playAlarmSound(soundToPlay);
           }
 
           return {
             ...ws,
-            totalActiveSeconds: updatedActiveSeconds,
+            totalActiveSeconds: totalSec,
+            fgActiveSeconds: fgSec,
+            bgActiveSeconds: bgSec,
             backgroundAlarms: updatedAlarms
           };
         })
@@ -332,6 +399,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       }
       const updated = await res.json();
       setWorkstreams(prev => prev.map(w => (w.id === id ? { ...w, ...updated } : w)));
+      if (maximizedWorkstream?.id === id) setMaximizedWorkstream(updated);
       return true;
     } catch (err) {
       console.error('Error updating workstream:', err);
@@ -375,7 +443,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       const created = await res.json();
       setWorkstreams(prev => [created, ...prev]);
 
-      // If a sitting is active, automatically attach new workstream to sitting
       if (activeSitting) {
         const updatedIds = [...activeSitting.workstreamIds, created.id];
         await handleSaveSittingUpdate(activeSitting.id, activeSitting.title, updatedIds, true);
@@ -403,12 +470,58 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
 
       if (res.ok) {
         setWorkstreams(prev => prev.filter(w => w.id !== id));
+        if (maximizedWorkstream?.id === id) setMaximizedWorkstream(null);
         showToast(`Deleted workstream "${title}"`);
       } else {
         showToast('Failed to delete workstream.');
       }
     } catch (err) {
       console.error('Error deleting workstream:', err);
+    }
+  };
+
+  // ── Push / Pull Background Toggle ──────────────────────────────────────────
+  const toggleBackgroundMode = async (ws: Workstream) => {
+    if (ws.state !== 'ACTIVE') {
+      showToast('Background mode is only available when task is ACTIVE.');
+      return;
+    }
+
+    const nextBgState = !ws.isBackground;
+    const nowIso = new Date().toISOString();
+
+    const newLog: LineageLog = {
+      id: crypto.randomUUID(),
+      type: nextBgState ? 'BG' : 'FG',
+      startTime: nowIso,
+      endTime: null,
+      durationSeconds: 0,
+      taskName: ws.currentTask || 'Task',
+      switchReason: nextBgState ? 'Pushed to Background' : 'Pulled to Foreground Focus'
+    };
+
+    // Close open lineage log
+    const updatedLineage = (ws.lineageLogs || []).map(log => {
+      if (!log.endTime) {
+        const dur = Math.max(0, Math.round((new Date(nowIso).getTime() - new Date(log.startTime).getTime()) / 1000));
+        return { ...log, endTime: nowIso, durationSeconds: dur };
+      }
+      return log;
+    });
+
+    updatedLineage.push(newLog);
+
+    setWorkstreams(prev => prev.map(w => (w.id === ws.id ? { ...w, isBackground: nextBgState, lineageLogs: updatedLineage } : w)));
+    await saveWorkstreamUpdate(ws.id, { isBackground: nextBgState, lineageLogs: updatedLineage });
+    showToast(nextBgState ? `Pushed "${ws.title}" to Background execution` : `Pulled "${ws.title}" into Foreground Focus`);
+  };
+
+  // ── Inline Edit "Where I Left Off" Notes at Any Time ──────────────────────
+  const handleSaveInlineNotes = async (wsId: string) => {
+    const success = await saveWorkstreamUpdate(wsId, { whereILeftOff: inlineNotesText.trim() });
+    if (success) {
+      setEditingNotesWsId(null);
+      showToast('Updated "Where I Left Off" context notes');
     }
   };
 
@@ -494,7 +607,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
 
   const toggleWorkstreamInCurrentSitting = async (wsId: string) => {
     if (!activeSitting) {
-      // Create new active sitting on the fly
       const newTitle = `Current Sitting (${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (authToken) headers['X-Session-Token'] = authToken;
@@ -522,7 +634,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     showToast(exists ? 'Removed from sitting' : 'Added to current sitting');
   };
 
-  // ── Context Switch Flow ────────────────────────────────────────────────────
+  // ── Context Switch Flow (Responsive & Clickable Form Fix) ──────────────────
   const handleSwitchWorkstream = async (targetWs: Workstream) => {
     const currentActive = workstreams.find(w => w.state === 'ACTIVE' && w.id !== targetWs.id);
 
@@ -535,30 +647,36 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     setResumingWorkstream({ workstream: targetWs, previous: currentActive });
   };
 
-  const confirmSwitchWorkstream = async () => {
+  const confirmSwitchWorkstream = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!resumingWorkstream) return;
     const targetWs = resumingWorkstream.workstream;
     const prevWs = resumingWorkstream.previous;
+    const finalReason = switchReasonInput.trim() || 'Context Switch';
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (authToken) headers['X-Session-Token'] = authToken;
 
-      await fetch('/api/concurrency/session', {
+      const res = await fetch('/api/concurrency/session', {
         method: 'POST',
         headers,
         body: JSON.stringify({
           action: 'switch',
           fromWorkstreamId: prevWs?.id || null,
           toWorkstreamId: targetWs.id,
-          reason: switchReasonInput || 'Context Switch'
+          reason: finalReason
         })
       });
 
-      showToast(`Switched focus to "${targetWs.title}"`);
-      setResumingWorkstream(null);
-      setSwitchReasonInput('');
-      fetchState();
+      if (res.ok) {
+        showToast(`Switched focus to "${targetWs.title}"`);
+        setResumingWorkstream(null);
+        setSwitchReasonInput('');
+        fetchState();
+      } else {
+        showToast('Failed to complete switch.');
+      }
     } catch (err) {
       console.error('Error recording switch:', err);
     }
@@ -570,28 +688,28 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       return;
     }
 
-    // Add time log entry if turning off ACTIVE
     const nowIso = new Date().toISOString();
-    let updatedTimeLogs = ws.timeLogs || [];
-    if (ws.state === 'ACTIVE' && updatedTimeLogs.length > 0) {
-      updatedTimeLogs = updatedTimeLogs.map(log => {
+    let updatedLineage = ws.lineageLogs || [];
+    if (ws.state === 'ACTIVE' && updatedLineage.length > 0) {
+      updatedLineage = updatedLineage.map(log => {
         if (!log.endTime) {
-          const duration = Math.max(0, Math.round((new Date(nowIso).getTime() - new Date(log.startTime).getTime()) / 1000));
-          return { ...log, endTime: nowIso, durationSeconds: duration };
+          const dur = Math.max(0, Math.round((new Date(nowIso).getTime() - new Date(log.startTime).getTime()) / 1000));
+          return { ...log, endTime: nowIso, durationSeconds: dur };
         }
         return log;
       });
     }
 
-    setWorkstreams(prev => prev.map(w => (w.id === ws.id ? { ...w, state: newState, timeLogs: updatedTimeLogs } : w)));
-    await saveWorkstreamUpdate(ws.id, { state: newState, timeLogs: updatedTimeLogs });
+    setWorkstreams(prev => prev.map(w => (w.id === ws.id ? { ...w, state: newState, isBackground: false, lineageLogs: updatedLineage } : w)));
+    await saveWorkstreamUpdate(ws.id, { state: newState, isBackground: false, lineageLogs: updatedLineage });
     showToast(`Workstream "${ws.title}" is now ${newState}`);
   };
 
-  // ── Background Alarm Callbacks ─────────────────────────────────────────────
+  // ── Background Alarm Callbacks (Exact Single Trigger + Custom Sounds) ──────
   const handleAddAlarmCallback = async (wsId: string) => {
     const mins = alarmMinutes[wsId] || 3;
     const msg = (alarmMessage[wsId] || '').trim();
+    const sound = alarmSound[wsId] || 'chime';
 
     const ws = workstreams.find(w => w.id === wsId);
     if (!ws) return;
@@ -599,10 +717,12 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     const triggerTime = Date.now() + mins * 60 * 1000;
     const newAlarm: BackgroundAlarm = {
       id: crypto.randomUUID(),
-      message: msg || `Background timer callback for "${ws.title}"`,
+      message: msg || `Background alarm callback for "${ws.title}"`,
       triggerTime,
       durationMinutes: mins,
-      active: true
+      soundType: sound,
+      active: true,
+      triggered: false
     };
 
     const updatedAlarms = [...(ws.backgroundAlarms || []), newAlarm];
@@ -610,7 +730,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     setShowAddAlarm(prev => ({ ...prev, [wsId]: false }));
     setAlarmMessage(prev => ({ ...prev, [wsId]: '' }));
     await saveWorkstreamUpdate(wsId, { backgroundAlarms: updatedAlarms });
-    showToast(`🔔 Alarm callback set for ${mins} minute(s)`);
+    showToast(`🔔 Alarm callback set for ${mins}m with ${sound.toUpperCase()} tone`);
   };
 
   const handleCancelAlarm = async (wsId: string, alarmId: string) => {
@@ -887,17 +1007,14 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     setFormIsPrivate(true);
   };
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Card Position Hierarchy Sorting (Active Deck Center Hierarchy) ──────────
   const categories = Array.from(new Set(workstreams.map(w => w.category || 'General')));
   const activeWorkstreamsCount = workstreams.filter(w => w.state === 'ACTIVE').length;
 
-  // Filter workstreams based on Current Sitting + Search + Category + State
-  const filteredWorkstreams = workstreams.filter(ws => {
-    // If a sitting is active, enforce sitting inclusion
+  const rawFiltered = workstreams.filter(ws => {
     if (activeSitting && !activeSitting.workstreamIds.includes(ws.id)) {
       return false;
     }
-
     const matchesSearch =
       ws.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (ws.currentTask && ws.currentTask.toLowerCase().includes(searchQuery.toLowerCase())) ||
@@ -906,6 +1023,17 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     const matchesState = stateFilter === 'all' || ws.state === stateFilter;
     return matchesSearch && matchesCat && matchesState;
   });
+
+  // Sort hierarchy: ACTIVE/BG tasks placed in Center Deck (front & center), non-active on sides
+  const primaryCenterDeck = rawFiltered.filter(w => w.state === 'ACTIVE');
+  const sideDeck = rawFiltered.filter(w => w.state !== 'ACTIVE');
+  
+  // Re-order: half sides left, primary center deck in middle, remaining sides right
+  const half = Math.ceil(sideDeck.length / 2);
+  const leftSides = sideDeck.slice(0, half);
+  const rightSides = sideDeck.slice(half);
+
+  const orderedDisplayWorkstreams = [...leftSides, ...primaryCenterDeck, ...rightSides];
 
   const formatSeconds = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -916,10 +1044,10 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 p-4 md:p-6 pb-20 font-sans w-full">
+    <div className="min-h-screen bg-slate-900 text-slate-100 p-2 md:p-4 pb-20 font-sans w-full">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center space-x-3 animate-bounce">
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-2xl shadow-2xl flex items-center space-x-3 animate-bounce">
           <Sparkles className="w-5 h-5 text-indigo-400" />
           <span className="text-sm font-medium">{toastMessage}</span>
         </div>
@@ -933,7 +1061,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               <BellRing className="w-8 h-8 text-indigo-400 animate-pulse" />
             </div>
             <div>
-              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">Background Callback Triggered</span>
+              <span className="text-xs font-bold uppercase tracking-wider text-indigo-400">Background Alarm Call Triggered</span>
               <h3 className="text-xl font-extrabold text-white mt-1">{triggeredAlarm.workstreamTitle}</h3>
               <p className="text-xs text-slate-300 mt-2 bg-slate-900 p-3 rounded-xl border border-slate-700">
                 "{triggeredAlarm.message}"
@@ -950,21 +1078,21 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
       )}
 
       {/* Header & Controls Bar */}
-      <header className="w-full mb-8">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800/80 backdrop-blur-md p-5 rounded-2xl border border-slate-700/80 shadow-lg">
+      <header className="w-full mb-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-800/80 backdrop-blur-md p-5 rounded-3xl border border-slate-700/80 shadow-lg">
           <div className="flex items-center space-x-3">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
               <Workflow className="w-6 h-6 text-white" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
                 <h1 className="text-xl font-bold text-white tracking-tight">Concurrency Manager</h1>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
-                  Parallel Workstreams
+                <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                  Lineage & Sitting Sessions
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Preserve context, manage sitting sessions & switch parallel workstreams without friction.
+                Monitor Foreground (Focus) vs Background work time, track context lineage & preserve state.
               </p>
             </div>
           </div>
@@ -972,7 +1100,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
           {/* Action Bar */}
           <div className="flex flex-wrap items-center gap-3">
             {/* Current Sitting Selector */}
-            <div className="flex items-center bg-slate-900/90 rounded-xl px-2 py-1 border border-slate-700/80">
+            <div className="flex items-center bg-slate-900/90 rounded-2xl px-3 py-1.5 border border-slate-700/80">
               <Layers className="w-4 h-4 text-indigo-400 mr-2" />
               <select
                 value={activeSitting?.id || 'all'}
@@ -993,7 +1121,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                   setSittingSelectedIds(activeSitting ? [...activeSitting.workstreamIds] : []);
                   setShowSittingModal(true);
                 }}
-                className="ml-2 px-2 py-1 bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 rounded-lg text-xs font-bold"
+                className="ml-2 px-2.5 py-1 bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 rounded-xl text-xs font-bold"
                 title="Create or edit Sitting session"
               >
                 + Sitting
@@ -1001,13 +1129,13 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             </div>
 
             {/* Concurrency Level Limit Selector */}
-            <div className="flex items-center bg-slate-900/90 rounded-xl p-1 border border-slate-700/80">
+            <div className="flex items-center bg-slate-900/90 rounded-2xl p-1 border border-slate-700/80">
               <span className="text-xs text-slate-400 px-2 font-medium">Slots:</span>
               {[1, 2, 3, 4].map(num => (
                 <button
                   key={num}
                   onClick={() => handleMaxActiveChange(num)}
-                  className={`w-7 h-7 text-xs font-semibold rounded-lg transition-all ${
+                  className={`w-7 h-7 text-xs font-semibold rounded-xl transition-all ${
                     config.maxActiveWorkstreams === num
                       ? 'bg-indigo-600 text-white shadow-md'
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
@@ -1022,7 +1150,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             {/* Focus Shield Toggle */}
             <button
               onClick={toggleFocusMode}
-              className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all border ${
+              className={`flex items-center space-x-2 px-3.5 py-2 rounded-2xl text-xs font-semibold transition-all border ${
                 config.focusModeEnabled
                   ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-lg shadow-emerald-500/10'
                   : 'bg-slate-900/80 text-slate-300 border-slate-700 hover:bg-slate-800'
@@ -1036,15 +1164,15 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             {activeSession ? (
               <button
                 onClick={handleEndSession}
-                className="flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-all shadow-md"
+                className="flex items-center space-x-2 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-all shadow-md"
               >
                 <Activity className="w-4 h-4 text-rose-400 animate-pulse" />
-                <span>End Sitting Timer ({activeSession.totalContextSwitches} switches)</span>
+                <span>End Sitting ({activeSession.totalContextSwitches} switches)</span>
               </button>
             ) : (
               <button
                 onClick={handleStartSession}
-                className="flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30 transition-all shadow-md"
+                className="flex items-center space-x-2 px-3.5 py-2 rounded-2xl text-xs font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 hover:bg-indigo-500/30 transition-all shadow-md"
               >
                 <Play className="w-4 h-4 text-indigo-400" />
                 <span>Start Sitting Timer</span>
@@ -1054,7 +1182,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             {/* Privacy Toggle */}
             <button
               onClick={toggleBoardPrivacy}
-              className="p-2 rounded-xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
+              className="p-2 rounded-2xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
             >
               {config.isBoardPrivate ? <Lock className="w-4 h-4 text-amber-400" /> : <Unlock className="w-4 h-4 text-emerald-400" />}
             </button>
@@ -1062,7 +1190,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             {/* Shortcuts Help */}
             <button
               onClick={() => setShowShortcutsModal(true)}
-              className="p-2 rounded-xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
+              className="p-2 rounded-2xl bg-slate-900/80 text-slate-300 border border-slate-700 hover:bg-slate-800 text-xs transition-all"
             >
               <HelpCircle className="w-4 h-4 text-slate-400" />
             </button>
@@ -1073,7 +1201,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 resetForm();
                 setShowCreateModal(true);
               }}
-              className="flex items-center space-x-1.5 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all"
+              className="flex items-center space-x-1.5 px-4 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-2xl text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all"
             >
               <Plus className="w-4 h-4" />
               <span>New Workstream</span>
@@ -1082,7 +1210,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
 
         {/* Status Bar */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400 bg-slate-800/40 px-4 py-2.5 rounded-xl border border-slate-700/40">
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400 bg-slate-800/40 px-4 py-2.5 rounded-2xl border border-slate-700/40">
           <div className="flex items-center space-x-4">
             <span className="flex items-center space-x-1.5">
               <span className={`w-2 h-2 rounded-full ${activeWorkstreamsCount > 0 ? 'bg-emerald-400 animate-ping' : 'bg-slate-500'}`} />
@@ -1091,7 +1219,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             {activeSitting && (
               <span className="flex items-center space-x-1.5 text-indigo-300">
                 <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Showing Sitting: <strong className="text-white">{activeSitting.title}</strong> ({filteredWorkstreams.length} tasks)</span>
+                <span>Current Sitting: <strong className="text-white">{activeSitting.title}</strong> ({orderedDisplayWorkstreams.length} tasks)</span>
               </span>
             )}
           </div>
@@ -1102,7 +1230,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
       </header>
 
-      {/* Main Full-Width Horizontal Board */}
+      {/* Main Full-Width Board Container (100% Monitor Width) */}
       <main className="w-full">
         {/* Filters & Search */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mb-6">
@@ -1113,7 +1241,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               placeholder="Search workstreams..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-800/90 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full bg-slate-800/90 border border-slate-700 rounded-2xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
@@ -1121,7 +1249,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             <select
               value={categoryFilter}
               onChange={e => setCategoryFilter(e.target.value)}
-              className="bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="bg-slate-800/90 border border-slate-700 rounded-2xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="all">All Categories</option>
               {categories.map(c => (
@@ -1132,7 +1260,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             <select
               value={stateFilter}
               onChange={e => setStateFilter(e.target.value)}
-              className="bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="bg-slate-800/90 border border-slate-700 rounded-2xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="all">All States</option>
               <option value="ACTIVE">Active</option>
@@ -1144,8 +1272,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
 
         {/* Empty State */}
-        {filteredWorkstreams.length === 0 && !loading && (
-          <div className="text-center py-16 bg-slate-800/40 rounded-2xl border border-dashed border-slate-700 max-w-xl mx-auto">
+        {orderedDisplayWorkstreams.length === 0 && !loading && (
+          <div className="text-center py-16 bg-slate-800/40 rounded-3xl border border-dashed border-slate-700 max-w-xl mx-auto">
             <Workflow className="w-12 h-12 text-slate-600 mx-auto mb-3" />
             <h3 className="text-base font-semibold text-slate-300">
               {activeSitting ? `No workstreams in sitting "${activeSitting.title}"` : 'No workstreams found'}
@@ -1155,16 +1283,16 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             </p>
             <button
               onClick={() => { resetForm(); setShowCreateModal(true); }}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg transition-all"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-2xl shadow-lg transition-all"
             >
               + Create First Workstream
             </button>
           </div>
         )}
 
-        {/* Full-Width Horizontal Kanban Board Track */}
-        <div className="flex flex-row items-stretch gap-6 overflow-x-auto pb-6 pt-2 px-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-slate-900/60 [&::-webkit-scrollbar-thumb]:bg-slate-700/80 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
-          {filteredWorkstreams.map((ws, idx) => {
+        {/* 100% Width Horizontal Kanban Track (Active Decks Center, Side Decks Left/Right) */}
+        <div className="flex flex-row items-stretch justify-center gap-6 overflow-x-auto pb-6 pt-2 px-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-slate-900/60 [&::-webkit-scrollbar-thumb]:bg-slate-700/80 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
+          {orderedDisplayWorkstreams.map((ws, idx) => {
             const stateInfo = STATE_BADGES[ws.state] || STATE_BADGES.PAUSED;
             const isSlotShortcut = idx < 4;
             const isMainFocus = ws.state === 'ACTIVE';
@@ -1179,8 +1307,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 key={ws.id}
                 className={`relative flex flex-col rounded-3xl bg-slate-800/90 border transition-all duration-300 shadow-2xl overflow-hidden shrink-0 ${
                   isMainFocus
-                    ? 'w-[440px] md:w-[480px] border-2 border-indigo-500/90 ring-4 ring-indigo-500/20 shadow-indigo-950/60 scale-[1.01]'
-                    : 'w-[350px] md:w-[380px] border-slate-700/80 hover:border-slate-600 opacity-95 hover:opacity-100'
+                    ? 'w-[440px] md:w-[490px] border-2 border-indigo-500/90 ring-4 ring-indigo-500/20 shadow-indigo-950/60 scale-[1.01] z-10'
+                    : 'w-[340px] md:w-[370px] border-slate-700/80 hover:border-slate-600 opacity-90 hover:opacity-100'
                 }`}
               >
                 {/* Header Banner */}
@@ -1201,8 +1329,16 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     </div>
                   </div>
 
-                  {/* State Badge & Sitting Toggle */}
-                  <div className="flex items-center space-x-2">
+                  {/* Top Actions: Maximize, Sitting, State */}
+                  <div className="flex items-center space-x-1.5">
+                    <button
+                      onClick={() => setMaximizedWorkstream(ws)}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700/60 transition-all"
+                      title="Maximize Card"
+                    >
+                      <Maximize2 className="w-4 h-4 text-indigo-400" />
+                    </button>
+
                     <button
                       onClick={() => toggleWorkstreamInCurrentSitting(ws.id)}
                       className={`p-1.5 rounded-lg text-[10px] font-bold transition-all border ${
@@ -1259,17 +1395,54 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       </p>
                     </div>
 
-                    {ws.whereILeftOff && (
-                      <div className="pt-2 border-t border-slate-800">
+                    {/* Editable "Where I Left Off" Context Notes at Any Time */}
+                    <div className="pt-2 border-t border-slate-800">
+                      <div className="flex items-center justify-between">
                         <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider flex items-center space-x-1">
                           <Brain className="w-3 h-3 text-amber-400" />
-                          <span>Where I Left Off</span>
+                          <span>Where I Left Off (Notes)</span>
                         </span>
-                        <p className="text-xs text-slate-300 mt-0.5 whitespace-pre-wrap leading-relaxed">
-                          {ws.whereILeftOff}
-                        </p>
+                        <button
+                          onClick={() => {
+                            setEditingNotesWsId(ws.id);
+                            setInlineNotesText(ws.whereILeftOff || '');
+                          }}
+                          className="text-[10px] text-amber-300 hover:underline font-bold"
+                        >
+                          Edit Notes
+                        </button>
                       </div>
-                    )}
+
+                      {editingNotesWsId === ws.id ? (
+                        <div className="mt-2 space-y-2">
+                          <textarea
+                            rows={3}
+                            value={inlineNotesText}
+                            onChange={e => setInlineNotesText(e.target.value)}
+                            placeholder="Update context notes, branch name, or status..."
+                            className="w-full bg-slate-950 border border-amber-500/50 rounded-xl p-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none"
+                          />
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              onClick={() => setEditingNotesWsId(null)}
+                              className="px-2.5 py-1 bg-slate-800 text-slate-300 rounded-lg text-xs"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => handleSaveInlineNotes(ws.id)}
+                              className="px-3 py-1 bg-amber-600 text-white rounded-lg text-xs font-bold"
+                            >
+                              Save Notes
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-300 mt-0.5 whitespace-pre-wrap leading-relaxed">
+                          {ws.whereILeftOff || <span className="text-slate-500 italic font-normal">No context notes added yet...</span>}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   {/* Micro Tasks Section with Harmonic Custom Scrollbar */}
@@ -1336,7 +1509,7 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     </div>
                   </div>
 
-                  {/* Background Alarm Callbacks */}
+                  {/* Background Alarm Callbacks (Custom Sound Selectors) */}
                   <div className="bg-slate-900/60 rounded-2xl p-3 border border-slate-700/60 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-[11px] font-bold text-indigo-300 flex items-center space-x-1.5">
@@ -1353,22 +1526,50 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
 
                     {showAddAlarm[ws.id] && (
                       <div className="p-2.5 bg-slate-900 border border-slate-700 rounded-xl space-y-2">
-                        <div className="flex items-center space-x-1.5">
-                          {[1, 2, 3, 5, 10].map(m => (
-                            <button
-                              key={m}
-                              type="button"
-                              onClick={() => setAlarmMinutes(prev => ({ ...prev, [ws.id]: m }))}
-                              className={`px-2 py-1 text-[10px] font-bold rounded ${
-                                (alarmMinutes[ws.id] || 3) === m
-                                  ? 'bg-indigo-600 text-white'
-                                  : 'bg-slate-800 text-slate-300'
-                              }`}
-                            >
-                              {m}m
-                            </button>
-                          ))}
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-[10px] text-slate-400 font-bold">Timer:</span>
+                          <div className="flex items-center space-x-1">
+                            {[1, 2, 3, 5, 10].map(m => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => setAlarmMinutes(prev => ({ ...prev, [ws.id]: m }))}
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded ${
+                                  (alarmMinutes[ws.id] || 3) === m
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-slate-800 text-slate-300'
+                                }`}
+                              >
+                                {m}m
+                              </button>
+                            ))}
+                          </div>
                         </div>
+
+                        {/* Sound Type Selector */}
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-[10px] text-slate-400 font-bold">Sound:</span>
+                          <div className="flex items-center space-x-1">
+                            {(['chime', 'bell', 'pulse', 'gong'] as AlarmSoundType[]).map(snd => (
+                              <button
+                                key={snd}
+                                type="button"
+                                onClick={() => {
+                                  setAlarmSound(prev => ({ ...prev, [ws.id]: snd }));
+                                  playAlarmSound(snd);
+                                }}
+                                className={`px-2 py-0.5 text-[10px] font-bold rounded capitalize ${
+                                  (alarmSound[ws.id] || 'chime') === snd
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                {snd}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
                         <input
                           type="text"
                           placeholder="Alarm message (e.g. Check CI build)"
@@ -1385,11 +1586,14 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                       </div>
                     )}
 
-                    {(ws.backgroundAlarms || []).filter(a => a.active).map(alarm => (
+                    {(ws.backgroundAlarms || []).filter(a => a.active && !a.triggered).map(alarm => (
                       <div key={alarm.id} className="flex items-center justify-between bg-indigo-950/60 p-2 rounded-xl text-xs border border-indigo-800/60 text-indigo-200">
                         <div className="flex items-center space-x-2 truncate">
                           <BellRing className="w-3.5 h-3.5 text-indigo-400 animate-pulse shrink-0" />
                           <span className="truncate">{alarm.message}</span>
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 uppercase">
+                            {alarm.soundType || 'chime'}
+                          </span>
                         </div>
                         <button onClick={() => handleCancelAlarm(ws.id, alarm.id)} className="text-slate-400 hover:text-rose-400 ml-2">
                           <X className="w-3.5 h-3.5" />
@@ -1504,46 +1708,65 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                   </div>
                 </div>
 
-                {/* Footer Controls & Time Log Details Trigger */}
-                <div className="p-4 bg-slate-900/90 border-t border-slate-700/80 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => setShowTimeLogsModal(ws)}
-                    className="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-indigo-200 bg-indigo-950/60 border border-indigo-800/60 px-2.5 py-1 rounded-xl transition-all"
-                    title="View detailed task time logs"
-                  >
-                    <BarChart2 className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>{formatSeconds(ws.totalActiveSeconds || 0)}</span>
-                  </button>
+                {/* Footer Controls, Foreground/Background Push & Lineage Details Trigger */}
+                <div className="p-4 bg-slate-900/90 border-t border-slate-700/80 flex flex-col gap-2">
+                  {/* Foreground / Background Timers Display */}
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-950 p-2 rounded-xl border border-slate-800">
+                    <span className="flex items-center space-x-1 font-semibold text-emerald-400">
+                      <span>Focus FG:</span>
+                      <strong>{formatSeconds(ws.fgActiveSeconds || 0)}</strong>
+                    </span>
+                    <span className="flex items-center space-x-1 font-semibold text-purple-400">
+                      <span>BG Exec:</span>
+                      <strong>{formatSeconds(ws.bgActiveSeconds || 0)}</strong>
+                    </span>
+                  </div>
 
-                  <div className="flex items-center space-x-1.5">
-                    {ws.state !== 'ACTIVE' ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => setShowLineageModal(ws)}
+                      className="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-indigo-200 bg-indigo-950/60 border border-indigo-800/60 px-2.5 py-1.5 rounded-xl transition-all"
+                      title="View complete working pattern lineage"
+                    >
+                      <History className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Lineage</span>
+                    </button>
+
+                    {/* Push / Pull Background Toggle Button (Only when ACTIVE) */}
+                    {ws.state === 'ACTIVE' && (
                       <button
-                        onClick={() => handleSetState(ws, 'ACTIVE')}
-                        className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow-md shadow-emerald-950/40 transition-all"
+                        onClick={() => toggleBackgroundMode(ws)}
+                        className={`flex items-center space-x-1 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                          ws.isBackground
+                            ? 'bg-purple-600 text-white border-purple-500 shadow-md animate-pulse'
+                            : 'bg-slate-800 text-purple-300 border-purple-500/40 hover:bg-slate-700'
+                        }`}
+                        title={ws.isBackground ? 'Pull task to Foreground Focus' : 'Push task to Background Execution'}
                       >
-                        <Play className="w-3.5 h-3.5 fill-white" />
-                        <span>Resume Focus</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => handleSetState(ws, 'PAUSED')}
-                        className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs shadow-md transition-all"
-                      >
-                        <Pause className="w-3.5 h-3.5 fill-white" />
-                        <span>Pause Work</span>
+                        <Radio className="w-3.5 h-3.5" />
+                        <span>{ws.isBackground ? 'In BG (Pull)' : 'Push to BG'}</span>
                       </button>
                     )}
 
-                    <select
-                      value={ws.state}
-                      onChange={e => handleSetState(ws, e.target.value as WorkstreamState)}
-                      className="bg-slate-800 border border-slate-700 rounded-xl px-2 py-1 text-xs text-slate-300 focus:outline-none"
-                    >
-                      <option value="ACTIVE">ACTIVE</option>
-                      <option value="PAUSED">PAUSED</option>
-                      <option value="WAITING">WAITING</option>
-                      <option value="SUSPENDED">SUSPENDED</option>
-                    </select>
+                    <div className="flex items-center space-x-1.5">
+                      {ws.state !== 'ACTIVE' ? (
+                        <button
+                          onClick={() => handleSetState(ws, 'ACTIVE')}
+                          className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl text-xs shadow-md shadow-emerald-950/40 transition-all"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-white" />
+                          <span>Resume Focus</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleSetState(ws, 'PAUSED')}
+                          className="flex items-center space-x-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl text-xs shadow-md transition-all"
+                        >
+                          <Pause className="w-3.5 h-3.5 fill-white" />
+                          <span>Pause</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1552,7 +1775,242 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         </div>
       </main>
 
-      {/* ── Modal: Sitting Management (Current Sitting) ───────────────────── */}
+      {/* ── Modal: Maximized Workstream View ──────────────────────────────── */}
+      {maximizedWorkstream && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-xl overflow-y-auto">
+          <div className="bg-slate-900 border-2 border-indigo-500/80 rounded-3xl max-w-5xl w-full p-6 md:p-8 shadow-2xl space-y-6 text-left relative my-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                  <Workflow className="w-6 h-6" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-extrabold text-white">{maximizedWorkstream.title}</h2>
+                  <p className="text-xs text-slate-400">{maximizedWorkstream.category} • State: <strong className="text-emerald-400">{maximizedWorkstream.state}</strong></p>
+                </div>
+              </div>
+              <button
+                onClick={() => setMaximizedWorkstream(null)}
+                className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-xl border border-slate-700"
+              >
+                <Minimize2 className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content Multi-Column Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Current Task</span>
+                  <p className="text-sm font-bold text-white">{maximizedWorkstream.currentTask || 'None'}</p>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">⚡ Immediate Next Action</span>
+                  <p className="text-sm font-bold text-emerald-300">{maximizedWorkstream.nextAction || 'None'}</p>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">📌 Where I Left Off (Notes)</span>
+                  <p className="text-xs text-slate-300 whitespace-pre-wrap">{maximizedWorkstream.whereILeftOff || 'No context notes.'}</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                  <span className="text-xs font-bold text-slate-300 mb-2 block">Micro-Tasks ({(maximizedWorkstream.microTasks || []).length})</span>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {(maximizedWorkstream.microTasks || []).map(t => (
+                      <div key={t.id} className="flex items-center justify-between text-xs text-slate-300 p-2 bg-slate-900 rounded-xl">
+                        <span className={t.completed ? 'line-through text-slate-500' : ''}>{t.title}</span>
+                        {t.completed && <CheckSquare className="w-4 h-4 text-emerald-400" />}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Focus Time (FG)</span>
+                    <span className="text-emerald-400 text-lg font-bold">{formatSeconds(maximizedWorkstream.fgActiveSeconds || 0)}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Background Time (BG)</span>
+                    <span className="text-purple-400 text-lg font-bold">{formatSeconds(maximizedWorkstream.bgActiveSeconds || 0)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setMaximizedWorkstream(null)}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold text-xs shadow-lg"
+            >
+              Close Maximized View
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Lineage & Working Pattern History ──────────────────────── */}
+      {showLineageModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 text-left">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Workstream Lineage & Pattern Analytics</span>
+                <h3 className="text-base font-bold text-white">{showLineageModal.title}</h3>
+              </div>
+              <button
+                onClick={() => setShowLineageModal(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-center">
+              <div className="bg-slate-900 p-3 rounded-2xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold">Foreground (Focus) Duration</span>
+                <p className="text-lg font-extrabold text-emerald-400 mt-1">{formatSeconds(showLineageModal.fgActiveSeconds || 0)}</p>
+              </div>
+              <div className="bg-slate-900 p-3 rounded-2xl border border-slate-700">
+                <span className="text-[10px] text-slate-400 uppercase font-bold">Background Execution Duration</span>
+                <p className="text-lg font-extrabold text-purple-400 mt-1">{formatSeconds(showLineageModal.bgActiveSeconds || 0)}</p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-xs font-bold text-slate-300">Complete Lineage History Log</h4>
+              <div className="space-y-2 max-h-60 overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-700/60">
+                {(!showLineageModal.lineageLogs || showLineageModal.lineageLogs.length === 0) ? (
+                  <div className="text-center py-6 text-xs text-slate-500">No lineage records logged yet.</div>
+                ) : (
+                  showLineageModal.lineageLogs.map((log, lIdx) => (
+                    <div key={lIdx} className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
+                      <div className="flex justify-between items-center text-slate-200">
+                        <span className="font-bold flex items-center space-x-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${log.type === 'BG' ? 'bg-purple-500/20 text-purple-300' : 'bg-emerald-500/20 text-emerald-300'}`}>
+                            {log.type === 'BG' ? 'BACKGROUND' : 'FOREGROUND'}
+                          </span>
+                          <span className="text-white">{log.taskName || 'Focus Task'}</span>
+                        </span>
+                        <span className="font-mono text-indigo-300 font-bold">{formatSeconds(log.durationSeconds)}</span>
+                      </div>
+                      {log.switchReason && (
+                        <p className="text-[11px] text-amber-300 italic">Reason: "{log.switchReason}"</p>
+                      )}
+                      <div className="flex justify-between items-center text-[10px] text-slate-500">
+                        <span>Started: {new Date(log.startTime).toLocaleTimeString()}</span>
+                        <span>{log.endTime ? `Ended: ${new Date(log.endTime).toLocaleTimeString()}` : 'Active Now'}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowLineageModal(null)}
+              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl text-xs font-bold"
+            >
+              Close Lineage Log
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Context Resume Snapshot (Interactive Form Fix) ───────────── */}
+      {resumingWorkstream && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+          <div className="bg-slate-800 border border-indigo-500/50 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-left relative">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
+                  <Workflow className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Context Resume Banner</span>
+                  <h3 className="text-lg font-bold text-white">{resumingWorkstream.workstream.title}</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResumingWorkstream(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {resumingWorkstream.previous && (
+              <div className="text-xs text-slate-400 bg-slate-900/60 p-2.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
+                <span className="text-amber-400 font-bold">Pausing:</span>
+                <span>{resumingWorkstream.previous.title}</span>
+              </div>
+            )}
+
+            <div className="space-y-3 bg-slate-900/80 p-4 rounded-2xl border border-slate-700">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Current Focus Task</span>
+                <p className="text-xs text-white font-semibold mt-0.5">
+                  {resumingWorkstream.workstream.currentTask || 'No main task specified.'}
+                </p>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Immediate Next Action</span>
+                <p className="text-xs text-emerald-300 font-bold mt-0.5">
+                  {resumingWorkstream.workstream.nextAction || 'Ready to start focus.'}
+                </p>
+              </div>
+
+              {resumingWorkstream.workstream.whereILeftOff && (
+                <div className="pt-2 border-t border-slate-800">
+                  <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">📌 Where You Left Off</span>
+                  <p className="text-xs text-slate-300 mt-0.5 whitespace-pre-wrap">
+                    {resumingWorkstream.workstream.whereILeftOff}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Clickable Responsive Form for Context Switch Reason */}
+            <form onSubmit={confirmSwitchWorkstream} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Reason for Context Switch (Recorded in Lineage):</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Waiting on PR review, urgent priority..."
+                  value={switchReasonInput}
+                  onChange={e => setSwitchReasonInput(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setResumingWorkstream(null)}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex items-center space-x-2 px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-lg"
+                >
+                  <span>Acknowledge & Start Focus</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal: Sitting Management ─────────────────────────────────────── */}
       {showSittingModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
           <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-4 text-left">
@@ -1621,141 +2079,6 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                 </button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Detailed Time Logs Viewer ──────────────────────────────── */}
-      {showTimeLogsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-slate-800 border border-slate-700 rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 text-left">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Detailed Time Log History</span>
-                <h3 className="text-base font-bold text-white">{showTimeLogsModal.title}</h3>
-              </div>
-              <button
-                onClick={() => setShowTimeLogsModal(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-slate-900 p-3 rounded-2xl border border-slate-700 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Total Active Recorded Duration:</span>
-              <span className="text-emerald-400 font-extrabold text-sm">{formatSeconds(showTimeLogsModal.totalActiveSeconds || 0)}</span>
-            </div>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-              {(!showTimeLogsModal.timeLogs || showTimeLogsModal.timeLogs.length === 0) ? (
-                <div className="text-center py-6 text-xs text-slate-500">No time logs recorded yet for this workstream.</div>
-              ) : (
-                showTimeLogsModal.timeLogs.map((log, lIdx) => (
-                  <div key={lIdx} className="bg-slate-900 p-3 rounded-xl border border-slate-800 text-xs space-y-1">
-                    <div className="flex justify-between items-center text-slate-200">
-                      <span className="font-bold text-white">{log.taskName || 'Focus Task'}</span>
-                      <span className="font-mono text-indigo-300 font-bold">{formatSeconds(log.durationSeconds)}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-[10px] text-slate-500">
-                      <span>Start: {new Date(log.startTime).toLocaleTimeString()}</span>
-                      <span>{log.endTime ? `End: ${new Date(log.endTime).toLocaleTimeString()}` : 'Currently Active'}</span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <button
-              onClick={() => setShowTimeLogsModal(null)}
-              className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold"
-            >
-              Close Time Logs
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ── Modal: Context Resume Snapshot ────────────────────────────────── */}
-      {resumingWorkstream && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
-          <div className="bg-slate-800 border border-indigo-500/50 rounded-3xl max-w-lg w-full p-6 shadow-2xl space-y-5 text-left relative">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-700">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center">
-                  <Workflow className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div>
-                  <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Context Resume Banner</span>
-                  <h3 className="text-lg font-bold text-white">{resumingWorkstream.workstream.title}</h3>
-                </div>
-              </div>
-              <button
-                onClick={() => setResumingWorkstream(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {resumingWorkstream.previous && (
-              <div className="text-xs text-slate-400 bg-slate-900/60 p-2.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
-                <span className="text-amber-400 font-bold">Pausing:</span>
-                <span>{resumingWorkstream.previous.title}</span>
-              </div>
-            )}
-
-            <div className="space-y-3 bg-slate-900/80 p-4 rounded-xl border border-slate-700">
-              <div>
-                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Current Focus Task</span>
-                <p className="text-xs text-white font-semibold mt-0.5">
-                  {resumingWorkstream.workstream.currentTask || 'No main task specified.'}
-                </p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-800">
-                <span className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">⚡ Immediate Next Action</span>
-                <p className="text-xs text-emerald-300 font-bold mt-0.5">
-                  {resumingWorkstream.workstream.nextAction || 'Ready to start focus.'}
-                </p>
-              </div>
-
-              {resumingWorkstream.workstream.whereILeftOff && (
-                <div className="pt-2 border-t border-slate-800">
-                  <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">📌 Where You Left Off</span>
-                  <p className="text-xs text-slate-300 mt-0.5 whitespace-pre-wrap">
-                    {resumingWorkstream.workstream.whereILeftOff}
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">Context Switch Trigger / Reason (Optional):</label>
-              <input
-                type="text"
-                placeholder="e.g. Waiting on PR review, urgent priority..."
-                value={switchReasonInput}
-                onChange={e => setSwitchReasonInput(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-
-            <div className="flex items-center justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setResumingWorkstream(null)}
-                className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-semibold"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmSwitchWorkstream}
-                className="flex items-center space-x-2 px-5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-950/40"
-              >
-                <span>Acknowledge & Start Focus</span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
-            </div>
           </div>
         </div>
       )}
