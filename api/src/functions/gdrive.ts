@@ -20,38 +20,46 @@ export function getAuthClient() {
   });
 }
 
+// Cache valid parent folder ID status in-memory
+let cachedValidFolderId: string | null | undefined = undefined;
+
+export async function getValidParentFolderId(drive: any): Promise<string | null> {
+  if (cachedValidFolderId !== undefined) {
+    return cachedValidFolderId;
+  }
+  const folderId = getFolderId();
+  if (!folderId) {
+    cachedValidFolderId = null;
+    return null;
+  }
+  try {
+    await drive.files.get({ fileId: folderId, fields: 'id', supportsAllDrives: true });
+    cachedValidFolderId = folderId;
+    return folderId;
+  } catch (err: any) {
+    console.warn(`[GDrive] GOOGLE_DRIVE_FOLDER_ID (${folderId}) is not accessible or not shared with service account (${err.message}). Falling back to service account root drive.`);
+    cachedValidFolderId = null;
+    return null;
+  }
+}
+
 // ── 1. Create a subfolder for a post ──
 export async function createFolderInDrive(folderName: string): Promise<string> {
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
 
-  const folderId = getFolderId();
+  const parentId = await getValidParentFolderId(drive);
   const fileMetadata: any = {
     name: folderName,
     mimeType: 'application/vnd.google-apps.folder',
-    parents: folderId ? [folderId] : []
+    parents: parentId ? [parentId] : []
   };
 
-  let folder;
-  try {
-    folder = await drive.files.create({
-      requestBody: fileMetadata,
-      supportsAllDrives: true,
-      fields: 'id'
-    });
-  } catch (err: any) {
-    // If parent folder ID is inaccessible/not found, create folder at root level
-    if (folderId && err.message?.includes('File not found')) {
-      delete fileMetadata.parents;
-      folder = await drive.files.create({
-        requestBody: fileMetadata,
-        supportsAllDrives: true,
-        fields: 'id'
-      });
-    } else {
-      throw err;
-    }
-  }
+  const folder = await drive.files.create({
+    requestBody: fileMetadata,
+    supportsAllDrives: true,
+    fields: 'id'
+  });
 
   if (!folder.data.id) {
     throw new Error('Failed to create folder in Google Drive');
@@ -113,20 +121,22 @@ export async function uploadToFolder(
   return { fileId, viewUrl, thumbnailUrl };
 }
 
-// ── 3. List all subfolders in the root folder ──
+// ── 3. List all subfolders in the root or parent folder ──
 export async function listSubFolders(): Promise<{ id: string; name: string }[]> {
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
 
-  const folderId = getFolderId();
-  const query = folderId 
-    ? `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
+  const parentId = await getValidParentFolderId(drive);
+  const query = parentId 
+    ? `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
     : `mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
 
   const res = await drive.files.list({
     q: query,
     fields: 'files(id, name)',
-    pageSize: 100
+    pageSize: 100,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
   });
 
   return (res.data.files || []).map(f => ({ id: f.id!, name: f.name! }));
@@ -137,17 +147,24 @@ export async function getFilesInFolder(folderId: string): Promise<{ id: string; 
   const auth = getAuthClient();
   const drive = google.drive({ version: 'v3', auth });
 
-  const res = await drive.files.list({
-    q: `'${folderId}' in parents and trashed = false`,
-    fields: 'files(id, name, mimeType)',
-    pageSize: 100
-  });
+  try {
+    const res = await drive.files.list({
+      q: `'${folderId}' in parents and trashed = false`,
+      fields: 'files(id, name, mimeType)',
+      pageSize: 100,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true
+    });
 
-  return (res.data.files || []).map(f => ({
-    id: f.id!,
-    name: f.name!,
-    mimeType: f.mimeType!
-  }));
+    return (res.data.files || []).map(f => ({
+      id: f.id!,
+      name: f.name!,
+      mimeType: f.mimeType!
+    }));
+  } catch (err: any) {
+    console.error(`[GDrive] Error listing files in folder ${folderId}:`, err.message);
+    return [];
+  }
 }
 
 // ── 5. Download file contents as string (specifically for post.json) ──
