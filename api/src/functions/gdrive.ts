@@ -6,12 +6,30 @@ export function getFolderId(): string {
 }
 
 export function getAuthClient() {
+  // Option 1: OAuth2 User Delegation (Uses User's Personal Google Drive Storage Quota)
+  const clientId = process.env.GOOGLE_CLIENT_ID || '';
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || '';
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN || '';
+
+  if (clientId && clientSecret && refreshToken) {
+    const oauth2Client = new google.auth.OAuth2(
+      clientId,
+      clientSecret,
+      process.env.GOOGLE_REDIRECT_URI || 'https://developers.google.com/oauthplayground'
+    );
+    oauth2Client.setCredentials({
+      refresh_token: refreshToken
+    });
+    return oauth2Client;
+  }
+
+  // Option 2: Service Account JWT (Fallback)
   const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || '';
   const privateKey = rawKey.replace(/\\n/g, '\n').replace(/\\n/g, '\n');
 
   if (!clientEmail || !privateKey) {
-    throw new Error('Google Service Account credentials are not fully configured in env.');
+    throw new Error('Google OAuth2 credentials (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN) or Service Account credentials are not fully configured in env.');
   }
   return new google.auth.JWT({
     email: clientEmail,
@@ -37,7 +55,7 @@ export async function getValidParentFolderId(drive: any): Promise<string | null>
     cachedValidFolderId = folderId;
     return folderId;
   } catch (err: any) {
-    console.warn(`[GDrive] GOOGLE_DRIVE_FOLDER_ID (${folderId}) is not accessible or not shared with service account (${err.message}). Falling back to service account root drive.`);
+    console.warn(`[GDrive] GOOGLE_DRIVE_FOLDER_ID (${folderId}) is not accessible or not shared (${err.message}). Falling back to root drive.`);
     cachedValidFolderId = null;
     return null;
   }
