@@ -287,36 +287,40 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
     fetchState();
   }, [fetchState]);
 
+  // Ref to track triggered alarm IDs in-memory so they NEVER re-trigger in the session
+  const triggeredAlarmIdsRef = React.useRef<Set<string>>(new Set());
+
   // ── Foreground vs Background Timers & Exact Alarm Trigger Tick ────────────
   useEffect(() => {
     const interval = setInterval(() => {
       const nowMs = Date.now();
 
-      setWorkstreams(prev =>
-        prev.map(ws => {
-          if (ws.state !== 'ACTIVE') {
-            return ws;
-          }
+      setWorkstreams(prev => {
+        let triggeredData: { wsId: string; title: string; message: string; sound: AlarmSoundType; alarms: BackgroundAlarm[] } | null = null;
 
+        const updated = prev.map(ws => {
           let fgSec = ws.fgActiveSeconds || 0;
           let bgSec = ws.bgActiveSeconds || 0;
           let totalSec = ws.totalActiveSeconds || 0;
 
-          if (ws.isBackground) {
-            bgSec += 1;
-          } else {
-            fgSec += 1;
+          if (ws.state === 'ACTIVE') {
+            if (ws.isBackground) {
+              bgSec += 1;
+            } else {
+              fgSec += 1;
+            }
+            totalSec += 1;
           }
-          totalSec += 1;
 
-          // Check Background Alarm Callbacks (Triggers EXACTLY ONCE per alarm)
-          let newAlarmTriggered = false;
+          // Check Background Alarm Callbacks across ALL workstreams (Triggers EXACTLY ONCE per alarm)
+          let alarmChanged = false;
           let alarmMsg = '';
           let soundToPlay: AlarmSoundType = 'chime';
 
           const updatedAlarms = (ws.backgroundAlarms || []).map(alarm => {
-            if (alarm.active && !alarm.triggered && nowMs >= alarm.triggerTime) {
-              newAlarmTriggered = true;
+            if (alarm.active && !alarm.triggered && !triggeredAlarmIdsRef.current.has(alarm.id) && nowMs >= alarm.triggerTime) {
+              triggeredAlarmIdsRef.current.add(alarm.id);
+              alarmChanged = true;
               alarmMsg = alarm.message || `Callback alarm for "${ws.title}"`;
               soundToPlay = alarm.soundType || 'chime';
               return { ...alarm, active: false, triggered: true };
@@ -324,9 +328,14 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             return alarm;
           });
 
-          if (newAlarmTriggered) {
-            setTriggeredAlarm({ workstreamTitle: ws.title, message: alarmMsg });
-            playAlarmSound(soundToPlay);
+          if (alarmChanged && !triggeredData) {
+            triggeredData = {
+              wsId: ws.id,
+              title: ws.title,
+              message: alarmMsg,
+              sound: soundToPlay,
+              alarms: updatedAlarms
+            };
           }
 
           return {
@@ -336,16 +345,39 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
             bgActiveSeconds: bgSec,
             backgroundAlarms: updatedAlarms
           };
-        })
-      );
+        });
+
+        if (triggeredData) {
+          const info: { wsId: string; title: string; message: string; sound: AlarmSoundType; alarms: BackgroundAlarm[] } = triggeredData;
+          setTriggeredAlarm({ workstreamTitle: info.title, message: info.message });
+          playAlarmSound(info.sound);
+          saveWorkstreamUpdate(info.wsId, { backgroundAlarms: info.alarms });
+        }
+
+        return updated;
+      });
     }, 1000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // ── Keyboard Shortcuts (Ctrl+1..4, Ctrl+P, Ctrl+Space) ─────────────────────
+  // ── Keyboard Shortcuts (Ctrl+1..4, Ctrl+P, Ctrl+Space, Enter to dismiss modals) ──
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Enter key default obvious choice handlers when modals are open
+      if (e.key === 'Enter') {
+        if (triggeredAlarm) {
+          e.preventDefault();
+          setTriggeredAlarm(null);
+          return;
+        }
+        if (maximizedWorkstream && !['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+          e.preventDefault();
+          setMaximizedWorkstream(null);
+          return;
+        }
+      }
+
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -1251,9 +1283,9 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               onChange={e => setCategoryFilter(e.target.value)}
               className="bg-slate-800/90 border border-slate-700 rounded-2xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="all">All Categories</option>
+              <option value="all" className="bg-slate-900 text-white">All Categories</option>
               {categories.map(c => (
-                <option key={c} value={c}>{c}</option>
+                <option key={c} value={c} className="bg-slate-900 text-white">{c}</option>
               ))}
             </select>
 
@@ -1262,11 +1294,11 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               onChange={e => setStateFilter(e.target.value)}
               className="bg-slate-800/90 border border-slate-700 rounded-2xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="all">All States</option>
-              <option value="ACTIVE">Active</option>
-              <option value="PAUSED">Paused</option>
-              <option value="WAITING">Waiting</option>
-              <option value="SUSPENDED">Suspended</option>
+              <option value="all" className="bg-slate-900 text-white">All States</option>
+              <option value="ACTIVE" className="bg-slate-900 text-white">Active</option>
+              <option value="PAUSED" className="bg-slate-900 text-white">Paused</option>
+              <option value="WAITING" className="bg-slate-900 text-white">Waiting</option>
+              <option value="SUSPENDED" className="bg-slate-900 text-white">Suspended</option>
             </select>
           </div>
         </div>
@@ -1291,7 +1323,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
         )}
 
         {/* 100% Width Horizontal Kanban Track (Active Decks Center, Side Decks Left/Right) */}
-        <div className="flex flex-row items-stretch justify-center gap-6 overflow-x-auto pb-6 pt-2 px-1 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-track]:bg-slate-900/60 [&::-webkit-scrollbar-thumb]:bg-slate-700/80 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
+        <div className="w-full max-w-none overflow-x-auto pb-6 pt-2 px-4 [&::-webkit-scrollbar]:h-2.5 [&::-webkit-scrollbar-track]:bg-slate-900/60 [&::-webkit-scrollbar-thumb]:bg-slate-700/80 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-indigo-500/80">
+          <div className="flex flex-row items-stretch justify-start min-w-max gap-6 px-2">
           {orderedDisplayWorkstreams.map((ws, idx) => {
             const stateInfo = STATE_BADGES[ws.state] || STATE_BADGES.PAUSED;
             const isSlotShortcut = idx < 4;
@@ -1575,7 +1608,8 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                           placeholder="Alarm message (e.g. Check CI build)"
                           value={alarmMessage[ws.id] || ''}
                           onChange={e => setAlarmMessage(prev => ({ ...prev, [ws.id]: e.target.value }))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500"
+                          onKeyDown={e => e.key === 'Enter' && handleAddAlarmCallback(ws.id)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                         />
                         <button
                           onClick={() => handleAddAlarmCallback(ws.id)}
@@ -1672,14 +1706,16 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                           placeholder="Link Title (e.g. Jira PR)"
                           value={quickLinkName[ws.id] || ''}
                           onChange={e => setQuickLinkName(prev => ({ ...prev, [ws.id]: e.target.value }))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500"
+                          onKeyDown={e => e.key === 'Enter' && handleAddLink(ws.id)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                         />
                         <input
                           type="url"
                           placeholder="URL (https://...)"
                           value={quickLinkUrl[ws.id] || ''}
                           onChange={e => setQuickLinkUrl(prev => ({ ...prev, [ws.id]: e.target.value }))}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500"
+                          onKeyDown={e => e.key === 'Enter' && handleAddLink(ws.id)}
+                          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
                         />
                         <button
                           onClick={() => handleAddLink(ws.id)}
@@ -1772,82 +1808,127 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
               </div>
             );
           })}
+          </div>
         </div>
       </main>
 
       {/* ── Modal: Maximized Workstream View ──────────────────────────────── */}
       {maximizedWorkstream && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-xl overflow-y-auto">
-          <div className="bg-slate-900 border-2 border-indigo-500/80 rounded-3xl max-w-5xl w-full p-6 md:p-8 shadow-2xl space-y-6 text-left relative my-auto">
+          <div className="bg-slate-900 border-2 border-indigo-500 rounded-3xl max-w-5xl w-full p-6 md:p-8 shadow-2xl space-y-6 text-left relative my-auto">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center text-white shadow-lg">
                   <Workflow className="w-6 h-6" />
                 </div>
                 <div>
-                  <h2 className="text-xl font-extrabold text-white">{maximizedWorkstream.title}</h2>
-                  <p className="text-xs text-slate-400">{maximizedWorkstream.category} • State: <strong className="text-emerald-400">{maximizedWorkstream.state}</strong></p>
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-2xl font-extrabold text-white tracking-tight">{maximizedWorkstream.title}</h2>
+                    <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border uppercase ${STATE_BADGES[maximizedWorkstream.state]?.bg || 'bg-slate-800 text-slate-300'}`}>
+                      {maximizedWorkstream.state}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Category: <strong className="text-slate-200">{maximizedWorkstream.category || 'General'}</strong> •
+                    {maximizedWorkstream.isBackground ? ' Executing in Background' : ' Active Focus Workstream'}
+                  </p>
                 </div>
               </div>
               <button
                 onClick={() => setMaximizedWorkstream(null)}
-                className="p-2 text-slate-400 hover:text-white bg-slate-800 rounded-xl border border-slate-700"
+                className="p-2.5 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-2xl border border-slate-700 transition-all"
+                title="Close Maximized View (Press Enter or Esc)"
               >
-                <Minimize2 className="w-5 h-5" />
+                <Minimize2 className="w-5 h-5 text-indigo-400" />
               </button>
             </div>
 
             {/* Content Multi-Column Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-4">
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 space-y-1.5 shadow-inner">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">Current Task</span>
-                  <p className="text-sm font-bold text-white">{maximizedWorkstream.currentTask || 'None'}</p>
+                  <p className="text-sm font-bold text-white">{maximizedWorkstream.currentTask || 'None specified'}</p>
                 </div>
 
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 space-y-1.5 shadow-inner">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400">⚡ Immediate Next Action</span>
-                  <p className="text-sm font-bold text-emerald-300">{maximizedWorkstream.nextAction || 'None'}</p>
+                  <p className="text-sm font-bold text-emerald-300">{maximizedWorkstream.nextAction || 'None specified'}</p>
                 </div>
 
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">📌 Where I Left Off (Notes)</span>
-                  <p className="text-xs text-slate-300 whitespace-pre-wrap">{maximizedWorkstream.whereILeftOff || 'No context notes.'}</p>
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 space-y-1.5 shadow-inner">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">📌 Where I Left Off (Context Notes)</span>
+                  <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed">
+                    {maximizedWorkstream.whereILeftOff || 'No context notes added yet.'}
+                  </p>
                 </div>
               </div>
 
               <div className="space-y-4">
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                  <span className="text-xs font-bold text-slate-300 mb-2 block">Micro-Tasks ({(maximizedWorkstream.microTasks || []).length})</span>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 shadow-inner">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-slate-300">Micro-Tasks ({(maximizedWorkstream.microTasks || []).length})</span>
+                    <span className="text-[10px] text-emerald-400 font-semibold">
+                      {(maximizedWorkstream.microTasks || []).filter(m => m.completed).length} / {(maximizedWorkstream.microTasks || []).length} done
+                    </span>
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    {(maximizedWorkstream.microTasks || []).length === 0 && (
+                      <p className="text-xs text-slate-500 italic">No micro-tasks added yet.</p>
+                    )}
                     {(maximizedWorkstream.microTasks || []).map(t => (
-                      <div key={t.id} className="flex items-center justify-between text-xs text-slate-300 p-2 bg-slate-900 rounded-xl">
-                        <span className={t.completed ? 'line-through text-slate-500' : ''}>{t.title}</span>
-                        {t.completed && <CheckSquare className="w-4 h-4 text-emerald-400" />}
+                      <div key={t.id} className="flex items-center justify-between text-xs text-slate-200 p-2.5 bg-slate-900 rounded-xl border border-slate-800/80">
+                        <span className={t.completed ? 'line-through text-slate-500' : 'font-medium'}>{t.title}</span>
+                        {t.completed && <CheckSquare className="w-4 h-4 text-emerald-400 shrink-0" />}
                       </div>
                     ))}
                   </div>
                 </div>
 
-                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Focus Time (FG)</span>
-                    <span className="text-emerald-400 text-lg font-bold">{formatSeconds(maximizedWorkstream.fgActiveSeconds || 0)}</span>
+                {/* Context Links in Maximized View */}
+                {(maximizedWorkstream.filesOrLinks || []).length > 0 && (
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 shadow-inner">
+                    <span className="text-xs font-bold text-slate-300 block mb-2">Context Links</span>
+                    <div className="flex flex-wrap gap-2">
+                      {maximizedWorkstream.filesOrLinks!.map((link, lIdx) => (
+                        <a
+                          key={lIdx}
+                          href={link.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-indigo-300 hover:border-indigo-500 hover:text-indigo-200 transition-all"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+                          <span className="truncate max-w-[160px] font-semibold">{link.label}</span>
+                        </a>
+                      ))}
+                    </div>
                   </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Background Time (BG)</span>
-                    <span className="text-purple-400 text-lg font-bold">{formatSeconds(maximizedWorkstream.bgActiveSeconds || 0)}</span>
+                )}
+
+                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800/80 flex items-center justify-around text-xs shadow-inner">
+                  <div className="text-center">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Focus Time (FG)</span>
+                    <span className="text-emerald-400 text-xl font-extrabold">{formatSeconds(maximizedWorkstream.fgActiveSeconds || 0)}</span>
+                  </div>
+                  <div className="h-8 w-px bg-slate-800" />
+                  <div className="text-center">
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Background Time (BG)</span>
+                    <span className="text-purple-400 text-xl font-extrabold">{formatSeconds(maximizedWorkstream.bgActiveSeconds || 0)}</span>
                   </div>
                 </div>
               </div>
             </div>
 
-            <button
-              onClick={() => setMaximizedWorkstream(null)}
-              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-2xl font-bold text-xs shadow-lg"
-            >
-              Close Maximized View
-            </button>
+            <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+              <span className="text-xs text-slate-400 hidden sm:inline">Press <kbd className="px-2 py-0.5 bg-slate-800 border border-slate-700 text-white rounded font-mono text-[11px]">Enter</kbd> to return to board</span>
+              <button
+                onClick={() => setMaximizedWorkstream(null)}
+                className="w-full sm:w-auto px-8 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-2xl font-bold text-xs shadow-lg shadow-indigo-600/30 transition-all"
+              >
+                Close Maximized View ↵
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2131,13 +2212,13 @@ export const ConcurrencyManager: React.FC<ConcurrencyManagerProps> = ({ authToke
                     onChange={e => setFormColor(e.target.value)}
                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="indigo">Indigo</option>
-                    <option value="emerald">Emerald</option>
-                    <option value="amber">Amber</option>
-                    <option value="rose">Rose</option>
-                    <option value="purple">Purple</option>
-                    <option value="cyan">Cyan</option>
-                    <option value="slate">Slate</option>
+                    <option value="indigo" className="bg-slate-900 text-white">Indigo</option>
+                    <option value="emerald" className="bg-slate-900 text-white">Emerald</option>
+                    <option value="amber" className="bg-slate-900 text-white">Amber</option>
+                    <option value="rose" className="bg-slate-900 text-white">Rose</option>
+                    <option value="purple" className="bg-slate-900 text-white">Purple</option>
+                    <option value="cyan" className="bg-slate-900 text-white">Cyan</option>
+                    <option value="slate" className="bg-slate-900 text-white">Slate</option>
                   </select>
                 </div>
               </div>
