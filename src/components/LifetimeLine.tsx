@@ -2,8 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Tag, Search, Plus, Trash2, Edit2, Image, 
   Video, Film, Check, AlertCircle, X, ChevronDown, 
-  Loader2, Sparkles, BookOpen, Clock, FolderOpen
+  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar
 } from 'lucide-react';
+import { 
+  adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
+  toNepaliDigits 
+} from '../utils/bikramSambat';
 
 interface MediaItem {
   googleDriveId: string;
@@ -39,10 +43,16 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
+  const [selectedBsYear, setSelectedBsYear] = useState('');
+  const [selectedBsMonth, setSelectedBsMonth] = useState('');
+
   const [categories, setCategories] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [limit] = useState(10);
   const [skip, setSkip] = useState(0);
+
+  // Calendar Mode: 'AD' (Gregorian) vs 'BS' (Bikram Sambat - Nepali)
+  const [dateMode, setDateMode] = useState<'AD' | 'BS'>('AD');
 
   // New Post Form
   const [showCreator, setShowCreator] = useState(false);
@@ -51,6 +61,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [category, setCategory] = useState('General');
   const [rawTags, setRawTags] = useState('');
   const [timestamp, setTimestamp] = useState(new Date().toISOString().substring(0, 16));
+
+  // Form BS state initialized from initial AD timestamp
+  const initialBs = adToBs(new Date());
+  const [formBsYear, setFormBsYear] = useState<number>(initialBs.year);
+  const [formBsMonth, setFormBsMonth] = useState<number>(initialBs.month);
+  const [formBsDay, setFormBsDay] = useState<number>(initialBs.day);
+
   const [selectedFiles, setSelectedFiles] = useState<{ name: string; type: string; base64: string }[]>([]);
 
   // Editing state
@@ -60,7 +77,71 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [editCategory, setEditCategory] = useState('');
   const [editRawTags, setEditRawTags] = useState('');
   const [editTimestamp, setEditTimestamp] = useState('');
+  const [editDateMode, setEditDateMode] = useState<'AD' | 'BS'>('AD');
+  const [editBsYear, setEditBsYear] = useState<number>(initialBs.year);
+  const [editBsMonth, setEditBsMonth] = useState<number>(initialBs.month);
+  const [editBsDay, setEditBsDay] = useState<number>(initialBs.day);
+
   const [syncing, setSyncing] = useState(false);
+
+  // ── Sync AD & BS Form Handlers ─────────────────────────────────────────────
+  const handleAdTimestampChange = (newAdString: string) => {
+    setTimestamp(newAdString);
+    if (newAdString) {
+      const bs = adToBs(new Date(newAdString));
+      setFormBsYear(bs.year);
+      setFormBsMonth(bs.month);
+      setFormBsDay(bs.day);
+    }
+  };
+
+  const handleBsDateChange = (year: number, month: number, day: number) => {
+    setFormBsYear(year);
+    setFormBsMonth(month);
+    setFormBsDay(day);
+
+    const maxDays = getMonthDays(year, month);
+    const validDay = Math.min(day, maxDays);
+    if (validDay !== day) {
+      setFormBsDay(validDay);
+    }
+
+    const adDate = bsToAd(year, month, validDay);
+    const currentTimeStr = timestamp ? timestamp.substring(11, 16) : '12:00';
+    const yyyy = adDate.getFullYear();
+    const mm = String(adDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(adDate.getDate()).padStart(2, '0');
+    setTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
+  };
+
+  const handleEditAdTimestampChange = (newAdString: string) => {
+    setEditTimestamp(newAdString);
+    if (newAdString) {
+      const bs = adToBs(new Date(newAdString));
+      setEditBsYear(bs.year);
+      setEditBsMonth(bs.month);
+      setEditBsDay(bs.day);
+    }
+  };
+
+  const handleEditBsDateChange = (year: number, month: number, day: number) => {
+    setEditBsYear(year);
+    setEditBsMonth(month);
+    setEditBsDay(day);
+
+    const maxDays = getMonthDays(year, month);
+    const validDay = Math.min(day, maxDays);
+    if (validDay !== day) {
+      setEditBsDay(validDay);
+    }
+
+    const adDate = bsToAd(year, month, validDay);
+    const currentTimeStr = editTimestamp ? editTimestamp.substring(11, 16) : '12:00';
+    const yyyy = adDate.getFullYear();
+    const mm = String(adDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(adDate.getDate()).padStart(2, '0');
+    setEditTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
+  };
 
   const handleSyncDrive = async () => {
     if (!authToken || syncing) return;
@@ -208,7 +289,12 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         setCategory('General');
         setRawTags('');
         setSelectedFiles([]);
-        setTimestamp(new Date().toISOString().substring(0, 16));
+        const now = new Date();
+        setTimestamp(now.toISOString().substring(0, 16));
+        const bs = adToBs(now);
+        setFormBsYear(bs.year);
+        setFormBsMonth(bs.month);
+        setFormBsDay(bs.day);
         setShowCreator(false);
         fetchPosts(true);
         fetchFilterMetadata();
@@ -251,7 +337,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     setEditContent(post.content);
     setEditCategory(post.category);
     setEditRawTags(post.tags.join(', '));
-    setEditTimestamp(new Date(post.timestamp).toISOString().substring(0, 16));
+    const adStr = new Date(post.timestamp).toISOString().substring(0, 16);
+    setEditTimestamp(adStr);
+    const bs = adToBs(post.timestamp);
+    setEditBsYear(bs.year);
+    setEditBsMonth(bs.month);
+    setEditBsDay(bs.day);
+    setEditDateMode('AD');
   };
 
   const handleUpdatePost = async (id: string) => {
@@ -298,7 +390,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Format date helper
+  // Format AD date helper
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
     return {
@@ -308,6 +400,18 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
   };
+
+  // Client-side Bikram Sambat (BS) Post Filtering
+  const filteredPosts = posts.filter(post => {
+    if (!selectedBsYear && !selectedBsMonth) return true;
+    const bs = adToBs(post.timestamp);
+    if (selectedBsYear && bs.year !== parseInt(selectedBsYear, 10)) return false;
+    if (selectedBsMonth && bs.month !== parseInt(selectedBsMonth, 10)) return false;
+    return true;
+  });
+
+  // Current BS info for Form
+  const currentFormBs = adToBs(timestamp);
 
   // If not logged in
   if (!authToken) {
@@ -332,7 +436,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             <Sparkles className="w-7 h-7 text-amber-500" />
             Lifetime Line
           </h1>
-          <p className="text-sm text-slate-500">Your personal chronicle & timeline vault</p>
+          <p className="text-sm text-slate-500">Your personal chronicle & timeline vault (Dual AD / BS Nepali Calendar Support)</p>
         </div>
         
         <div className="flex items-center gap-2">
@@ -358,6 +462,39 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {/* ── Post Creator Form ── */}
       {showCreator && (
         <form onSubmit={handleCreatePost} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-md space-y-4 animate-in fade-in slide-in-from-top-4 duration-200">
+          
+          {/* Calendar Type Mode Toggle (AD vs BS) */}
+          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-2xl border border-slate-200">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 pl-2">
+              <Calendar className="w-4 h-4 text-amber-500" />
+              <span>Calendar Input System:</span>
+            </span>
+            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
+              <button
+                type="button"
+                onClick={() => setDateMode('AD')}
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                  dateMode === 'AD'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Gregorian (AD)
+              </button>
+              <button
+                type="button"
+                onClick={() => setDateMode('BS')}
+                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
+                  dateMode === 'BS'
+                    ? 'bg-amber-600 text-white shadow-sm'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                🇳🇵 Bikram Sambat (BS)
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="md:col-span-2 space-y-1">
               <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Title (Optional)</label>
@@ -369,15 +506,62 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                 className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
               />
             </div>
+
+            {/* Date & Time Selector (Bi-directional AD <-> BS Sync) */}
             <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Date & Time (Can backdate)</label>
-              <input
-                type="datetime-local"
-                value={timestamp}
-                onChange={e => setTimestamp(e.target.value)}
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-                required
-              />
+              {dateMode === 'AD' ? (
+                <>
+                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">AD Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    value={timestamp}
+                    onChange={e => handleAdTimestampChange(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
+                    required
+                  />
+                  <div className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 mt-1">
+                    🇳🇵 BS: {currentFormBs.formattedBsNp} ({currentFormBs.formattedBs})
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label className="text-[11px] font-extrabold text-amber-600 uppercase tracking-widest pl-1">🇳🇵 Nepali BS Date (Y-M-D)</label>
+                  <div className="grid grid-cols-3 gap-1">
+                    <select
+                      value={formBsYear}
+                      onChange={e => handleBsDateChange(parseInt(e.target.value, 10), formBsMonth, formBsDay)}
+                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                    >
+                      {getAvailableBsYears().map(y => (
+                        <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={formBsMonth}
+                      onChange={e => handleBsDateChange(formBsYear, parseInt(e.target.value, 10), formBsDay)}
+                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                    >
+                      {BS_MONTHS.map(m => (
+                        <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={formBsDay}
+                      onChange={e => handleBsDateChange(formBsYear, formBsMonth, parseInt(e.target.value, 10))}
+                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                    >
+                      {Array.from({ length: getMonthDays(formBsYear, formBsMonth) }, (_, i) => i + 1).map(d => (
+                        <option key={d} value={d}>{d} गते ({toNepaliDigits(d)})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="text-[11px] text-blue-700 font-semibold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 mt-1">
+                    AD Equivalent: {new Date(timestamp).toLocaleDateString()}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -459,7 +643,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           <button
             type="submit"
             disabled={submitting || !content.trim()}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2"
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2 shadow-md"
           >
             {submitting ? (
               <><Loader2 className="w-4 h-4 animate-spin" /> Uploading media to Google Drive & saving...</>
@@ -476,10 +660,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         </div>
       )}
 
-      {/* ── Filter & Search Bar ── */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* ── Filter & Search Bar (AD & Bikram Sambat BS Support) ── */}
+      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
         {/* Search */}
-        <div className="relative">
+        <div className="relative md:col-span-2">
           <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
           <input
             type="text"
@@ -496,7 +680,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           <select
             value={selectedCategory}
             onChange={e => setSelectedCategory(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white appearance-none cursor-pointer text-slate-700"
+            className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white appearance-none cursor-pointer text-slate-700 font-semibold"
           >
             <option value="">All Categories</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
@@ -504,20 +688,58 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-slate-400 pointer-events-none" />
         </div>
 
-        {/* Tag Filter */}
+        {/* Bikram Sambat BS Year Filter */}
         <div className="relative">
-          <Tag className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
+          <Calendar className="w-4 h-4 absolute left-3 top-3.5 text-amber-500" />
           <select
-            value={selectedTag}
-            onChange={e => setSelectedTag(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white appearance-none cursor-pointer text-slate-700"
+            value={selectedBsYear}
+            onChange={e => setSelectedBsYear(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
           >
-            <option value="">All Tags</option>
-            {tags.map(t => <option key={t} value={t}>#{t}</option>)}
+            <option value="">All BS Years</option>
+            {getAvailableBsYears().map(y => (
+              <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
+            ))}
           </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-slate-400 pointer-events-none" />
+          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-amber-500 pointer-events-none" />
+        </div>
+
+        {/* Bikram Sambat BS Month Filter */}
+        <div className="relative">
+          <Tag className="w-4 h-4 absolute left-3 top-3.5 text-amber-500" />
+          <select
+            value={selectedBsMonth}
+            onChange={e => setSelectedBsMonth(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
+          >
+            <option value="">All BS Months</option>
+            {BS_MONTHS.map(m => (
+              <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
+            ))}
+          </select>
+          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-amber-500 pointer-events-none" />
         </div>
       </div>
+
+      {/* Tag Pills */}
+      {tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 items-center pt-1">
+          <span className="text-xs font-bold text-slate-400 mr-1">Tags:</span>
+          {tags.map(t => (
+            <button
+              key={t}
+              onClick={() => setSelectedTag(selectedTag === t ? '' : t)}
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${
+                selectedTag === t
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+              }`}
+            >
+              #{t}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ── Feed Timeline List ── */}
       {loading && posts.length === 0 ? (
@@ -528,8 +750,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       ) : (
         <div className="relative border-l border-slate-200 ml-6 pl-8 space-y-8 py-4">
           
-          {posts.map((post) => {
+          {filteredPosts.map((post) => {
             const dt = formatDate(post.timestamp);
+            const bsDate = adToBs(post.timestamp);
             const isEditing = editingPostId === post._id;
 
             return (
@@ -546,6 +769,27 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                   {isEditing ? (
                     // ── Editing view ──
                     <div className="space-y-4">
+                      {/* Edit Calendar Mode Toggle */}
+                      <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-200">
+                        <span className="text-xs font-bold text-slate-700">Edit Date Mode:</span>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditDateMode('AD')}
+                            className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'AD' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+                          >
+                            AD
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditDateMode('BS')}
+                            className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'BS' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+                          >
+                            BS (Nepali)
+                          </button>
+                        </div>
+                      </div>
+
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                         <input
                           type="text"
@@ -554,12 +798,45 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           placeholder="Title"
                           className="md:col-span-2 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
                         />
-                        <input
-                          type="datetime-local"
-                          value={editTimestamp}
-                          onChange={e => setEditTimestamp(e.target.value)}
-                          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-                        />
+
+                        {editDateMode === 'AD' ? (
+                          <input
+                            type="datetime-local"
+                            value={editTimestamp}
+                            onChange={e => handleEditAdTimestampChange(e.target.value)}
+                            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
+                          />
+                        ) : (
+                          <div className="grid grid-cols-3 gap-1">
+                            <select
+                              value={editBsYear}
+                              onChange={e => handleEditBsDateChange(parseInt(e.target.value, 10), editBsMonth, editBsDay)}
+                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+                            >
+                              {getAvailableBsYears().map(y => (
+                                <option key={y} value={y}>{y}</option>
+                              ))}
+                            </select>
+                            <select
+                              value={editBsMonth}
+                              onChange={e => handleEditBsDateChange(editBsYear, parseInt(e.target.value, 10), editBsDay)}
+                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+                            >
+                              {BS_MONTHS.map(m => (
+                                <option key={m.id} value={m.id}>{m.np}</option>
+                              ))}
+                            </select>
+                            <select
+                              value={editBsDay}
+                              onChange={e => handleEditBsDateChange(editBsYear, editBsMonth, parseInt(e.target.value, 10))}
+                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+                            >
+                              {Array.from({ length: getMonthDays(editBsYear, editBsMonth) }, (_, i) => i + 1).map(d => (
+                                <option key={d} value={d}>{d}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                       </div>
                       <textarea
                         value={editContent}
@@ -601,15 +878,24 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                   ) : (
                     // ── Display view ──
                     <>
-                      {/* Top bar with category & actions */}
-                      <div className="flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-2">
+                      {/* Top bar with category, AD date, and Bikram Sambat (BS) badge */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="px-2.5 py-1 bg-amber-50 border border-amber-100 text-amber-700 font-extrabold uppercase tracking-wider rounded-lg text-[9px]">
                             {post.category}
                           </span>
-                          <span className="text-slate-400 flex items-center gap-1">
+                          
+                          {/* Gregorian AD Date */}
+                          <span className="text-slate-400 flex items-center gap-1 font-medium">
                             <Clock className="w-3.5 h-3.5" />
-                            {dt.time}, {dt.year}
+                            {dt.time}, {dt.month} {dt.day}, {dt.year} AD
+                          </span>
+
+                          {/* Bikram Sambat BS Nepali Date Badge */}
+                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100/70 border border-amber-300 text-amber-900 font-bold text-[11px] flex items-center gap-1">
+                            <span>🇳🇵</span>
+                            <span>{bsDate.formattedBsNp}</span>
+                            <span className="text-[10px] text-amber-700">({bsDate.formattedBs})</span>
                           </span>
                         </div>
                         
@@ -697,11 +983,11 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       )}
 
       {/* ── Empty State ── */}
-      {!loading && posts.length === 0 && (
+      {!loading && filteredPosts.length === 0 && (
         <div className="text-center py-20 border border-dashed border-slate-200 rounded-3xl bg-slate-50 space-y-3">
           <BookOpen className="w-8 h-8 text-slate-300 mx-auto" />
-          <h3 className="text-sm font-bold text-slate-600">Timeline is empty</h3>
-          <p className="text-xs text-slate-400 max-w-xs mx-auto">No memories documented yet. Try clicking "Document Moment" above to write your first entry.</p>
+          <h3 className="text-sm font-bold text-slate-600">No memories found</h3>
+          <p className="text-xs text-slate-400 max-w-xs mx-auto">No timeline posts match the selected search, category, tag, or BS date filters.</p>
         </div>
       )}
 
