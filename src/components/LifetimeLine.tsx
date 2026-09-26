@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Tag, Search, Plus, Trash2, Edit2, Image, 
   Video, Film, Check, AlertCircle, X, ChevronDown, 
-  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar
+  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar, Camera, Upload
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -31,6 +31,102 @@ interface Post {
 interface LifetimeLineProps {
   authToken?: string | null;
 }
+
+interface LiveCameraModalProps {
+  onCapture: (base64: string, fileName: string) => void;
+  onClose: () => void;
+}
+
+const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    const startStream = async () => {
+      setErrorMsg(null);
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err: any) {
+        console.error('Camera access error:', err);
+        setErrorMsg('Camera access denied or unavailable. You can use the direct file upload button.');
+      }
+    };
+    startStream();
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
+  }, [facingMode]);
+
+  const handleTakeSnapshot = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current || document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      onCapture(dataUrl, `camera_${Date.now()}.jpg`);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-150 select-none">
+      <div className="bg-slate-900 text-white rounded-3xl w-full max-w-lg p-5 shadow-2xl space-y-4 border border-slate-700 relative">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-bold text-sm text-blue-400">
+            <Camera className="w-5 h-5" />
+            <span>Live Camera Snapshot</span>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {errorMsg ? (
+          <div className="p-4 bg-red-900/40 border border-red-700/60 rounded-2xl text-xs text-red-200 leading-relaxed">
+            {errorMsg}
+          </div>
+        ) : (
+          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            <canvas ref={canvasRef} className="hidden" />
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition"
+          >
+            Flip Camera 🔄
+          </button>
+
+          <button
+            type="button"
+            onClick={handleTakeSnapshot}
+            disabled={!!errorMsg}
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2"
+          >
+            <Camera className="w-4 h-4" />
+            Snap Photo
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [posts, setPosts] = useState<Post[]>([]);
@@ -167,11 +263,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Media Lightbox
+  // Media Lightbox & Camera
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [lightboxMime, setLightboxMime] = useState<string | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch posts & filter options
   const fetchFilterMetadata = async () => {
@@ -600,33 +698,55 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             </div>
           </div>
 
-          {/* Media Attachments Dropzone */}
-          <div className="space-y-2">
+          {/* Media Attachments Dropzone & Camera Buttons */}
+          <div className="space-y-3">
             <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Attach Media (Images, Videos to Google Drive)</label>
-            <div 
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl p-6 text-center cursor-pointer transition bg-slate-50 flex flex-col items-center gap-1.5"
-            >
-              <Image className="w-6 h-6 text-slate-400" />
-              <p className="text-xs font-semibold text-slate-600">Drag files here or click to browse</p>
-              <p className="text-[10px] text-slate-400">Supports images and videos. Uploaded directly to your secure Google Drive.</p>
-              <input 
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,video/*"
-                onChange={handleFileChange}
-                className="hidden"
-              />
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Drag & Drop / File Browser */}
+              <div 
+                onClick={() => fileInputRef.current?.click()}
+                className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl p-4 text-center cursor-pointer transition bg-slate-50 flex flex-col items-center justify-center gap-1"
+              >
+                <Upload className="w-5 h-5 text-blue-500" />
+                <p className="text-xs font-bold text-slate-700">Browse / Drag Files</p>
+                <p className="text-[10px] text-slate-400">Select images or videos</p>
+                <input 
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,video/*"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Take Photo / Camera Button */}
+              <div 
+                onClick={() => setShowCameraModal(true)}
+                className="border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-2xl p-4 text-center cursor-pointer transition bg-blue-50/50 flex flex-col items-center justify-center gap-1"
+              >
+                <Camera className="w-5 h-5 text-blue-600" />
+                <p className="text-xs font-bold text-blue-800">Take Photo / Camera</p>
+                <p className="text-[10px] text-blue-600">Snap live photo directly</p>
+                <input 
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+              </div>
             </div>
 
             {/* Selected Files Preview List */}
             {selectedFiles.length > 0 && (
               <div className="flex flex-wrap gap-2 pt-2">
                 {selectedFiles.map((file, idx) => (
-                  <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700">
+                  <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700 shadow-sm">
                     {file.type.startsWith('video/') ? <Video className="w-3.5 h-3.5 text-blue-500" /> : <Image className="w-3.5 h-3.5 text-teal-500" />}
-                    <span className="truncate max-w-[150px] font-mono">{file.name}</span>
+                    <span className="truncate max-w-[150px] font-mono font-semibold">{file.name}</span>
                     <button 
                       type="button" 
                       onClick={() => removeSelectedFile(idx)}
@@ -652,6 +772,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             )}
           </button>
         </form>
+      )}
+
+      {/* ── LIVE CAMERA MODAL ── */}
+      {showCameraModal && (
+        <LiveCameraModal
+          onClose={() => setShowCameraModal(false)}
+          onCapture={(base64, fileName) => {
+            setSelectedFiles(prev => [
+              ...prev,
+              {
+                name: fileName,
+                type: 'image/jpeg',
+                base64
+              }
+            ]);
+          }}
+        />
       )}
       {errorMsg && (
         <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">

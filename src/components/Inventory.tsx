@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Package, Plus, FolderPlus, Tag, Trash2, Edit3, Image as ImageIcon, 
   Search, Lock, RefreshCw, X, Check,
-  Layers, Shield
+  Layers, Shield, Camera, Upload
 } from 'lucide-react';
 
 export interface InventoryGroup {
@@ -27,6 +27,102 @@ export interface InventoryItem {
 interface InventoryProps {
   authToken: string | null;
 }
+
+interface LiveCameraModalProps {
+  onCapture: (base64: string, fileName: string) => void;
+  onClose: () => void;
+}
+
+const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    const startStream = async () => {
+      setErrorMsg(null);
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err: any) {
+        console.error('Camera access error:', err);
+        setErrorMsg('Camera access denied or unavailable. You can use the direct camera upload button.');
+      }
+    };
+    startStream();
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
+  }, [facingMode]);
+
+  const handleTakeSnapshot = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current || document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      onCapture(dataUrl, `camera_${Date.now()}.jpg`);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-150">
+      <div className="bg-slate-900 text-white rounded-3xl w-full max-w-lg p-5 shadow-2xl space-y-4 border border-slate-700 relative">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 font-bold text-sm text-blue-400">
+            <Camera className="w-5 h-5" />
+            <span>Live Camera Snapshot</span>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {errorMsg ? (
+          <div className="p-4 bg-red-900/40 border border-red-700/60 rounded-2xl text-xs text-red-200 leading-relaxed">
+            {errorMsg}
+          </div>
+        ) : (
+          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+            <canvas ref={canvasRef} className="hidden" />
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-2">
+          <button
+            type="button"
+            onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
+            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition"
+          >
+            Flip Camera 🔄
+          </button>
+
+          <button
+            type="button"
+            onClick={handleTakeSnapshot}
+            disabled={!!errorMsg}
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2"
+          >
+            <Camera className="w-4 h-4" />
+            Snap Photo
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [groups, setGroups] = useState<InventoryGroup[]>([]);
@@ -53,9 +149,12 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [itemQuantity, setItemQuantity] = useState(1);
   const [itemTagsInput, setItemTagsInput] = useState('');
   
-  // Image Upload State
+  // Image Upload & Camera State
   const [itemImages, setItemImages] = useState<{ fileId: string; viewUrl: string; thumbnailUrl: string }[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
 
   // Toast State
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -191,6 +290,39 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
     setShowItemModal(true);
   };
 
+  const uploadBase64Image = async (base64Data: string, fileName: string, mimeType: string = 'image/jpeg') => {
+    setUploadingImage(true);
+    try {
+      const res = await fetch('/api/inventory/upload', {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          fileName,
+          mimeType,
+          base64Data
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setItemImages(prev => [...prev, {
+          fileId: data.fileId,
+          viewUrl: data.viewUrl,
+          thumbnailUrl: data.thumbnailUrl
+        }]);
+        triggerToast('Image uploaded directly to Google Drive');
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const errMsg = errData.details || errData.error || `HTTP ${res.status}`;
+        triggerToast(`Upload failed: ${errMsg}`, 'error');
+      }
+    } catch (err: any) {
+      triggerToast(`Error uploading image: ${err.message || err}`, 'error');
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -200,41 +332,13 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       return;
     }
 
-    setUploadingImage(true);
     const reader = new FileReader();
     reader.onload = async () => {
       const base64Data = reader.result as string;
-      try {
-        const res = await fetch('/api/inventory/upload', {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({
-            fileName: file.name,
-            mimeType: file.type,
-            base64Data
-          })
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          setItemImages(prev => [...prev, {
-            fileId: data.fileId,
-            viewUrl: data.viewUrl,
-            thumbnailUrl: data.thumbnailUrl
-          }]);
-          triggerToast('Image uploaded directly to Google Drive (Inventory folder)');
-        } else {
-          const errData = await res.json().catch(() => ({}));
-          const errMsg = errData.details || errData.error || `HTTP ${res.status}`;
-          triggerToast(`Upload failed: ${errMsg}`, 'error');
-        }
-      } catch (err: any) {
-        triggerToast(`Error uploading image: ${err.message || err}`, 'error');
-      } finally {
-        setUploadingImage(false);
-      }
+      await uploadBase64Image(base64Data, file.name, file.type);
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleRemoveImage = (index: number) => {
@@ -753,36 +857,72 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
               </div>
 
               {/* Google Drive Image Upload */}
-              <div className="space-y-2 pt-1 border-t border-slate-100">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1">
+              {/* Google Drive Image Attachments */}
+              <div className="space-y-3 pt-2 border-t border-slate-100">
+                <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
                     <ImageIcon className="w-4 h-4 text-blue-600" />
-                    Item Images (Google Drive)
-                  </label>
+                    Item Media & Attachments
+                  </span>
+                  {uploadingImage && (
+                    <span className="text-[11px] text-blue-600 font-semibold flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3 animate-spin" /> Uploading to Drive...
+                    </span>
+                  )}
+                </label>
 
-                  <label className="flex items-center gap-1 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold rounded-xl text-xs border border-blue-200 cursor-pointer transition">
-                    {uploadingImage ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
-                    <span>{uploadingImage ? 'Uploading to Drive...' : 'Upload Image'}</span>
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      disabled={uploadingImage}
-                      onChange={handleImageUpload} 
-                      className="hidden" 
-                    />
-                  </label>
+                {/* Hidden File Inputs */}
+                <input 
+                  ref={fileInputRef}
+                  type="file" 
+                  accept="image/*" 
+                  disabled={uploadingImage}
+                  onChange={handleImageUpload} 
+                  className="hidden" 
+                />
+                <input 
+                  ref={cameraInputRef}
+                  type="file" 
+                  accept="image/*" 
+                  capture="environment"
+                  disabled={uploadingImage}
+                  onChange={handleImageUpload} 
+                  className="hidden" 
+                />
+
+                {/* Attachment Action Buttons */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={uploadingImage}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-sm disabled:opacity-50"
+                  >
+                    <Upload className="w-4 h-4 text-blue-600" />
+                    <span>Browse Files</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={uploadingImage}
+                    onClick={() => setShowCameraModal(true)}
+                    className="flex items-center justify-center gap-2 px-3 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold rounded-xl text-xs transition shadow-sm disabled:opacity-50"
+                  >
+                    <Camera className="w-4 h-4 text-blue-600" />
+                    <span>Take Photo / Camera</span>
+                  </button>
                 </div>
 
                 {/* Uploaded Images Preview List */}
                 {itemImages.length > 0 && (
-                  <div className="grid grid-cols-4 gap-2 pt-2">
+                  <div className="grid grid-cols-4 gap-2 pt-1">
                     {itemImages.map((img, idx) => (
-                      <div key={idx} className="relative group rounded-xl overflow-hidden border border-slate-200 h-20 bg-slate-50">
+                      <div key={idx} className="relative group rounded-xl overflow-hidden border border-slate-200 h-20 bg-slate-50 shadow-sm">
                         <img src={img.viewUrl} alt="Item" className="w-full h-full object-cover" />
                         <button
                           type="button"
                           onClick={() => handleRemoveImage(idx)}
-                          className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition"
+                          className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition shadow-sm"
                           title="Remove Image"
                         >
                           <Trash2 className="w-3 h-3" />
@@ -812,6 +952,16 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* ── LIVE CAMERA MODAL ── */}
+      {showCameraModal && (
+        <LiveCameraModal
+          onClose={() => setShowCameraModal(false)}
+          onCapture={(base64, fileName) => {
+            uploadBase64Image(base64, fileName, 'image/jpeg');
+          }}
+        />
       )}
 
     </div>
