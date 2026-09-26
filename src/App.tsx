@@ -21,6 +21,8 @@ import { Inventory } from './components/Inventory';
 import { Timers } from './components/Timers';
 import { Pastebin } from './components/Pastebin';
 import { ConcurrencyManager } from './components/ConcurrencyManager';
+import { PrivacyPolicy } from './components/PrivacyPolicy';
+import { TermsOfService } from './components/TermsOfService';
 
 // Categorized Navigation Architecture for Scalable Tool Integration
 const NAV_GROUPS = [
@@ -113,6 +115,13 @@ function App() {
     if (timerId) {
       setUrlTimerId(timerId);
       setActiveTab('timers');
+    }
+
+    const pathname = window.location.pathname.toLowerCase();
+    if (pathname.includes('/privacy')) {
+      setActiveTab('privacy');
+    } else if (pathname.includes('/terms')) {
+      setActiveTab('terms');
     }
 
     const pasteId = params.get('pasteId');
@@ -325,6 +334,10 @@ function App() {
         return <KeyVal authToken={authToken} />;
       case 'imgdrop':
         return <ImgDrop />;
+      case 'privacy':
+        return <PrivacyPolicy onBack={() => setActiveTab('dashboard')} />;
+      case 'terms':
+        return <TermsOfService onBack={() => setActiveTab('dashboard')} />;
       default:
         return <Dashboard setActiveTab={setActiveTab} progress={leetcodeProgress} authToken={authToken} />;
     }
@@ -506,11 +519,17 @@ function App() {
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 text-center py-6 text-xs text-slate-400 pb-24 md:pb-6">
-        <div className="max-w-6xl mx-auto px-4">
+        <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p>© {new Date().getFullYear()} Shudkara Hub. Serverless Web App designed for Azure SWA.</p>
-          <p className="mt-1 font-medium text-slate-350">
-            Powered by TOTP Auth & MongoDB Atlas.
-          </p>
+          <div className="flex items-center space-x-4 font-medium text-slate-500">
+            <button onClick={() => setActiveTab('privacy')} className="hover:text-slate-800 transition hover:underline">
+              Privacy Policy
+            </button>
+            <span>•</span>
+            <button onClick={() => setActiveTab('terms')} className="hover:text-slate-800 transition hover:underline">
+              Terms of Service
+            </button>
+          </div>
         </div>
       </footer>
 
