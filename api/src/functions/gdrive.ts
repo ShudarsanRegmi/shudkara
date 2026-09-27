@@ -243,13 +243,28 @@ export async function ensureFilePublic(fileId: string): Promise<{ viewUrl: strin
   });
 }
 
-// ── 7. Delete folder recursively ──
-export async function deleteFolderFromDrive(folderId: string): Promise<void> {
+// ── 7. Trash file or folder in Drive (moves to Google Drive Trash) ──
+export async function trashFileOrFolderInDrive(fileId: string): Promise<void> {
+  if (!fileId) return;
   return executeDriveAction(async (drive) => {
     try {
-      await drive.files.delete({ fileId: folderId });
+      await drive.files.update({
+        fileId: fileId,
+        requestBody: { trashed: true }
+      });
+      console.log(`[GDrive] Successfully trashed file/folder: ${fileId}`);
     } catch (err: any) {
-      console.error(`Failed to delete GDrive folder ${folderId}:`, err.message);
+      console.warn(`[GDrive] Failed to update trashed state for ${fileId}, attempting hard delete fallback:`, err.message);
+      try {
+        await drive.files.delete({ fileId: fileId });
+      } catch (e: any) {
+        console.error(`[GDrive] Failed to delete GDrive file/folder ${fileId}:`, e.message);
+      }
     }
   });
+}
+
+// ── 8. Delete folder recursively ──
+export async function deleteFolderFromDrive(folderId: string): Promise<void> {
+  return trashFileOrFolderInDrive(folderId);
 }

@@ -8,6 +8,8 @@ import {
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
   toNepaliDigits 
 } from '../utils/bikramSambat';
+import { MediaLightboxModal } from './MediaLightboxModal';
+import type { LightboxMediaItem } from './MediaLightboxModal';
 
 interface MediaItem {
   googleDriveId: string;
@@ -264,8 +266,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   };
 
   // Media Lightbox & Camera
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const [lightboxMime, setLightboxMime] = useState<string | null>(null);
+  const [lightboxItems, setLightboxItems] = useState<LightboxMediaItem[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [showLightbox, setShowLightbox] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1070,13 +1073,22 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           {post.media.map((file, fIdx) => (
                             <div 
                               key={fIdx} 
-                              onClick={() => { setLightboxUrl(file.viewUrl); setLightboxMime(file.mimeType); }}
-                              className="relative border border-slate-100 rounded-2xl overflow-hidden cursor-pointer hover:opacity-95 transition bg-slate-50 aspect-video group/media"
+                              onClick={() => {
+                                setLightboxItems(post.media!.map(m => ({
+                                  url: m.viewUrl,
+                                  thumbnailUrl: m.thumbnailUrl,
+                                  name: m.fileName,
+                                  type: m.mimeType
+                                })));
+                                setLightboxIndex(fIdx);
+                                setShowLightbox(true);
+                              }}
+                              className="relative border border-slate-100 rounded-2xl overflow-hidden cursor-pointer hover:opacity-95 transition bg-slate-50 aspect-video group/media shadow-sm"
                             >
                               {file.mimeType.startsWith('video/') ? (
-                                <div className="w-full h-full flex flex-col items-center justify-center relative">
-                                  <Film className="w-8 h-8 text-slate-400 group-hover/media:scale-110 transition duration-150" />
-                                  <span className="text-[10px] font-mono text-slate-400 absolute bottom-2">{file.fileName}</span>
+                                <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-900 text-white">
+                                  <Film className="w-8 h-8 text-blue-400 group-hover/media:scale-110 transition duration-150" />
+                                  <span className="text-[10px] font-mono text-slate-300 absolute bottom-2 px-2 truncate max-w-full">{file.fileName}</span>
                                 </div>
                               ) : (
                                 <img 
@@ -1138,33 +1150,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         </button>
       )}
 
-      {/* ── Lightbox Overlay Modal ── */}
-      {lightboxUrl && (
-        <div 
-          onClick={() => { setLightboxUrl(null); setLightboxMime(null); }}
-          className="fixed inset-0 bg-slate-950/90 flex items-center justify-center p-4 z-[999] animate-in fade-in duration-200 cursor-zoom-out"
-        >
-          <button className="absolute top-4 right-4 text-white hover:text-slate-300 bg-white/10 p-2 rounded-full transition">
-            <X className="w-6 h-6" />
-          </button>
-          
-          <div className="max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl" onClick={e => e.stopPropagation()}>
-            {lightboxMime?.startsWith('video/') ? (
-              <video 
-                src={lightboxUrl} 
-                controls 
-                autoPlay 
-                className="max-w-full max-h-[85vh] rounded-2xl outline-none" 
-              />
-            ) : (
-              <img 
-                src={lightboxUrl} 
-                alt="Enlarged view" 
-                className="max-w-full max-h-[85vh] object-contain rounded-2xl" 
-              />
-            )}
-          </div>
-        </div>
+      {/* ── Media Lightbox Modal ── */}
+      {showLightbox && (
+        <MediaLightboxModal
+          items={lightboxItems}
+          initialIndex={lightboxIndex}
+          onClose={() => setShowLightbox(false)}
+        />
       )}
 
     </div>

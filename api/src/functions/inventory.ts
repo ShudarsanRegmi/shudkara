@@ -2,7 +2,7 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/fu
 import { ObjectId } from 'mongodb';
 import { connectToMongo, verifySession, extractToken } from './db';
 import { 
-  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, ensureFilePublic 
+  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, ensureFilePublic, trashFileOrFolderInDrive 
 } from './gdrive';
 import { google } from 'googleapis';
 
@@ -107,6 +107,17 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
       }
 
       if (method === 'DELETE' && entityId) {
+        // Find items under this group to trash their images in Google Drive
+        const itemsToDelete = await itemsCol.find({ groupId: entityId }).toArray();
+        for (const item of itemsToDelete) {
+          if (Array.isArray(item.images)) {
+            for (const img of item.images) {
+              if (img.fileId) {
+                await trashFileOrFolderInDrive(img.fileId);
+              }
+            }
+          }
+        }
         await groupsCol.deleteOne({ _id: new ObjectId(entityId) });
         // Delete items under this group
         await itemsCol.deleteMany({ groupId: entityId });
@@ -154,6 +165,20 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
 
       if (method === 'PUT' && entityId) {
         const body: any = await request.json();
+        const existingItem = await itemsCol.findOne({ _id: new ObjectId(entityId) });
+
+        if (existingItem && body.images !== undefined && Array.isArray(body.images)) {
+          // Find images removed from the item and trash them in Google Drive
+          const newFileIds = new Set(body.images.map((img: any) => img.fileId));
+          if (Array.isArray(existingItem.images)) {
+            for (const oldImg of existingItem.images) {
+              if (oldImg.fileId && !newFileIds.has(oldImg.fileId)) {
+                await trashFileOrFolderInDrive(oldImg.fileId);
+              }
+            }
+          }
+        }
+
         const updateFields: any = { updatedAt: new Date().toISOString() };
         if (body.name !== undefined) updateFields.name = body.name.trim();
         if (body.description !== undefined) updateFields.description = body.description.trim();
@@ -168,6 +193,14 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
       }
 
       if (method === 'DELETE' && entityId) {
+        const itemToDelete = await itemsCol.findOne({ _id: new ObjectId(entityId) });
+        if (itemToDelete && Array.isArray(itemToDelete.images)) {
+          for (const img of itemToDelete.images) {
+            if (img.fileId) {
+              await trashFileOrFolderInDrive(img.fileId);
+            }
+          }
+        }
         await itemsCol.deleteOne({ _id: new ObjectId(entityId) });
         return { status: 200, jsonBody: { success: true } };
       }

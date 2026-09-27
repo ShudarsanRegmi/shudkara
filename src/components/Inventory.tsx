@@ -4,6 +4,8 @@ import {
   Search, Lock, RefreshCw, X, Check,
   Layers, Shield, Camera, Upload
 } from 'lucide-react';
+import { MediaLightboxModal } from './MediaLightboxModal';
+import type { LightboxMediaItem } from './MediaLightboxModal';
 
 export interface InventoryGroup {
   _id: string;
@@ -149,10 +151,17 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [itemQuantity, setItemQuantity] = useState(1);
   const [itemTagsInput, setItemTagsInput] = useState('');
   
-  // Image Upload & Camera State
+  // Image Upload, Staging & Camera State
   const [itemImages, setItemImages] = useState<{ fileId: string; viewUrl: string; thumbnailUrl: string }[]>([]);
-  const [uploadingImage, setUploadingImage] = useState(false);
+  const [stagedFiles, setStagedFiles] = useState<{ id: string; name: string; type: string; base64Data: string }[]>([]);
+  const [savingItem, setSavingItem] = useState(false);
   const [showCameraModal, setShowCameraModal] = useState(false);
+
+  // Lightbox State
+  const [lightboxItems, setLightboxItems] = useState<LightboxMediaItem[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [showLightbox, setShowLightbox] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -287,62 +296,48 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       setItemTagsInput('');
       setItemImages([]);
     }
+    setStagedFiles([]);
     setShowItemModal(true);
   };
 
-  const uploadBase64Image = async (base64Data: string, fileName: string, mimeType: string = 'image/jpeg') => {
-    setUploadingImage(true);
-    try {
-      const res = await fetch('/api/inventory/upload', {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          fileName,
-          mimeType,
-          base64Data
-        })
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setItemImages(prev => [...prev, {
-          fileId: data.fileId,
-          viewUrl: data.viewUrl,
-          thumbnailUrl: data.thumbnailUrl
-        }]);
-        triggerToast('Image uploaded directly to Google Drive');
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        const errMsg = errData.details || errData.error || `HTTP ${res.status}`;
-        triggerToast(`Upload failed: ${errMsg}`, 'error');
+  const stageBase64Image = (base64Data: string, fileName: string, mimeType: string = 'image/jpeg') => {
+    setStagedFiles(prev => [
+      ...prev,
+      {
+        id: `staged_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+        name: fileName,
+        type: mimeType,
+        base64Data
       }
-    } catch (err: any) {
-      triggerToast(`Error uploading image: ${err.message || err}`, 'error');
-    } finally {
-      setUploadingImage(false);
-    }
+    ]);
+    triggerToast('Photo staged for upload (will save to Google Drive when submitted)', 'info');
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleImageFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    if (!file.type.startsWith('image/')) {
-      triggerToast('Please select a valid image file', 'error');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64Data = reader.result as string;
-      await uploadBase64Image(base64Data, file.name, file.type);
-    };
-    reader.readAsDataURL(file);
+    Array.from(files).forEach(file => {
+      if (!file.type.startsWith('image/')) {
+        triggerToast(`Skipping ${file.name}: Not an image`, 'error');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64Data = reader.result as string;
+        stageBase64Image(base64Data, file.name, file.type);
+      };
+      reader.readAsDataURL(file);
+    });
     e.target.value = '';
   };
 
-  const handleRemoveImage = (index: number) => {
+  const handleRemoveExistingImage = (index: number) => {
     setItemImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleRemoveStagedFile = (id: string) => {
+    setStagedFiles(prev => prev.filter(f => f.id !== id));
   };
 
   const handleSaveItem = async (e: React.FormEvent) => {
@@ -352,12 +347,44 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       return;
     }
 
-    const tags = itemTagsInput
-      .split(',')
-      .map(t => t.trim())
-      .filter(t => t.length > 0);
-
+    setSavingItem(true);
     try {
+      const uploadedDriveImages: { fileId: string; viewUrl: string; thumbnailUrl: string }[] = [];
+      
+      // Upload staged files sequentially
+      for (let i = 0; i < stagedFiles.length; i++) {
+        const staged = stagedFiles[i];
+        triggerToast(`Uploading file ${i + 1} of ${stagedFiles.length} to Google Drive...`, 'info');
+        
+        const res = await fetch('/api/inventory/upload', {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            fileName: staged.name,
+            mimeType: staged.type,
+            base64Data: staged.base64Data
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          uploadedDriveImages.push({
+            fileId: data.fileId,
+            viewUrl: data.viewUrl,
+            thumbnailUrl: data.thumbnailUrl
+          });
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.details || errData.error || `Failed to upload ${staged.name}`);
+        }
+      }
+
+      const finalImages = [...itemImages, ...uploadedDriveImages];
+      const tags = itemTagsInput
+        .split(',')
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
       const url = itemEditing 
         ? `/api/inventory/items/${itemEditing._id}`
         : '/api/inventory/items';
@@ -372,19 +399,22 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
           groupId: itemGroupId,
           quantity: itemQuantity,
           tags,
-          images: itemImages
+          images: finalImages
         })
       });
 
       if (res.ok) {
-        triggerToast(itemEditing ? 'Item updated' : 'Inventory item added');
+        triggerToast(itemEditing ? 'Item updated & synced' : 'Inventory item saved');
         setShowItemModal(false);
+        setStagedFiles([]);
         fetchData();
       } else {
         triggerToast('Failed to save item', 'error');
       }
-    } catch (err) {
-      triggerToast('Network error', 'error');
+    } catch (err: any) {
+      triggerToast(`Error saving item: ${err.message || err}`, 'error');
+    } finally {
+      setSavingItem(false);
     }
   };
 
@@ -627,22 +657,47 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
             return (
               <div key={item._id} className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between group">
                 <div>
-                  {/* Top Image Banner */}
+                  {/* Top Image Banner & Gallery */}
                   {item.images && item.images.length > 0 ? (
-                    <div className="relative h-48 bg-slate-100 overflow-hidden border-b border-slate-100">
-                      <img 
-                        src={item.images[0].viewUrl} 
-                        alt={item.name} 
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        onError={(e) => {
-                          // fallback if direct image fails
-                          (e.target as HTMLElement).style.display = 'none';
+                    <div className="bg-slate-100 border-b border-slate-100">
+                      <div 
+                        onClick={() => {
+                          setLightboxItems(item.images.map(img => ({ url: img.viewUrl, thumbnailUrl: img.thumbnailUrl })));
+                          setLightboxIndex(0);
+                          setShowLightbox(true);
                         }}
-                      />
+                        className="relative h-48 cursor-pointer overflow-hidden group/img"
+                      >
+                        <img 
+                          src={item.images[0].viewUrl} 
+                          alt={item.name} 
+                          className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-300"
+                        />
+                        {item.images.length > 1 && (
+                          <span className="absolute bottom-2 right-2 px-2.5 py-1 bg-slate-900/80 text-white rounded-full text-[10px] font-bold shadow-md">
+                            📷 {item.images.length} photos
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Multi-Image Thumbnail Gallery Strip */}
                       {item.images.length > 1 && (
-                        <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-slate-900/80 text-white rounded-full text-[10px] font-bold">
-                          +{item.images.length - 1} more
-                        </span>
+                        <div className="flex gap-1.5 p-2 overflow-x-auto bg-slate-50 border-t border-slate-100">
+                          {item.images.map((img, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setLightboxItems(item.images.map(i => ({ url: i.viewUrl, thumbnailUrl: i.thumbnailUrl })));
+                                setLightboxIndex(idx);
+                                setShowLightbox(true);
+                              }}
+                              className="w-10 h-10 rounded-lg overflow-hidden border border-slate-200 hover:border-blue-500 shrink-0 transition"
+                            >
+                              <img src={img.thumbnailUrl || img.viewUrl} alt={`Thumb ${idx}`} className="w-full h-full object-cover" />
+                            </button>
+                          ))}
+                        </div>
                       )}
                     </div>
                   ) : (
@@ -856,17 +911,16 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                 />
               </div>
 
-              {/* Google Drive Image Upload */}
-              {/* Google Drive Image Attachments */}
+              {/* Google Drive Image Attachments (Local Staging) */}
               <div className="space-y-3 pt-2 border-t border-slate-100">
                 <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <ImageIcon className="w-4 h-4 text-blue-600" />
                     Item Media & Attachments
                   </span>
-                  {uploadingImage && (
+                  {savingItem && (
                     <span className="text-[11px] text-blue-600 font-semibold flex items-center gap-1">
-                      <RefreshCw className="w-3 h-3 animate-spin" /> Uploading to Drive...
+                      <RefreshCw className="w-3 h-3 animate-spin" /> Uploading to Drive & Saving...
                     </span>
                   )}
                 </label>
@@ -876,8 +930,9 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                   ref={fileInputRef}
                   type="file" 
                   accept="image/*" 
-                  disabled={uploadingImage}
-                  onChange={handleImageUpload} 
+                  multiple
+                  disabled={savingItem}
+                  onChange={handleImageFileSelect} 
                   className="hidden" 
                 />
                 <input 
@@ -885,8 +940,8 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                   type="file" 
                   accept="image/*" 
                   capture="environment"
-                  disabled={uploadingImage}
-                  onChange={handleImageUpload} 
+                  disabled={savingItem}
+                  onChange={handleImageFileSelect} 
                   className="hidden" 
                 />
 
@@ -894,7 +949,7 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    disabled={uploadingImage}
+                    disabled={savingItem}
                     onClick={() => fileInputRef.current?.click()}
                     className="flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-sm disabled:opacity-50"
                   >
@@ -904,7 +959,7 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
 
                   <button
                     type="button"
-                    disabled={uploadingImage}
+                    disabled={savingItem}
                     onClick={() => setShowCameraModal(true)}
                     className="flex items-center justify-center gap-2 px-3 py-2.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 text-blue-700 font-bold rounded-xl text-xs transition shadow-sm disabled:opacity-50"
                   >
@@ -913,22 +968,52 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                   </button>
                 </div>
 
-                {/* Uploaded Images Preview List */}
+                {/* Existing Drive Images */}
                 {itemImages.length > 0 && (
-                  <div className="grid grid-cols-4 gap-2 pt-1">
-                    {itemImages.map((img, idx) => (
-                      <div key={idx} className="relative group rounded-xl overflow-hidden border border-slate-200 h-20 bg-slate-50 shadow-sm">
-                        <img src={img.viewUrl} alt="Item" className="w-full h-full object-cover" />
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveImage(idx)}
-                          className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition shadow-sm"
-                          title="Remove Image"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    ))}
+                  <div className="space-y-1 pt-1">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Already in Google Drive:</span>
+                    <div className="grid grid-cols-4 gap-2">
+                      {itemImages.map((img, idx) => (
+                        <div key={idx} className="relative group rounded-xl overflow-hidden border border-slate-200 h-20 bg-slate-50 shadow-sm">
+                          <img src={img.viewUrl} alt="Item" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveExistingImage(idx)}
+                            className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition shadow-sm"
+                            title="Remove & Trash from Google Drive on Save"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Staged Local Draft Images */}
+                {stagedFiles.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1">
+                      <span>Ready to Upload ({stagedFiles.length}):</span>
+                    </span>
+                    <div className="grid grid-cols-4 gap-2">
+                      {stagedFiles.map((staged) => (
+                        <div key={staged.id} className="relative group rounded-xl overflow-hidden border-2 border-blue-400 h-20 bg-slate-900 shadow-sm">
+                          <img src={staged.base64Data} alt="Staged" className="w-full h-full object-cover" />
+                          <span className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-blue-600 text-white rounded text-[8px] font-bold uppercase">
+                            Staged
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveStagedFile(staged.id)}
+                            className="absolute top-1 right-1 p-1 bg-rose-600 text-white rounded-lg transition opacity-90 hover:opacity-100 shadow-sm"
+                            title="Remove from staging"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -943,10 +1028,14 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploadingImage}
-                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition disabled:opacity-50"
+                  disabled={savingItem}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md transition disabled:opacity-50 flex items-center gap-2"
                 >
-                  Save Item
+                  {savingItem ? (
+                    <><RefreshCw className="w-4 h-4 animate-spin" /> Uploading to Drive & Saving...</>
+                  ) : (
+                    <><Check className="w-4 h-4" /> Save Item</>
+                  )}
                 </button>
               </div>
             </form>
@@ -959,8 +1048,17 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
         <LiveCameraModal
           onClose={() => setShowCameraModal(false)}
           onCapture={(base64, fileName) => {
-            uploadBase64Image(base64, fileName, 'image/jpeg');
+            stageBase64Image(base64, fileName, 'image/jpeg');
           }}
+        />
+      )}
+
+      {/* ── MEDIA LIGHTBOX MODAL ── */}
+      {showLightbox && (
+        <MediaLightboxModal
+          items={lightboxItems}
+          initialIndex={lightboxIndex}
+          onClose={() => setShowLightbox(false)}
         />
       )}
 

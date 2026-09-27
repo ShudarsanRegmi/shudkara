@@ -314,6 +314,13 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       if (post.googleDriveFolderId) {
         await deleteFolderFromDrive(post.googleDriveFolderId);
       }
+      if (Array.isArray(post.media)) {
+        for (const item of post.media) {
+          if (item.googleDriveId) {
+            await deleteFolderFromDrive(item.googleDriveId);
+          }
+        }
+      }
 
       await col.deleteOne({ _id: new ObjectId(idParam) });
       return { status: 200, jsonBody: { success: true } };
