@@ -3,7 +3,7 @@ import {
   Package, Plus, FolderPlus, Tag, Trash2, Edit3, Image as ImageIcon, 
   Search, Lock, RefreshCw, X, Check,
   Layers, Shield, Camera, Upload, ChevronDown, ChevronUp,
-  DollarSign, MapPin, Gift, Sparkles, Clock
+  DollarSign, MapPin, Gift, Sparkles, Clock, Filter
 } from 'lucide-react';
 import { MediaLightboxModal } from './MediaLightboxModal';
 import type { LightboxMediaItem } from './MediaLightboxModal';
@@ -64,14 +64,14 @@ const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose })
       setErrorMsg(null);
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } }
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
       } catch (err: any) {
         console.error('Camera access error:', err);
-        setErrorMsg('Camera access denied or unavailable. You can use the direct camera upload button.');
+        setErrorMsg('Camera access denied or unavailable. You can also use the direct file browse button.');
       }
     };
     startStream();
@@ -84,8 +84,8 @@ const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose })
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current || document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -96,48 +96,71 @@ const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose })
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-150">
-      <div className="bg-slate-900 text-white rounded-3xl w-full max-w-lg p-5 shadow-2xl space-y-4 border border-slate-700 relative">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-sm text-blue-400">
-            <Camera className="w-5 h-5" />
-            <span>Live Camera Snapshot</span>
-          </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white rounded-lg">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 z-[70] bg-slate-950 text-white flex flex-col animate-in fade-in duration-150">
+      {/* Top Header Bar */}
+      <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800 z-10">
+        <div className="flex items-center gap-2 font-extrabold text-sm text-blue-400 tracking-wide">
+          <Camera className="w-5 h-5" />
+          <span>Full Camera Viewfinder</span>
         </div>
+        <button 
+          onClick={onClose} 
+          className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition"
+          title="Close Camera"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
 
+      {/* Main Viewfinder Section */}
+      <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden p-2">
         {errorMsg ? (
-          <div className="p-4 bg-red-900/40 border border-red-700/60 rounded-2xl text-xs text-red-200 leading-relaxed">
+          <div className="p-6 max-w-md bg-red-900/50 border border-red-700 text-center rounded-3xl text-xs text-red-200 leading-relaxed">
             {errorMsg}
           </div>
         ) : (
-          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+          <div className="w-full h-full flex items-center justify-center relative rounded-3xl overflow-hidden border border-slate-800/80">
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              muted 
+              className="w-full h-full object-contain max-h-[82vh]" 
+            />
             <canvas ref={canvasRef} className="hidden" />
           </div>
         )}
+      </div>
 
-        <div className="flex items-center justify-between pt-2">
-          <button
-            type="button"
-            onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition"
-          >
-            Flip Camera 🔄
-          </button>
+      {/* Bottom Shutter Controls Bar */}
+      <div className="px-8 py-5 bg-slate-900 border-t border-slate-800 flex items-center justify-between z-10">
+        <button
+          type="button"
+          onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
+          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition flex items-center gap-2"
+        >
+          <span>Flip Camera</span> 🔄
+        </button>
 
-          <button
-            type="button"
-            onClick={handleTakeSnapshot}
-            disabled={!!errorMsg}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2"
-          >
-            <Camera className="w-4 h-4" />
-            Snap Photo
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={handleTakeSnapshot}
+          disabled={!!errorMsg}
+          className="w-16 h-16 bg-white hover:bg-slate-200 disabled:opacity-50 text-slate-900 rounded-full flex items-center justify-center shadow-2xl transition ring-4 ring-blue-500/40 active:scale-95"
+          title="Snap Photo"
+        >
+          <div className="w-12 h-12 rounded-full border-2 border-slate-900 flex items-center justify-center">
+            <Camera className="w-6 h-6 text-slate-900" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-400 hover:text-white transition"
+        >
+          Cancel
+        </button>
       </div>
     </div>
   );
@@ -160,6 +183,7 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string>('all');
   const [selectedLifecycle, setSelectedLifecycle] = useState<string>('all');
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
 
   // Modal States
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -703,62 +727,102 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
           })}
         </div>
 
-        {/* Search, Lifecycle & Tag Filter Bar */}
-        <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex flex-col md:flex-row flex-wrap items-center justify-between gap-3">
-          <div className="relative w-full md:w-72">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search items by name, desc, location..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 text-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
-            />
-          </div>
+        {/* Search & Expandable Filter Bar */}
+        <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl space-y-3 shadow-sm">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-3">
+            <div className="relative w-full md:w-80">
+              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search items by name, desc, location..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 text-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+              />
+            </div>
 
-          {/* Lifecycle Filter */}
-          <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1">
-            <span className="text-xs font-bold text-slate-500 flex items-center gap-1 shrink-0">
-              <Clock className="w-3.5 h-3.5 text-blue-600" /> Lifecycle:
-            </span>
-            {['all', 'Active', 'Archived', 'Donated', 'Sold', 'End of Life'].map(lc => (
+            <div className="flex items-center gap-2 w-full md:w-auto justify-end">
+              {/* Expandable Filter Toggle Button */}
               <button
-                key={lc}
-                onClick={() => setSelectedLifecycle(lc)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition ${
-                  selectedLifecycle === lc ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                type="button"
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition border shadow-xs ${
+                  showAdvancedFilters || selectedLifecycle !== 'all' || selectedTag !== 'all'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
-                {lc === 'all' ? 'All Lifecycle' : lc}
+                <Filter className="w-3.5 h-3.5" />
+                <span>Filter & Lifecycle</span>
+                {selectedLifecycle !== 'all' && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-white/20 font-bold uppercase">
+                    {selectedLifecycle}
+                  </span>
+                )}
+                {selectedTag !== 'all' && (
+                  <span className="px-1.5 py-0.5 rounded text-[9px] bg-white/20 font-bold">
+                    #{selectedTag}
+                  </span>
+                )}
+                {showAdvancedFilters ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
               </button>
-            ))}
+            </div>
           </div>
 
-          {/* Tag Filter */}
-          {allTags.length > 0 && (
-            <div className="flex items-center gap-2 overflow-x-auto max-w-full pb-1">
-              <span className="text-xs font-bold text-slate-500 flex items-center gap-1 shrink-0">
-                <Tag className="w-3.5 h-3.5 text-blue-600" /> Tag:
-              </span>
-              <button
-                onClick={() => setSelectedTag('all')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition ${
-                  selectedTag === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'
-                }`}
-              >
-                All Tags
-              </button>
-              {allTags.map(tag => (
-                <button
-                  key={tag}
-                  onClick={() => setSelectedTag(tag)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition ${
-                    selectedTag === tag ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'
-                  }`}
-                >
-                  #{tag}
-                </button>
-              ))}
+          {/* Expandable Filter Menu Drawer */}
+          {showAdvancedFilters && (
+            <div className="pt-3 border-t border-slate-200/80 space-y-3 animate-in fade-in duration-150">
+              {/* Lifecycle Status Filter */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" /> Lifecycle Status Filter:
+                </span>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {['all', 'Active', 'Archived', 'Donated', 'Sold', 'End of Life'].map((lc) => (
+                    <button
+                      key={lc}
+                      onClick={() => setSelectedLifecycle(lc)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        selectedLifecycle === lc
+                          ? 'bg-slate-900 text-white shadow-sm'
+                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {lc === 'all' ? 'All Lifecycle' : lc}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Tag Filter */}
+              {allTags.length > 0 && (
+                <div className="space-y-1.5 pt-2 border-t border-slate-200/60">
+                  <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                    <Tag className="w-3.5 h-3.5 text-blue-600" /> Tag Filter:
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setSelectedTag('all')}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                        selectedTag === 'all' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      All Tags
+                    </button>
+                    {allTags.map((tag) => (
+                      <button
+                        key={tag}
+                        onClick={() => setSelectedTag(tag)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                          selectedTag === tag ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        #{tag}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
