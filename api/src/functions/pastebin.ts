@@ -1,6 +1,10 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
+import { google } from 'googleapis';
 import { connectToMongo, verifySession, extractToken } from './db';
+import { 
+  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, trashFileOrFolderInDrive 
+} from './gdrive';
 
 const EXPIRY_MAP: Record<string, number> = {
   '10m': 10 * 60 * 1000,
@@ -8,6 +12,67 @@ const EXPIRY_MAP: Record<string, number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
 };
+
+// Cache for Pastebin parent folder ID in Google Drive
+let pastebinParentFolderId: string | null = null;
+
+async function getOrCreatePastebinFolderId(): Promise<string> {
+  if (pastebinParentFolderId) return pastebinParentFolderId;
+
+  const auth = getAuthClient();
+  const drive = google.drive({ version: 'v3', auth });
+
+  const parentFolderId = getFolderId();
+  const query = parentFolderId 
+    ? `'${parentFolderId}' in parents and name = 'Pastebin' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
+    : `name = 'Pastebin' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+
+  const res = await drive.files.list({
+    q: query,
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    fields: 'files(id, name)',
+    pageSize: 1
+  });
+
+  if (res.data.files && res.data.files.length > 0) {
+    pastebinParentFolderId = res.data.files[0].id!;
+    return pastebinParentFolderId;
+  }
+
+  const folderId = await createFolderInDrive('Pastebin');
+  pastebinParentFolderId = folderId;
+  return pastebinParentFolderId;
+}
+
+async function uploadBase64ImageToDrive(title: string, content: string): Promise<{ viewUrl: string; fileId: string } | null> {
+  if (!content || typeof content !== 'string') return null;
+
+  let mimeType = 'image/jpeg';
+  let base64Data = content;
+
+  if (content.startsWith('data:image/')) {
+    const match = content.match(/^data:(image\/[a-zA-Z0-9+\-+.]+);base64,(.+)$/s);
+    if (!match) return null;
+    mimeType = match[1];
+    base64Data = match[2];
+  } else {
+    return null;
+  }
+
+  try {
+    const folderId = await getOrCreatePastebinFolderId();
+    const ext = mimeType.split('/')[1] || 'jpg';
+    const cleanTitle = (title || 'Photo').substring(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `paste_${Date.now()}_${cleanTitle}.${ext}`;
+
+    const uploaded = await uploadToFolder(folderId, fileName, mimeType, base64Data);
+    return { viewUrl: uploaded.viewUrl, fileId: uploaded.fileId };
+  } catch (err: any) {
+    console.error('[Pastebin] GDrive image upload error:', err.message || err);
+    return null;
+  }
+}
 
 export async function pastebinHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;
@@ -22,12 +87,25 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
     const token = extractToken(request);
     const isAuthorized = await verifySession(token);
 
-    // Auto-cleanup expired ephemeral pastes
+    // Auto-cleanup expired ephemeral pastes & trash their Google Drive images
     const nowIso = new Date().toISOString();
-    await col.deleteMany({
+    const expiredPastes = await col.find({
       type: 'ephemeral',
       expiresAt: { $exists: true, $ne: null, $lt: nowIso }
-    });
+    }).toArray();
+
+    for (const ep of expiredPastes) {
+      if (ep.imageFileId) {
+        await trashFileOrFolderInDrive(ep.imageFileId);
+      }
+    }
+
+    if (expiredPastes.length > 0) {
+      await col.deleteMany({
+        type: 'ephemeral',
+        expiresAt: { $exists: true, $ne: null, $lt: nowIso }
+      });
+    }
 
     // ── 1. GET - Fetch pastes & section privacy ──────────────────────────────
     if (method === 'GET') {
@@ -43,8 +121,11 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
         const { _id, ...rest } = paste;
 
-        // If burn-after-reading, delete immediately after single read
+        // If burn-after-reading, trash Google Drive image & delete immediately after single read
         if (paste.type === 'ephemeral' && paste.isBurnAfterReading) {
+          if (paste.imageFileId) {
+            await trashFileOrFolderInDrive(paste.imageFileId);
+          }
           await col.deleteOne({ id: singleId });
         }
 
@@ -109,6 +190,20 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
         return { status: 401, jsonBody: { error: 'Unauthorized. Login required to create private pastes.' } };
       }
 
+      let finalContent = content.trim();
+      let imageFileId: string | null = null;
+      let pasteLang = language || 'plaintext';
+
+      // Check if image base64 data is present -> upload to Google Drive!
+      if (finalContent.startsWith('data:image/') || pasteLang === 'image') {
+        const driveResult = await uploadBase64ImageToDrive(title || 'Pasted Image', finalContent);
+        if (driveResult) {
+          finalContent = driveResult.viewUrl;
+          imageFileId = driveResult.fileId;
+          pasteLang = 'image';
+        }
+      }
+
       const id = body.id || (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15));
       const pasteType = type === 'ephemeral' ? 'ephemeral' : 'persistent';
       let expiresAt: string | null = null;
@@ -129,9 +224,10 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
       const newPaste = {
         id,
         title: title ? title.trim() : 'Untitled Paste',
-        content: content.trim(),
-        language: language || 'plaintext',
-        category: category || 'General',
+        content: finalContent,
+        imageFileId: imageFileId || null,
+        language: pasteLang,
+        category: category || (imageFileId ? 'Images' : 'General'),
         type: pasteType,
         expiryOption: expiryOption || (pasteType === 'ephemeral' ? '24h' : 'never'),
         expiresAt,
@@ -164,7 +260,26 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
       const updateFields: any = { updatedAt: new Date().toISOString() };
       if (body.title !== undefined) updateFields.title = body.title.trim();
-      if (body.content !== undefined) updateFields.content = body.content.trim();
+      
+      if (body.content !== undefined) {
+        let contentVal = body.content.trim();
+        if (contentVal.startsWith('data:image/') || body.language === 'image') {
+          const driveResult = await uploadBase64ImageToDrive(body.title || existing.title, contentVal);
+          if (driveResult) {
+            updateFields.content = driveResult.viewUrl;
+            updateFields.imageFileId = driveResult.fileId;
+            updateFields.language = 'image';
+            if (existing.imageFileId && existing.imageFileId !== driveResult.fileId) {
+              await trashFileOrFolderInDrive(existing.imageFileId);
+            }
+          } else {
+            updateFields.content = contentVal;
+          }
+        } else {
+          updateFields.content = contentVal;
+        }
+      }
+
       if (body.language !== undefined) updateFields.language = body.language;
       if (body.category !== undefined) updateFields.category = body.category;
       if (body.isPrivate !== undefined) updateFields.isPrivate = !!body.isPrivate;
@@ -178,6 +293,11 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
     // ── 5. DELETE - Remove paste ──────────────────────────────────────────────
     if (method === 'DELETE' && pasteId) {
+      const pasteToDelete = await col.findOne({ id: pasteId });
+      if (pasteToDelete && pasteToDelete.imageFileId) {
+        await trashFileOrFolderInDrive(pasteToDelete.imageFileId);
+      }
+
       const result = await col.deleteOne({ id: pasteId });
       if (result.deletedCount === 0) {
         return { status: 404, jsonBody: { error: 'Paste not found.' } };

@@ -849,7 +849,7 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
 
                   {/* Snippet Preview Box */}
                   <div className="bg-slate-900 text-slate-100 rounded-2xl p-4 font-mono text-xs overflow-hidden relative max-h-36 border border-slate-800">
-                    {(p.language === 'image' || p.content.startsWith('data:image/')) ? (
+                    {(p.language === 'image' || p.content.startsWith('data:image/') || p.content.includes('googleusercontent.com')) ? (
                       <img src={p.content} alt={p.title} className="max-h-28 w-full object-contain rounded-lg mx-auto" />
                     ) : (
                       <pre className="line-clamp-4 leading-relaxed whitespace-pre-wrap break-all text-slate-100">
@@ -924,7 +924,7 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
 
             {/* Code / Image View Area */}
             <div className="bg-slate-950 rounded-2xl p-5 border border-slate-800 font-mono text-xs sm:text-sm text-slate-100 overflow-x-auto max-h-[60vh] leading-relaxed relative">
-              {(viewingPaste.language === 'image' || viewingPaste.content.startsWith('data:image/')) ? (
+              {(viewingPaste.language === 'image' || viewingPaste.content.startsWith('data:image/') || viewingPaste.content.includes('googleusercontent.com')) ? (
                 <img src={viewingPaste.content} alt={viewingPaste.title} className="max-h-[50vh] w-full object-contain rounded-xl mx-auto" />
               ) : (
                 <pre className="whitespace-pre-wrap break-all text-slate-100 font-mono">
