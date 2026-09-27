@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Package, Plus, FolderPlus, Tag, Trash2, Edit3, Image as ImageIcon, 
   Search, Lock, RefreshCw, X, Check,
-  Layers, Shield, Camera, Upload
+  Layers, Shield, Camera, Upload, ChevronDown, ChevronUp,
+  DollarSign, MapPin, Gift, Sparkles, Clock
 } from 'lucide-react';
 import { MediaLightboxModal } from './MediaLightboxModal';
 import type { LightboxMediaItem } from './MediaLightboxModal';
@@ -15,6 +16,19 @@ export interface InventoryGroup {
   createdAt: string;
 }
 
+export type LifecycleStatus = 'Active' | 'Archived' | 'Donated' | 'Sold' | 'End of Life';
+
+export interface AcquisitionDetails {
+  method: 'Bought' | 'Gifted' | 'Inherited' | 'Found' | 'Other';
+  date?: string;
+  price?: number | null;
+  currency?: string;
+  merchant?: string;
+  warrantyExpiry?: string;
+  giftedBy?: string;
+  notes?: string;
+}
+
 export interface InventoryItem {
   _id: string;
   groupId: string;
@@ -23,6 +37,9 @@ export interface InventoryItem {
   tags: string[];
   images: { fileId: string; viewUrl: string; thumbnailUrl: string }[];
   quantity: number;
+  lifecycle?: LifecycleStatus;
+  storageLocation?: string;
+  acquisition?: AcquisitionDetails | null;
   createdAt: string;
 }
 
@@ -132,9 +149,17 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [activeGroupId, setActiveGroupId] = useState<string | 'all'>('all');
   const [loading, setLoading] = useState<boolean>(true);
 
+  // Built-in Tag Cheatsheet recommendations
+  const BUILTIN_TAG_CHEATSHEET = [
+    'work', 'fitness', 'travel', 'winter', 'summer', 'electronics', 'kitchen',
+    'valuable', 'daily', 'gift', 'warranty', 'office', 'bedroom', 'tool',
+    'gadget', 'clothing', 'documents', 'accessories', 'storage'
+  ];
+
   // Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string>('all');
+  const [selectedLifecycle, setSelectedLifecycle] = useState<string>('all');
 
   // Modal States
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -150,6 +175,19 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
   const [itemGroupId, setItemGroupId] = useState('');
   const [itemQuantity, setItemQuantity] = useState(1);
   const [itemTagsInput, setItemTagsInput] = useState('');
+  const [itemLifecycle, setItemLifecycle] = useState<LifecycleStatus>('Active');
+  const [itemStorageLocation, setItemStorageLocation] = useState('');
+
+  // Expandable Acquisition Details State
+  const [showAcquisitionSection, setShowAcquisitionSection] = useState(false);
+  const [acqMethod, setAcqMethod] = useState<'Bought' | 'Gifted' | 'Inherited' | 'Found' | 'Other'>('Bought');
+  const [acqDate, setAcqDate] = useState('');
+  const [acqPrice, setAcqPrice] = useState<string>('');
+  const [acqCurrency, setAcqCurrency] = useState('NPR');
+  const [acqMerchant, setAcqMerchant] = useState('');
+  const [acqWarrantyExpiry, setAcqWarrantyExpiry] = useState('');
+  const [acqGiftedBy, setAcqGiftedBy] = useState('');
+  const [acqNotes, setAcqNotes] = useState('');
   
   // Image Upload, Staging & Camera State
   const [itemImages, setItemImages] = useState<{ fileId: string; viewUrl: string; thumbnailUrl: string }[]>([]);
@@ -287,6 +325,30 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       setItemQuantity(item.quantity || 1);
       setItemTagsInput((item.tags || []).join(', '));
       setItemImages(item.images || []);
+      setItemLifecycle(item.lifecycle || 'Active');
+      setItemStorageLocation(item.storageLocation || '');
+
+      if (item.acquisition) {
+        setShowAcquisitionSection(true);
+        setAcqMethod(item.acquisition.method || 'Bought');
+        setAcqDate(item.acquisition.date || '');
+        setAcqPrice(item.acquisition.price !== null && item.acquisition.price !== undefined ? String(item.acquisition.price) : '');
+        setAcqCurrency(item.acquisition.currency || 'NPR');
+        setAcqMerchant(item.acquisition.merchant || '');
+        setAcqWarrantyExpiry(item.acquisition.warrantyExpiry || '');
+        setAcqGiftedBy(item.acquisition.giftedBy || '');
+        setAcqNotes(item.acquisition.notes || '');
+      } else {
+        setShowAcquisitionSection(false);
+        setAcqMethod('Bought');
+        setAcqDate('');
+        setAcqPrice('');
+        setAcqCurrency('NPR');
+        setAcqMerchant('');
+        setAcqWarrantyExpiry('');
+        setAcqGiftedBy('');
+        setAcqNotes('');
+      }
     } else {
       setItemEditing(null);
       setItemName('');
@@ -295,9 +357,36 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       setItemQuantity(1);
       setItemTagsInput('');
       setItemImages([]);
+      setItemLifecycle('Active');
+      setItemStorageLocation('');
+
+      setShowAcquisitionSection(false);
+      setAcqMethod('Bought');
+      setAcqDate('');
+      setAcqPrice('');
+      setAcqCurrency('NPR');
+      setAcqMerchant('');
+      setAcqWarrantyExpiry('');
+      setAcqGiftedBy('');
+      setAcqNotes('');
     }
     setStagedFiles([]);
     setShowItemModal(true);
+  };
+
+  const toggleCheatsheetTag = (tagToToggle: string) => {
+    const currentTags = itemTagsInput
+      .split(',')
+      .map(t => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (currentTags.includes(tagToToggle.toLowerCase())) {
+      const filtered = currentTags.filter(t => t !== tagToToggle.toLowerCase());
+      setItemTagsInput(filtered.join(', '));
+    } else {
+      const updated = [...currentTags, tagToToggle.toLowerCase()];
+      setItemTagsInput(updated.join(', '));
+    }
   };
 
   const stageBase64Image = (base64Data: string, fileName: string, mimeType: string = 'image/jpeg') => {
@@ -382,8 +471,19 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
       const finalImages = [...itemImages, ...uploadedDriveImages];
       const tags = itemTagsInput
         .split(',')
-        .map(t => t.trim())
+        .map(t => t.trim().toLowerCase())
         .filter(t => t.length > 0);
+
+      const acquisitionData = showAcquisitionSection ? {
+        method: acqMethod,
+        date: acqDate || null,
+        price: acqPrice.trim() !== '' ? parseFloat(acqPrice) : null,
+        currency: acqCurrency,
+        merchant: acqMerchant.trim(),
+        warrantyExpiry: acqWarrantyExpiry || null,
+        giftedBy: acqGiftedBy.trim(),
+        notes: acqNotes.trim()
+      } : null;
 
       const url = itemEditing 
         ? `/api/inventory/items/${itemEditing._id}`
@@ -399,7 +499,10 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
           groupId: itemGroupId,
           quantity: itemQuantity,
           tags,
-          images: finalImages
+          images: finalImages,
+          lifecycle: itemLifecycle,
+          storageLocation: itemStorageLocation,
+          acquisition: acquisitionData
         })
       });
 
@@ -458,14 +561,32 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
     );
   }
 
+  const getLifecycleBadge = (status?: LifecycleStatus) => {
+    switch (status) {
+      case 'Archived':
+        return <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-bold text-[10px] flex items-center gap-1">📦 Archived</span>;
+      case 'Donated':
+        return <span className="px-2 py-0.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-md font-bold text-[10px] flex items-center gap-1">🎁 Donated</span>;
+      case 'Sold':
+        return <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-bold text-[10px] flex items-center gap-1">💰 Sold</span>;
+      case 'End of Life':
+        return <span className="px-2 py-0.5 bg-slate-100 text-slate-600 border border-slate-200 rounded-md font-bold text-[10px] flex items-center gap-1">🗑️ End of Life</span>;
+      case 'Active':
+      default:
+        return <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-md font-bold text-[10px] flex items-center gap-1">🟢 Active</span>;
+    }
+  };
+
   // Filtered Items
   const allTags = Array.from(new Set(items.flatMap(i => i.tags || [])));
   const filteredItems = items.filter(item => {
     const matchesGroup = activeGroupId === 'all' || item.groupId === activeGroupId;
     const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          (item.description || '').toLowerCase().includes(searchQuery.toLowerCase());
+                          (item.description || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (item.storageLocation || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesTag = selectedTag === 'all' || (item.tags || []).includes(selectedTag);
-    return matchesGroup && matchesSearch && matchesTag;
+    const matchesLifecycle = selectedLifecycle === 'all' || (item.lifecycle || 'Active') === selectedLifecycle;
+    return matchesGroup && matchesSearch && matchesTag && matchesLifecycle;
   });
 
   return (
@@ -493,7 +614,7 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
             Personal Belongings & Vault
           </h1>
           <p className="text-xs text-slate-500 max-w-xl">
-            Organize personal items into custom groups (dresses, utensils, books, electronics). Upload item images stored safely in your Google Drive <code className="bg-slate-100 px-1 py-0.5 rounded text-blue-700 font-mono">StorageBuckets/ShudkaraBucket/Inventory</code> subfolder.
+            Organize personal items into custom groups (dresses, utensils, books, electronics). Track item lifecycle stages, storage locations, acquisition origin, and photos stored in Google Drive.
           </p>
         </div>
 
@@ -582,24 +703,42 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
           })}
         </div>
 
-        {/* Search & Tag Filter Bar */}
+        {/* Search, Lifecycle & Tag Filter Bar */}
         <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl flex flex-col md:flex-row flex-wrap items-center justify-between gap-3">
-          <div className="relative w-full md:w-80">
+          <div className="relative w-full md:w-72">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Search items by name or description..."
+              placeholder="Search items by name, desc, location..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 text-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
             />
           </div>
 
+          {/* Lifecycle Filter */}
+          <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1">
+            <span className="text-xs font-bold text-slate-500 flex items-center gap-1 shrink-0">
+              <Clock className="w-3.5 h-3.5 text-blue-600" /> Lifecycle:
+            </span>
+            {['all', 'Active', 'Archived', 'Donated', 'Sold', 'End of Life'].map(lc => (
+              <button
+                key={lc}
+                onClick={() => setSelectedLifecycle(lc)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold shrink-0 transition ${
+                  selectedLifecycle === lc ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {lc === 'all' ? 'All Lifecycle' : lc}
+              </button>
+            ))}
+          </div>
+
           {/* Tag Filter */}
           {allTags.length > 0 && (
             <div className="flex items-center gap-2 overflow-x-auto max-w-full pb-1">
               <span className="text-xs font-bold text-slate-500 flex items-center gap-1 shrink-0">
-                <Tag className="w-3.5 h-3.5 text-blue-600" /> Filter Tag:
+                <Tag className="w-3.5 h-3.5 text-blue-600" /> Tag:
               </span>
               <button
                 onClick={() => setSelectedTag('all')}
@@ -708,10 +847,13 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
 
                   {/* Body Content */}
                   <div className="p-5 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="px-2.5 py-0.5 bg-blue-50 text-blue-700 font-extrabold text-[10px] rounded-md border border-blue-100 uppercase tracking-wider">
-                        {groupName}
-                      </span>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="px-2.5 py-0.5 bg-blue-50 text-blue-700 font-extrabold text-[10px] rounded-md border border-blue-100 uppercase tracking-wider">
+                          {groupName}
+                        </span>
+                        {getLifecycleBadge(item.lifecycle)}
+                      </div>
                       <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
                         Qty: {item.quantity || 1}
                       </span>
@@ -725,6 +867,41 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                         </p>
                       )}
                     </div>
+
+                    {/* Storage Location Badge */}
+                    {item.storageLocation && (
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50/90 border border-amber-200/80 px-2.5 py-1 rounded-xl">
+                        <MapPin className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>{item.storageLocation}</span>
+                      </div>
+                    )}
+
+                    {/* Acquisition Details Badge */}
+                    {item.acquisition && (
+                      <div className="text-[11px] bg-slate-50 border border-slate-200 p-2.5 rounded-2xl space-y-1">
+                        <div className="flex items-center justify-between font-bold text-slate-700">
+                          <span className="flex items-center gap-1 text-[10px] uppercase font-extrabold text-blue-600">
+                            {item.acquisition.method === 'Bought' && <DollarSign className="w-3 h-3 text-emerald-600" />}
+                            {item.acquisition.method === 'Gifted' && <Gift className="w-3 h-3 text-purple-600" />}
+                            {item.acquisition.method}
+                          </span>
+                          {item.acquisition.price !== null && item.acquisition.price !== undefined && (
+                            <span className="text-slate-900 font-extrabold">
+                              {item.acquisition.currency || 'NPR'} {item.acquisition.price.toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+                        {item.acquisition.giftedBy && (
+                          <p className="text-[10px] text-slate-500">From: <span className="font-semibold text-slate-700">{item.acquisition.giftedBy}</span></p>
+                        )}
+                        {item.acquisition.merchant && (
+                          <p className="text-[10px] text-slate-500">Store: <span className="font-semibold text-slate-700">{item.acquisition.merchant}</span></p>
+                        )}
+                        {item.acquisition.date && (
+                          <p className="text-[10px] text-slate-400">Date: {new Date(item.acquisition.date).toLocaleDateString()}</p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Tags */}
                     {item.tags && item.tags.length > 0 && (
@@ -889,6 +1066,35 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                 </select>
               </div>
 
+              {/* Lifecycle & Storage Location */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Lifecycle Status</label>
+                  <select
+                    value={itemLifecycle}
+                    onChange={(e) => setItemLifecycle(e.target.value as LifecycleStatus)}
+                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                  >
+                    <option value="Active">🟢 Active (In use)</option>
+                    <option value="Archived">📦 Archived (In storage/boxes)</option>
+                    <option value="Donated">🎁 Donated / Given away</option>
+                    <option value="Sold">💰 Sold</option>
+                    <option value="End of Life">🗑️ End of Life / Disposed</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-800 block mb-1">Storage Location (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Storage Box #3 (Attic), Closet"
+                    value={itemStorageLocation}
+                    onChange={(e) => setItemStorageLocation(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="text-xs font-bold text-slate-800 block mb-1">Description & Specs</label>
                 <textarea
@@ -900,8 +1106,9 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                 />
               </div>
 
-              <div>
-                <label className="text-xs font-bold text-slate-800 block mb-1">Tags (Comma-separated)</label>
+              {/* Tags Input with Interactive Cheatsheet */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-800 block">Tags (Comma-separated)</label>
                 <input
                   type="text"
                   placeholder="e.g. winter, formal, kitchen, favorite"
@@ -909,6 +1116,161 @@ export const Inventory: React.FC<InventoryProps> = ({ authToken }) => {
                   onChange={(e) => setItemTagsInput(e.target.value)}
                   className="w-full bg-white border border-slate-300 rounded-xl p-3 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
                 />
+
+                {/* Tag Cheatsheet Bar */}
+                <div className="bg-slate-50 border border-slate-200 p-2.5 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-500">
+                    <span className="flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Tag Cheatsheet & Suggestions:
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-normal">Click pill to toggle</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                    {Array.from(new Set([...BUILTIN_TAG_CHEATSHEET, ...allTags])).map(tag => {
+                      const active = itemTagsInput
+                        .split(',')
+                        .map(t => t.trim().toLowerCase())
+                        .includes(tag.toLowerCase());
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => toggleCheatsheetTag(tag)}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 ${
+                            active
+                              ? 'bg-blue-600 text-white shadow-xs'
+                              : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          #{tag} {active && <Check className="w-3 h-3" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* Expandable Acquisition & Origin Details Accordion */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/50">
+                <button
+                  type="button"
+                  onClick={() => setShowAcquisitionSection(!showAcquisitionSection)}
+                  className="w-full px-4 py-3 bg-white hover:bg-slate-50 flex items-center justify-between text-xs font-extrabold text-slate-800 transition"
+                >
+                  <span className="flex items-center gap-2">
+                    <DollarSign className="w-4 h-4 text-emerald-600" />
+                    Acquisition & Origin Details (Optional)
+                  </span>
+                  {showAcquisitionSection ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                </button>
+
+                {showAcquisitionSection && (
+                  <div className="p-4 space-y-3 bg-slate-50 border-t border-slate-200 animate-in fade-in duration-150">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 block mb-1">Acquisition Method</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(['Bought', 'Gifted', 'Inherited', 'Found', 'Other'] as const).map(m => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setAcqMethod(m)}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                              acqMethod === m
+                                ? 'bg-blue-600 text-white shadow-xs'
+                                : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            {m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-1">Price Paid</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={acqPrice}
+                          onChange={(e) => setAcqPrice(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-1">Currency</label>
+                        <select
+                          value={acqCurrency}
+                          onChange={(e) => setAcqCurrency(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                        >
+                          <option value="NPR">NPR (रु)</option>
+                          <option value="USD">USD ($)</option>
+                          <option value="EUR">EUR (€)</option>
+                          <option value="INR">INR (₹)</option>
+                          <option value="GBP">GBP (£)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-1">Acquisition Date</label>
+                        <input
+                          type="date"
+                          value={acqDate}
+                          onChange={(e) => setAcqDate(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {acqMethod === 'Bought' || acqMethod === 'Other' ? (
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">Merchant / Store Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Amazon, Daraz, Local Shop"
+                            value={acqMerchant}
+                            onChange={(e) => setAcqMerchant(e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                          />
+                        </div>
+                      ) : (
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">Gifted / Received From</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Uncle John, Mom, Friend"
+                            value={acqGiftedBy}
+                            onChange={(e) => setAcqGiftedBy(e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                          />
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-1">Warranty Expiry Date</label>
+                        <input
+                          type="date"
+                          value={acqWarrantyExpiry}
+                          onChange={(e) => setAcqWarrantyExpiry(e.target.value)}
+                          className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-700 block mb-1">Origin / Receipt Notes</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Receipt saved in drive, bought during Dashain sale"
+                        value={acqNotes}
+                        onChange={(e) => setAcqNotes(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded-xl p-2.5 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Google Drive Image Attachments (Local Staging) */}

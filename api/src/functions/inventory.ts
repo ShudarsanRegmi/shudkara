@@ -155,6 +155,18 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
           tags: Array.isArray(body.tags) ? body.tags : [],
           images: Array.isArray(body.images) ? body.images : [], // array of { fileId, viewUrl, thumbnailUrl }
           quantity: typeof body.quantity === 'number' ? body.quantity : 1,
+          lifecycle: body.lifecycle || 'Active', // Active, Archived, Donated, Sold, End of Life
+          storageLocation: body.storageLocation ? body.storageLocation.trim() : '',
+          acquisition: body.acquisition && typeof body.acquisition === 'object' ? {
+            method: body.acquisition.method || 'Bought',
+            date: body.acquisition.date || '',
+            price: typeof body.acquisition.price === 'number' ? body.acquisition.price : null,
+            currency: body.acquisition.currency || 'NPR',
+            merchant: body.acquisition.merchant ? body.acquisition.merchant.trim() : '',
+            warrantyExpiry: body.acquisition.warrantyExpiry || '',
+            giftedBy: body.acquisition.giftedBy ? body.acquisition.giftedBy.trim() : '',
+            notes: body.acquisition.notes ? body.acquisition.notes.trim() : ''
+          } : null,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -186,6 +198,9 @@ export async function inventoryHandler(request: HttpRequest, context: Invocation
         if (body.tags !== undefined) updateFields.tags = Array.isArray(body.tags) ? body.tags : [];
         if (body.images !== undefined) updateFields.images = Array.isArray(body.images) ? body.images : [];
         if (body.quantity !== undefined) updateFields.quantity = body.quantity;
+        if (body.lifecycle !== undefined) updateFields.lifecycle = body.lifecycle;
+        if (body.storageLocation !== undefined) updateFields.storageLocation = body.storageLocation.trim();
+        if (body.acquisition !== undefined) updateFields.acquisition = body.acquisition;
 
         await itemsCol.updateOne({ _id: new ObjectId(entityId) }, { $set: updateFields });
         const updated = await itemsCol.findOne({ _id: new ObjectId(entityId) });
