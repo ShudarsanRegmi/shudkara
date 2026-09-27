@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FileCode, Plus, Search, Lock, Unlock, Share2, Copy, Trash2, Edit3, X, Check,
-  Clock, Flame, HardDrive, Sparkles, Maximize2, Zap, Clipboard
+  Clock, Flame, HardDrive, Sparkles, Maximize2, Zap, Clipboard, Camera, Upload, Image as ImageIcon
 } from 'lucide-react';
 
 export interface PasteItem {
@@ -27,6 +27,7 @@ interface PastebinProps {
 
 const LANGUAGES = [
   { id: 'plaintext', name: 'Plain Text' },
+  { id: 'image', name: 'Image / Photo' },
   { id: 'javascript', name: 'JavaScript / Node' },
   { id: 'typescript', name: 'TypeScript' },
   { id: 'python', name: 'Python' },
@@ -45,6 +46,121 @@ const EXPIRY_OPTIONS = [
   { id: 'burn', label: '🔥 Burn After Reading' }
 ];
 
+interface PastebinCameraModalProps {
+  onCapture: (base64Data: string, fileName: string) => void;
+  onClose: () => void;
+}
+
+const PastebinCameraModal: React.FC<PastebinCameraModalProps> = ({ onCapture, onClose }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let stream: MediaStream | null = null;
+    const startStream = async () => {
+      setErrorMsg(null);
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: facingMode }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+        });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err: any) {
+        console.error('Camera access error:', err);
+        setErrorMsg('Camera access denied or unavailable. You can also upload image files directly.');
+      }
+    };
+    startStream();
+    return () => {
+      if (stream) stream.getTracks().forEach(track => track.stop());
+    };
+  }, [facingMode]);
+
+  const handleTakeSnapshot = () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current || document.createElement('canvas');
+    canvas.width = video.videoWidth || 1920;
+    canvas.height = video.videoHeight || 1080;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+      onCapture(dataUrl, `photo_${Date.now()}.jpg`);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] bg-slate-950 text-white flex flex-col animate-in fade-in duration-150">
+      <div className="flex items-center justify-between px-6 py-4 bg-slate-900 border-b border-slate-800 z-10">
+        <div className="flex items-center gap-2 font-extrabold text-sm text-indigo-400 tracking-wide">
+          <Camera className="w-5 h-5" />
+          <span>Camera Viewfinder - Attach Photo</span>
+        </div>
+        <button 
+          onClick={onClose} 
+          className="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-xl transition"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden p-2">
+        {errorMsg ? (
+          <div className="p-6 max-w-md bg-red-900/50 border border-red-700 text-center rounded-3xl text-xs text-red-200 leading-relaxed">
+            {errorMsg}
+          </div>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center relative rounded-3xl overflow-hidden border border-slate-800/80">
+            <video 
+              ref={videoRef} 
+              autoPlay 
+              playsInline 
+              muted 
+              className="w-full h-full object-contain max-h-[82vh]" 
+            />
+            <canvas ref={canvasRef} className="hidden" />
+          </div>
+        )}
+      </div>
+
+      <div className="px-8 py-5 bg-slate-900 border-t border-slate-800 flex items-center justify-between z-10">
+        <button
+          type="button"
+          onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
+          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition flex items-center gap-2"
+        >
+          <span>Flip Camera</span> 🔄
+        </button>
+
+        <button
+          type="button"
+          onClick={handleTakeSnapshot}
+          disabled={!!errorMsg}
+          className="w-16 h-16 bg-white hover:bg-slate-200 disabled:opacity-50 text-slate-900 rounded-full flex items-center justify-center shadow-2xl transition ring-4 ring-indigo-500/40 active:scale-95"
+          title="Snap Photo"
+        >
+          <div className="w-12 h-12 rounded-full border-2 border-slate-900 flex items-center justify-center">
+            <Camera className="w-6 h-6 text-slate-900" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-400 hover:text-white transition"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ephemeral' | 'persistent'>('ephemeral');
   const [pastes, setPastes] = useState<PasteItem[]>([]);
@@ -56,10 +172,44 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedLang, setSelectedLang] = useState('All');
 
-  // Modals
+  // Modals & Floating FAB States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPaste, setEditingPaste] = useState<PasteItem | null>(null);
   const [viewingPaste, setViewingPaste] = useState<PasteItem | null>(null);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+  const [showFabMenu, setShowFabMenu] = useState(false);
+
+  const photoFileInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
+
+  const handlePhotoFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    if (!file.type.startsWith('image/')) {
+      triggerToast('Selected file is not an image', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        setEditingPaste(null);
+        setFormTitle(file.name.replace(/\.[^/.]+$/, "") || 'Attached Photo');
+        setFormContent(dataUrl);
+        setFormLanguage('image');
+        setFormCategory('Images');
+        setFormType(activeSubTab);
+        setFormExpiryOption('24h');
+        setFormIsPrivate(false);
+        setFormIsPinned(false);
+        setIsModalOpen(true);
+        triggerToast('Photo loaded into paste form!');
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   // Form states
   const [formTitle, setFormTitle] = useState('');
@@ -471,6 +621,15 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
             )}
 
             <button
+              onClick={() => photoFileInputRef.current?.click()}
+              className="px-4 py-2.5 rounded-2xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-sm font-semibold flex items-center gap-2 transition-all active:scale-95 shadow-sm"
+              title="Attach photo from device"
+            >
+              <Camera className="w-4 h-4 text-indigo-600" />
+              <span>Attach Photo</span>
+            </button>
+
+            <button
               onClick={() => handleOpenCreate(activeSubTab)}
               className="px-5 py-2.5 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-sm font-semibold shadow-lg shadow-indigo-600/20 flex items-center gap-2 transition-all"
             >
@@ -861,6 +1020,51 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
                 )}
               </div>
 
+              {/* Photo Attachment Options */}
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                  <span className="flex items-center gap-1.5 text-indigo-600">
+                    <ImageIcon className="w-4 h-4" /> Attach Photo / Image
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-normal">Camera or File Upload</span>
+                </div>
+
+                {formContent.startsWith('data:image/') || formLanguage === 'image' ? (
+                  <div className="relative bg-slate-900 p-3 rounded-2xl border border-slate-800 text-center space-y-2">
+                    <img src={formContent} alt="Attached preview" className="max-h-48 w-auto mx-auto rounded-xl object-contain shadow-md" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormContent('');
+                        setFormLanguage('plaintext');
+                      }}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+                    >
+                      Remove Attached Photo
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRef.current?.click()}
+                      className="flex items-center justify-center gap-2 px-3 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
+                    >
+                      <Upload className="w-4 h-4 text-indigo-600" />
+                      <span>Browse Image File</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowCameraModal(true)}
+                      className="flex items-center justify-center gap-2 px-3 py-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold rounded-xl text-xs transition shadow-xs"
+                    >
+                      <Camera className="w-4 h-4 text-indigo-600" />
+                      <span>Take Live Photo</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
                   Content / Snippet *
@@ -905,6 +1109,95 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
             </form>
           </div>
         </div>
+      )}
+
+      {/* Floating '+' Action Button (FAB) at Bottom Right Corner */}
+      <div className="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-2.5">
+        {/* FAB Quick Action Menu */}
+        {showFabMenu && (
+          <div className="flex flex-col items-end gap-2.5 animate-in fade-in slide-in-from-bottom-4 duration-200">
+            <button
+              onClick={() => {
+                setShowFabMenu(false);
+                setShowCameraModal(true);
+              }}
+              className="flex items-center gap-2.5 px-4 py-2.5 bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold rounded-2xl shadow-2xl transition-all active:scale-95 border border-slate-700"
+            >
+              <Camera className="w-4 h-4 text-indigo-400" />
+              <span>Take Live Photo</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowFabMenu(false);
+                photoFileInputRef.current?.click();
+              }}
+              className="flex items-center gap-2.5 px-4 py-2.5 bg-white text-slate-900 hover:bg-slate-50 border border-slate-200 text-xs font-bold rounded-2xl shadow-xl transition-all active:scale-95"
+            >
+              <Upload className="w-4 h-4 text-indigo-600" />
+              <span>Upload Image File</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowFabMenu(false);
+                handleOpenCreate(activeSubTab);
+              }}
+              className="flex items-center gap-2.5 px-4 py-2.5 bg-indigo-600 text-white hover:bg-indigo-700 text-xs font-bold rounded-2xl shadow-xl transition-all active:scale-95"
+            >
+              <FileCode className="w-4 h-4 text-amber-300" />
+              <span>New Text / Code Paste</span>
+            </button>
+          </div>
+        )}
+
+        {/* Main Floating '+' Button */}
+        <button
+          onClick={() => setShowFabMenu(prev => !prev)}
+          className={`w-14 h-14 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-full shadow-2xl shadow-indigo-600/50 flex items-center justify-center transition-all duration-300 ring-4 ring-indigo-500/30 ${
+            showFabMenu ? 'rotate-45 bg-slate-900 hover:bg-slate-800 ring-slate-700' : ''
+          }`}
+          title="Create Paste / Attach Photo"
+        >
+          <Plus className="w-8 h-8 stroke-[2.5]" />
+        </button>
+      </div>
+
+      {/* Hidden Photo File Inputs */}
+      <input
+        ref={photoFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handlePhotoFileInputChange}
+      />
+      <input
+        ref={cameraCaptureInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={handlePhotoFileInputChange}
+      />
+
+      {/* Live Camera Viewfinder Modal */}
+      {showCameraModal && (
+        <PastebinCameraModal
+          onClose={() => setShowCameraModal(false)}
+          onCapture={(base64Data, fileName) => {
+            setEditingPaste(null);
+            setFormTitle(fileName.replace(/\.[^/.]+$/, "") || 'Captured Photo');
+            setFormContent(base64Data);
+            setFormLanguage('image');
+            setFormCategory('Images');
+            setFormType(activeSubTab);
+            setFormExpiryOption('24h');
+            setFormIsPrivate(false);
+            setFormIsPinned(false);
+            setIsModalOpen(true);
+            triggerToast('Camera photo attached!');
+          }}
+        />
       )}
     </div>
   );
