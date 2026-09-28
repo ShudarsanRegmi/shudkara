@@ -21,6 +21,7 @@ import { Inventory } from './components/Inventory';
 import { Timers } from './components/Timers';
 import { Pastebin } from './components/Pastebin';
 import { ConcurrencyManager } from './components/ConcurrencyManager';
+import { SavePost } from './components/SavePost';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 
@@ -44,6 +45,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'savepost', label: 'SavePost', description: 'Social post & link bookmark vault', icon: Bookmark, requiresLogin: false },
       { key: 'inventory', label: 'Inventory', description: 'Private personal belongings & vault', icon: Package, requiresLogin: true },
       { key: 'lists', label: 'Lists', description: 'Static reference collections & notes', icon: ListOrdered, requiresLogin: false },
       { key: 'prompts', label: 'PromptVault', description: 'AI prompt library & links', icon: Bookmark, requiresLogin: false },
@@ -57,6 +59,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  savepost: { requiresLogin: false, label: 'SavePost', icon: Bookmark },
   concurrency: { requiresLogin: false, label: 'Concurrency', icon: Workflow },
   pastebin: { requiresLogin: false, label: 'Pastebin', icon: FileCode },
   timers: { requiresLogin: false, label: 'Timers', icon: Clock },
@@ -330,6 +333,8 @@ function App() {
         return <LifetimeLine authToken={authToken} />;
       case 'links':
         return <LinkManager authToken={authToken} />;
+      case 'savepost':
+        return <SavePost authToken={authToken} />;
       case 'keyval':
         return <KeyVal authToken={authToken} />;
       case 'imgdrop':
