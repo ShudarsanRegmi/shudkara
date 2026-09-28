@@ -45,14 +45,18 @@ async function getOrCreatePastebinFolderId(): Promise<string> {
   return pastebinParentFolderId;
 }
 
-async function uploadBase64ImageToDrive(title: string, content: string): Promise<{ viewUrl: string; fileId: string } | null> {
+async function uploadBase64FileToDrive(
+  title: string, 
+  content: string,
+  fileNameHint?: string
+): Promise<{ viewUrl: string; fileId: string; mimeType: string; originalFileName: string; fileSize: number } | null> {
   if (!content || typeof content !== 'string') return null;
 
-  let mimeType = 'image/jpeg';
+  let mimeType = 'application/octet-stream';
   let base64Data = content;
 
-  if (content.startsWith('data:image/')) {
-    const match = content.match(/^data:(image\/[a-zA-Z0-9+\-+.]+);base64,(.+)$/s);
+  if (content.startsWith('data:')) {
+    const match = content.match(/^data:([a-zA-Z0-9+\-+.\/]+);base64,(.+)$/s);
     if (!match) return null;
     mimeType = match[1];
     base64Data = match[2];
@@ -62,14 +66,31 @@ async function uploadBase64ImageToDrive(title: string, content: string): Promise
 
   try {
     const folderId = await getOrCreatePastebinFolderId();
-    const ext = mimeType.split('/')[1] || 'jpg';
-    const cleanTitle = (title || 'Photo').substring(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const fileName = `paste_${Date.now()}_${cleanTitle}.${ext}`;
+
+    let ext = '';
+    if (fileNameHint && fileNameHint.includes('.')) {
+      ext = fileNameHint.split('.').pop() || '';
+    } else {
+      const mimeSub = mimeType.split('/')[1] || '';
+      ext = mimeSub.split('+')[0].split(';')[0] || 'file';
+    }
+
+    const rawName = fileNameHint || title || 'attachment';
+    const cleanName = rawName.substring(0, 50).replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileName = `paste_${Date.now()}_${cleanName}${ext && !cleanName.endsWith(`.${ext}`) ? `.${ext}` : ''}`;
 
     const uploaded = await uploadToFolder(folderId, fileName, mimeType, base64Data);
-    return { viewUrl: uploaded.viewUrl, fileId: uploaded.fileId };
+    const fileSize = Math.round((base64Data.length * 3) / 4);
+
+    return {
+      viewUrl: uploaded.viewUrl,
+      fileId: uploaded.fileId,
+      mimeType,
+      originalFileName: fileNameHint || cleanName,
+      fileSize
+    };
   } catch (err: any) {
-    console.error('[Pastebin] GDrive image upload error:', err.message || err);
+    console.error('[Pastebin] GDrive document upload error:', err.message || err);
     return null;
   }
 }
@@ -87,7 +108,7 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
     const token = extractToken(request);
     const isAuthorized = await verifySession(token);
 
-    // Auto-cleanup expired ephemeral pastes & trash their Google Drive images
+    // Auto-cleanup expired ephemeral pastes & trash their Google Drive files
     const nowIso = new Date().toISOString();
     const expiredPastes = await col.find({
       type: 'ephemeral',
@@ -95,8 +116,9 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
     }).toArray();
 
     for (const ep of expiredPastes) {
-      if (ep.imageFileId) {
-        await trashFileOrFolderInDrive(ep.imageFileId);
+      const targetFileId = ep.fileId || ep.imageFileId;
+      if (targetFileId) {
+        await trashFileOrFolderInDrive(targetFileId);
       }
     }
 
@@ -121,10 +143,11 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
         const { _id, ...rest } = paste;
 
-        // If burn-after-reading, trash Google Drive image & delete immediately after single read
+        // If burn-after-reading, trash Google Drive file & delete immediately after single read
         if (paste.type === 'ephemeral' && paste.isBurnAfterReading) {
-          if (paste.imageFileId) {
-            await trashFileOrFolderInDrive(paste.imageFileId);
+          const targetFileId = paste.fileId || paste.imageFileId;
+          if (targetFileId) {
+            await trashFileOrFolderInDrive(targetFileId);
           }
           await col.deleteOne({ id: singleId });
         }
@@ -181,7 +204,7 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
       try { body = await request.json(); }
       catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
 
-      const { title, content, language, category, type, expiryOption, isPrivate, isPinned } = body;
+      const { title, content, language, category, type, expiryOption, isPrivate, isPinned, fileName, fileSize } = body;
       if (!content || typeof content !== 'string' || !content.trim()) {
         return { status: 400, jsonBody: { error: 'Content is required.' } };
       }
@@ -191,16 +214,42 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
       }
 
       let finalContent = content.trim();
-      let imageFileId: string | null = null;
+      let fileId: string | null = null;
       let pasteLang = language || 'plaintext';
+      let pasteMime: string | null = null;
+      let pasteFileName: string | null = fileName || null;
+      let pasteFileSize: number | null = typeof fileSize === 'number' ? fileSize : null;
+      let pasteCategory = category || 'General';
 
-      // Check if image base64 data is present -> upload to Google Drive!
-      if (finalContent.startsWith('data:image/') || pasteLang === 'image') {
-        const driveResult = await uploadBase64ImageToDrive(title || 'Pasted Image', finalContent);
+      // Check if data URI (image / pdf / zip / docx / etc) is present -> upload to Google Drive!
+      if (finalContent.startsWith('data:')) {
+        const driveResult = await uploadBase64FileToDrive(title || 'Attachment', finalContent, fileName);
         if (driveResult) {
           finalContent = driveResult.viewUrl;
-          imageFileId = driveResult.fileId;
-          pasteLang = 'image';
+          fileId = driveResult.fileId;
+          pasteMime = driveResult.mimeType;
+          if (!pasteFileName) pasteFileName = driveResult.originalFileName;
+          if (!pasteFileSize) pasteFileSize = driveResult.fileSize;
+
+          if (pasteMime.startsWith('image/')) {
+            pasteLang = 'image';
+            pasteCategory = 'Images';
+          } else if (pasteMime.includes('pdf')) {
+            pasteLang = 'pdf';
+            pasteCategory = 'Documents';
+          } else if (pasteMime.includes('zip') || pasteMime.includes('compressed') || pasteMime.includes('tar') || pasteMime.includes('rar') || pasteMime.includes('7z')) {
+            pasteLang = 'archive';
+            pasteCategory = 'Archives';
+          } else if (pasteMime.includes('word') || pasteMime.includes('officedocument') || pasteMime.includes('document')) {
+            pasteLang = 'docx';
+            pasteCategory = 'Documents';
+          } else if (pasteMime.includes('excel') || pasteMime.includes('sheet')) {
+            pasteLang = 'xlsx';
+            pasteCategory = 'Documents';
+          } else {
+            pasteLang = 'document';
+            pasteCategory = 'Files';
+          }
         }
       }
 
@@ -223,11 +272,15 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
       const newPaste = {
         id,
-        title: title ? title.trim() : 'Untitled Paste',
+        title: title ? title.trim() : (pasteFileName || 'Untitled Paste'),
         content: finalContent,
-        imageFileId: imageFileId || null,
+        fileId: fileId || null,
+        imageFileId: fileId || null,
+        fileName: pasteFileName,
+        fileSize: pasteFileSize,
+        mimeType: pasteMime,
         language: pasteLang,
-        category: category || (imageFileId ? 'Images' : 'General'),
+        category: pasteCategory,
         type: pasteType,
         expiryOption: expiryOption || (pasteType === 'ephemeral' ? '24h' : 'never'),
         expiresAt,
@@ -263,14 +316,25 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
       
       if (body.content !== undefined) {
         let contentVal = body.content.trim();
-        if (contentVal.startsWith('data:image/') || body.language === 'image') {
-          const driveResult = await uploadBase64ImageToDrive(body.title || existing.title, contentVal);
+        if (contentVal.startsWith('data:')) {
+          const driveResult = await uploadBase64FileToDrive(body.title || existing.title, contentVal, body.fileName || existing.fileName);
           if (driveResult) {
             updateFields.content = driveResult.viewUrl;
+            updateFields.fileId = driveResult.fileId;
             updateFields.imageFileId = driveResult.fileId;
-            updateFields.language = 'image';
-            if (existing.imageFileId && existing.imageFileId !== driveResult.fileId) {
-              await trashFileOrFolderInDrive(existing.imageFileId);
+            updateFields.mimeType = driveResult.mimeType;
+            updateFields.fileName = body.fileName || driveResult.originalFileName;
+            updateFields.fileSize = body.fileSize || driveResult.fileSize;
+
+            if (driveResult.mimeType.startsWith('image/')) updateFields.language = 'image';
+            else if (driveResult.mimeType.includes('pdf')) updateFields.language = 'pdf';
+            else if (driveResult.mimeType.includes('zip') || driveResult.mimeType.includes('compressed')) updateFields.language = 'archive';
+            else if (driveResult.mimeType.includes('word') || driveResult.mimeType.includes('document')) updateFields.language = 'docx';
+            else updateFields.language = 'document';
+
+            const oldFileId = existing.fileId || existing.imageFileId;
+            if (oldFileId && oldFileId !== driveResult.fileId) {
+              await trashFileOrFolderInDrive(oldFileId);
             }
           } else {
             updateFields.content = contentVal;
@@ -282,6 +346,8 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
 
       if (body.language !== undefined) updateFields.language = body.language;
       if (body.category !== undefined) updateFields.category = body.category;
+      if (body.fileName !== undefined) updateFields.fileName = body.fileName;
+      if (body.fileSize !== undefined) updateFields.fileSize = body.fileSize;
       if (body.isPrivate !== undefined) updateFields.isPrivate = !!body.isPrivate;
       if (body.isPinned !== undefined) updateFields.isPinned = !!body.isPinned;
 
@@ -294,8 +360,9 @@ export async function pastebinHandler(request: HttpRequest, context: InvocationC
     // ── 5. DELETE - Remove paste ──────────────────────────────────────────────
     if (method === 'DELETE' && pasteId) {
       const pasteToDelete = await col.findOne({ id: pasteId });
-      if (pasteToDelete && pasteToDelete.imageFileId) {
-        await trashFileOrFolderInDrive(pasteToDelete.imageFileId);
+      const targetFileId = pasteToDelete?.fileId || pasteToDelete?.imageFileId;
+      if (targetFileId) {
+        await trashFileOrFolderInDrive(targetFileId);
       }
 
       const result = await col.deleteOne({ id: pasteId });

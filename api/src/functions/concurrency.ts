@@ -182,7 +182,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
         };
 
         await sittingsCol.insertOne(newSitting);
-        const { _id, ...rest } = newSitting;
+        const { _id, ...rest } = newSitting as any;
         return { status: 201, jsonBody: rest };
       }
 
@@ -441,7 +441,7 @@ export async function concurrencyHandler(request: HttpRequest, context: Invocati
       };
 
       await workstreamsCol.insertOne(newWorkstream);
-      const { _id, ...rest } = newWorkstream;
+      const { _id, ...rest } = newWorkstream as any;
       return { status: 201, jsonBody: rest };
     }
 

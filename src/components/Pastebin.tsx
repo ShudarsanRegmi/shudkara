@@ -1,13 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   FileCode, Plus, Search, Lock, Unlock, Share2, Copy, Trash2, Edit3, X, Check,
-  Clock, Flame, HardDrive, Sparkles, Maximize2, Zap, Clipboard, Camera, Upload, Image as ImageIcon
+  Clock, Flame, HardDrive, Sparkles, Maximize2, Zap, Clipboard, Camera, Upload,
+  FileText, FileArchive, FileSpreadsheet, File as GenericFileIcon, Download, ExternalLink, Paperclip
 } from 'lucide-react';
 
 export interface PasteItem {
   id: string;
   title: string;
   content: string;
+  fileId?: string;
+  imageFileId?: string;
+  fileName?: string;
+  fileSize?: number;
+  mimeType?: string;
   language: string;
   category?: string;
   type: 'ephemeral' | 'persistent';
@@ -28,6 +34,12 @@ interface PastebinProps {
 const LANGUAGES = [
   { id: 'plaintext', name: 'Plain Text' },
   { id: 'image', name: 'Image / Photo' },
+  { id: 'pdf', name: 'PDF Document' },
+  { id: 'archive', name: 'ZIP / Archive' },
+  { id: 'docx', name: 'Word Document (.docx)' },
+  { id: 'xlsx', name: 'Excel Sheet (.xlsx)' },
+  { id: 'pptx', name: 'PowerPoint (.pptx)' },
+  { id: 'document', name: 'General File / Doc' },
   { id: 'javascript', name: 'JavaScript / Node' },
   { id: 'typescript', name: 'TypeScript' },
   { id: 'python', name: 'Python' },
@@ -45,6 +57,13 @@ const EXPIRY_OPTIONS = [
   { id: '7d', label: '7 Days' },
   { id: 'burn', label: '🔥 Burn After Reading' }
 ];
+
+const formatBytes = (bytes?: number): string => {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
 
 interface PastebinCameraModalProps {
   onCapture: (base64Data: string, fileName: string) => void;
@@ -161,6 +180,19 @@ const PastebinCameraModal: React.FC<PastebinCameraModalProps> = ({ onCapture, on
   );
 };
 
+const getFileIcon = (lang?: string, mimeType?: string) => {
+  if (lang === 'pdf' || mimeType?.includes('pdf') || lang === 'docx' || mimeType?.includes('word')) {
+    return <FileText className="w-6 h-6 text-rose-500" />;
+  }
+  if (lang === 'archive' || mimeType?.includes('zip') || mimeType?.includes('compressed') || mimeType?.includes('tar') || mimeType?.includes('rar')) {
+    return <FileArchive className="w-6 h-6 text-amber-500" />;
+  }
+  if (lang === 'xlsx' || mimeType?.includes('excel') || mimeType?.includes('sheet')) {
+    return <FileSpreadsheet className="w-6 h-6 text-emerald-500" />;
+  }
+  return <GenericFileIcon className="w-6 h-6 text-indigo-500" />;
+};
+
 export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId }) => {
   const [activeSubTab, setActiveSubTab] = useState<'ephemeral' | 'persistent'>('ephemeral');
   const [pastes, setPastes] = useState<PasteItem[]>([]);
@@ -180,36 +212,8 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
   const [showFabMenu, setShowFabMenu] = useState(false);
 
   const photoFileInputRef = useRef<HTMLInputElement>(null);
+  const docFileInputRef = useRef<HTMLInputElement>(null);
   const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
-
-  const handlePhotoFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const file = files[0];
-    if (!file.type.startsWith('image/')) {
-      triggerToast('Selected file is not an image', 'error');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      if (dataUrl) {
-        setEditingPaste(null);
-        setFormTitle(file.name.replace(/\.[^/.]+$/, "") || 'Attached Photo');
-        setFormContent(dataUrl);
-        setFormLanguage('image');
-        setFormCategory('Images');
-        setFormType(activeSubTab);
-        setFormExpiryOption('24h');
-        setFormIsPrivate(false);
-        setFormIsPinned(false);
-        setIsModalOpen(true);
-        triggerToast('Photo loaded into paste form!');
-      }
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-  };
 
   // Form states
   const [formTitle, setFormTitle] = useState('');
@@ -220,6 +224,49 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
   const [formExpiryOption, setFormExpiryOption] = useState('24h');
   const [formIsPrivate, setFormIsPrivate] = useState(false);
   const [formIsPinned, setFormIsPinned] = useState(false);
+  const [formFileName, setFormFileName] = useState('');
+  const [formFileSize, setFormFileSize] = useState<number | undefined>(undefined);
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type.includes('pdf') || file.name.endsWith('.pdf');
+    const isZip = file.type.includes('zip') || file.name.endsWith('.zip') || file.name.endsWith('.rar') || file.name.endsWith('.7z');
+    const isDocx = file.name.endsWith('.docx') || file.name.endsWith('.doc');
+    const isXlsx = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
+
+    let lang = 'document';
+    let cat = 'Files';
+    if (isImage) { lang = 'image'; cat = 'Images'; }
+    else if (isPdf) { lang = 'pdf'; cat = 'Documents'; }
+    else if (isZip) { lang = 'archive'; cat = 'Archives'; }
+    else if (isDocx) { lang = 'docx'; cat = 'Documents'; }
+    else if (isXlsx) { lang = 'xlsx'; cat = 'Documents'; }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        setEditingPaste(null);
+        setFormTitle(file.name);
+        setFormContent(dataUrl);
+        setFormFileName(file.name);
+        setFormFileSize(file.size);
+        setFormLanguage(lang);
+        setFormCategory(cat);
+        setFormType(activeSubTab);
+        setFormExpiryOption('24h');
+        setFormIsPrivate(false);
+        setFormIsPinned(false);
+        setIsModalOpen(true);
+        triggerToast(`${file.name} attached! Ready to save.`);
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
   // Toast
   const [toastMsg, setToastMsg] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -410,6 +457,8 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
     setEditingPaste(null);
     setFormTitle('');
     setFormContent('');
+    setFormFileName('');
+    setFormFileSize(undefined);
     setFormLanguage('plaintext');
     setFormCategory('General');
     setFormType(defaultType);
@@ -425,6 +474,8 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
     setEditingPaste(p);
     setFormTitle(p.title);
     setFormContent(p.content);
+    setFormFileName(p.fileName || '');
+    setFormFileSize(p.fileSize);
     setFormLanguage(p.language || 'plaintext');
     setFormCategory(p.category || 'General');
     setFormType(p.type);
@@ -443,8 +494,10 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
     if (authToken) headers['X-Session-Token'] = authToken;
 
     const payload = {
-      title: formTitle.trim() || 'Untitled Paste',
+      title: formTitle.trim() || formFileName || 'Untitled Paste',
       content: formContent,
+      fileName: formFileName || undefined,
+      fileSize: formFileSize || undefined,
       language: formLanguage,
       category: formCategory,
       type: formType,
@@ -621,12 +674,12 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
             )}
 
             <button
-              onClick={() => photoFileInputRef.current?.click()}
+              onClick={() => docFileInputRef.current?.click()}
               className="px-4 py-2.5 rounded-2xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 text-sm font-semibold flex items-center gap-2 transition-all active:scale-95 shadow-sm"
-              title="Attach photo from device"
+              title="Attach PDF, ZIP, DOCX, Photo or File"
             >
-              <Camera className="w-4 h-4 text-indigo-600" />
-              <span>Attach Photo</span>
+              <Paperclip className="w-4 h-4 text-indigo-600" />
+              <span>Attach File / Doc</span>
             </button>
 
             <button
@@ -849,8 +902,18 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
 
                   {/* Snippet Preview Box */}
                   <div className="bg-slate-900 text-slate-100 rounded-2xl p-4 font-mono text-xs overflow-hidden relative max-h-36 border border-slate-800">
-                    {(p.language === 'image' || p.content.startsWith('data:image/') || p.content.includes('googleusercontent.com')) ? (
+                    {p.language === 'image' || p.content.startsWith('data:image/') || (p.mimeType && p.mimeType.startsWith('image/')) ? (
                       <img src={p.content} alt={p.title} className="max-h-28 w-full object-contain rounded-lg mx-auto" />
+                    ) : ['pdf', 'archive', 'docx', 'xlsx', 'pptx', 'document'].includes(p.language) || (p.mimeType && !p.mimeType.startsWith('image/')) || p.fileName ? (
+                      <div className="flex flex-col items-center justify-center p-2 text-center space-y-2">
+                        <div className="p-2.5 bg-slate-800 rounded-2xl border border-slate-700">
+                          {getFileIcon(p.language, p.mimeType)}
+                        </div>
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-bold text-white line-clamp-1">{p.fileName || p.title}</p>
+                          {p.fileSize && <p className="text-[10px] text-slate-400 font-sans">{formatBytes(p.fileSize)}</p>}
+                        </div>
+                      </div>
                     ) : (
                       <pre className="line-clamp-4 leading-relaxed whitespace-pre-wrap break-all text-slate-100">
                         {p.content}
@@ -922,10 +985,42 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
               </p>
             </div>
 
-            {/* Code / Image View Area */}
+            {/* Code / Image / Document View Area */}
             <div className="bg-slate-950 rounded-2xl p-5 border border-slate-800 font-mono text-xs sm:text-sm text-slate-100 overflow-x-auto max-h-[60vh] leading-relaxed relative">
-              {(viewingPaste.language === 'image' || viewingPaste.content.startsWith('data:image/') || viewingPaste.content.includes('googleusercontent.com')) ? (
+              {viewingPaste.language === 'image' || viewingPaste.content.startsWith('data:image/') || (viewingPaste.mimeType && viewingPaste.mimeType.startsWith('image/')) ? (
                 <img src={viewingPaste.content} alt={viewingPaste.title} className="max-h-[50vh] w-full object-contain rounded-xl mx-auto" />
+              ) : ['pdf', 'archive', 'docx', 'xlsx', 'pptx', 'document'].includes(viewingPaste.language) || (viewingPaste.mimeType && !viewingPaste.mimeType.startsWith('image/')) || viewingPaste.fileName ? (
+                <div className="flex flex-col items-center justify-center p-6 text-center space-y-4 bg-slate-900/80 rounded-2xl border border-slate-800">
+                  <div className="p-5 bg-indigo-500/10 rounded-3xl border border-indigo-500/20 text-indigo-400 shadow-inner">
+                    {getFileIcon(viewingPaste.language, viewingPaste.mimeType)}
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-lg font-bold text-white tracking-tight">{viewingPaste.fileName || viewingPaste.title}</h4>
+                    <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-sans">
+                      {viewingPaste.fileSize && <span>{formatBytes(viewingPaste.fileSize)}</span>}
+                      {viewingPaste.mimeType && <span>• {viewingPaste.mimeType}</span>}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                    <a
+                      href={viewingPaste.content}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={viewingPaste.fileName || viewingPaste.title}
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-indigo-600/30 font-sans"
+                    >
+                      <Download className="w-4 h-4" /> Download / View Document
+                    </a>
+                    <a
+                      href={viewingPaste.content}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 transition flex items-center gap-1.5 font-sans"
+                    >
+                      <ExternalLink className="w-4 h-4 text-indigo-400" /> Open in New Tab
+                    </a>
+                  </div>
+                </div>
               ) : (
                 <pre className="whitespace-pre-wrap break-all text-slate-100 font-mono">
                   {viewingPaste.content}
@@ -1020,22 +1115,28 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
                 )}
               </div>
 
-              {/* Photo Attachment Options */}
+              {/* File / Document / Photo Attachment Box */}
               <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between text-xs font-bold text-slate-800">
                   <span className="flex items-center gap-1.5 text-indigo-600">
-                    <ImageIcon className="w-4 h-4" /> Attach Photo / Image
+                    <Paperclip className="w-4 h-4" /> Attach File, Document or Photo
                   </span>
-                  <span className="text-[10px] text-slate-400 font-normal">Camera or File Upload</span>
+                  <span className="text-[10px] text-slate-400 font-normal">PDF, ZIP, DOCX, Images, etc.</span>
                 </div>
 
                 {formContent.startsWith('data:image/') || formLanguage === 'image' ? (
                   <div className="relative bg-slate-900 p-3 rounded-2xl border border-slate-800 text-center space-y-2">
                     <img src={formContent} alt="Attached preview" className="max-h-48 w-auto mx-auto rounded-xl object-contain shadow-md" />
+                    <div className="flex items-center justify-between px-2 text-xs text-slate-300 font-medium">
+                      <span className="truncate max-w-[200px]">{formFileName || 'Attached Image'}</span>
+                      {formFileSize && <span className="text-slate-400">{formatBytes(formFileSize)}</span>}
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
                         setFormContent('');
+                        setFormFileName('');
+                        setFormFileSize(undefined);
                         setFormLanguage('plaintext');
                       }}
                       className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
@@ -1043,23 +1144,55 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
                       Remove Attached Photo
                     </button>
                   </div>
+                ) : formFileName || formContent.startsWith('data:') || ['pdf', 'archive', 'docx', 'xlsx', 'pptx', 'document'].includes(formLanguage) ? (
+                  <div className="bg-slate-900 p-4 rounded-2xl border border-slate-800 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 overflow-hidden">
+                      <div className="p-2.5 bg-slate-800 rounded-xl text-indigo-400 shrink-0">
+                        {getFileIcon(formLanguage)}
+                      </div>
+                      <div className="overflow-hidden">
+                        <p className="text-xs font-bold text-white truncate">{formFileName || 'Attached File'}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">{formatBytes(formFileSize) || formLanguage.toUpperCase()}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormContent('');
+                        setFormFileName('');
+                        setFormFileSize(undefined);
+                        setFormLanguage('plaintext');
+                      }}
+                      className="px-3 py-1.5 bg-rose-600/80 hover:bg-rose-600 text-white rounded-xl text-xs font-bold transition shrink-0"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => docFileInputRef.current?.click()}
+                      className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
+                    >
+                      <Paperclip className="w-4 h-4 text-indigo-600" />
+                      <span>Attach Doc / File</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => photoFileInputRef.current?.click()}
-                      className="flex items-center justify-center gap-2 px-3 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
+                      className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
                     >
                       <Upload className="w-4 h-4 text-indigo-600" />
-                      <span>Browse Image File</span>
+                      <span>Browse Image</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setShowCameraModal(true)}
-                      className="flex items-center justify-center gap-2 px-3 py-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold rounded-xl text-xs transition shadow-xs"
+                      className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold rounded-xl text-xs transition shadow-xs"
                     >
                       <Camera className="w-4 h-4 text-indigo-600" />
-                      <span>Take Live Photo</span>
+                      <span>Live Photo</span>
                     </button>
                   </div>
                 )}
@@ -1119,6 +1252,17 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
             <button
               onClick={() => {
                 setShowFabMenu(false);
+                docFileInputRef.current?.click();
+              }}
+              className="flex items-center gap-2.5 px-4 py-2.5 bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold rounded-2xl shadow-2xl transition-all active:scale-95 border border-slate-700"
+            >
+              <Paperclip className="w-4 h-4 text-indigo-400" />
+              <span>Attach Document / File (PDF, ZIP...)</span>
+            </button>
+
+            <button
+              onClick={() => {
+                setShowFabMenu(false);
                 setShowCameraModal(true);
               }}
               className="flex items-center gap-2.5 px-4 py-2.5 bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold rounded-2xl shadow-2xl transition-all active:scale-95 border border-slate-700"
@@ -1163,13 +1307,20 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
         </button>
       </div>
 
-      {/* Hidden Photo File Inputs */}
+      {/* Hidden File Inputs */}
       <input
         ref={photoFileInputRef}
         type="file"
         accept="image/*"
         className="hidden"
-        onChange={handlePhotoFileInputChange}
+        onChange={handleFileInputChange}
+      />
+      <input
+        ref={docFileInputRef}
+        type="file"
+        accept="*/*"
+        className="hidden"
+        onChange={handleFileInputChange}
       />
       <input
         ref={cameraCaptureInputRef}
@@ -1177,7 +1328,7 @@ export const Pastebin: React.FC<PastebinProps> = ({ authToken, initialPasteId })
         accept="image/*"
         capture="environment"
         className="hidden"
-        onChange={handlePhotoFileInputChange}
+        onChange={handleFileInputChange}
       />
 
       {/* Live Camera Viewfinder Modal */}
