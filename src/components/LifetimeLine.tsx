@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Tag, Search, Plus, Trash2, Edit2, Image, 
-  Video, Film, Check, AlertCircle, X, ChevronDown, 
-  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar, Camera, Upload
+  Tag, Search, Plus, Trash2, Edit2, 
+  Film, AlertCircle, ChevronDown, 
+  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar,
+  ChevronLeft, ChevronRight, Layers, List, Eye
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
-  toNepaliDigits 
+  toNepaliDigits, type BikramSambatDate 
 } from '../utils/bikramSambat';
-import { MediaLightboxModal } from './MediaLightboxModal';
-import type { LightboxMediaItem } from './MediaLightboxModal';
+import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
+import { TimelineWizardModal, type DraftMediaItem } from './TimelineWizardModal';
 
-interface MediaItem {
+export interface MediaItem {
   googleDriveId: string;
   fileName: string;
   mimeType: string;
@@ -19,7 +20,7 @@ interface MediaItem {
   thumbnailUrl: string;
 }
 
-interface Post {
+export interface Post {
   _id: string;
   title?: string;
   content: string;
@@ -34,107 +35,18 @@ interface LifetimeLineProps {
   authToken?: string | null;
 }
 
-interface LiveCameraModalProps {
-  onCapture: (base64: string, fileName: string) => void;
-  onClose: () => void;
+interface DayGroup {
+  dateKey: string;
+  adDate: Date;
+  bsDate: BikramSambatDate;
+  posts: Post[];
+  totalSnaps: number;
 }
-
-const LiveCameraModal: React.FC<LiveCameraModalProps> = ({ onCapture, onClose }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    const startStream = async () => {
-      setErrorMsg(null);
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: facingMode }, width: { ideal: 1280 }, height: { ideal: 720 } }
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err: any) {
-        console.error('Camera access error:', err);
-        setErrorMsg('Camera access denied or unavailable. You can use the direct file upload button.');
-      }
-    };
-    startStream();
-    return () => {
-      if (stream) stream.getTracks().forEach(track => track.stop());
-    };
-  }, [facingMode]);
-
-  const handleTakeSnapshot = () => {
-    if (!videoRef.current) return;
-    const video = videoRef.current;
-    const canvas = canvasRef.current || document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-      onCapture(dataUrl, `camera_${Date.now()}.jpg`);
-      onClose();
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-150 select-none">
-      <div className="bg-slate-900 text-white rounded-3xl w-full max-w-lg p-5 shadow-2xl space-y-4 border border-slate-700 relative">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-sm text-blue-400">
-            <Camera className="w-5 h-5" />
-            <span>Live Camera Snapshot</span>
-          </div>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-white rounded-lg">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {errorMsg ? (
-          <div className="p-4 bg-red-900/40 border border-red-700/60 rounded-2xl text-xs text-red-200 leading-relaxed">
-            {errorMsg}
-          </div>
-        ) : (
-          <div className="relative rounded-2xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-            <canvas ref={canvasRef} className="hidden" />
-          </div>
-        )}
-
-        <div className="flex items-center justify-between pt-2">
-          <button
-            type="button"
-            onClick={() => setFacingMode(prev => prev === 'environment' ? 'user' : 'environment')}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-xs font-bold rounded-xl text-slate-300 transition"
-          >
-            Flip Camera 🔄
-          </button>
-
-          <button
-            type="button"
-            onClick={handleTakeSnapshot}
-            disabled={!!errorMsg}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2"
-          >
-            <Camera className="w-4 h-4" />
-            Snap Photo
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
 
 export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
   // Filters & Pagination
@@ -146,27 +58,11 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
   const [categories, setCategories] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
-  const [limit] = useState(10);
+  const [limit] = useState(20);
   const [skip, setSkip] = useState(0);
 
-  // Calendar Mode: 'AD' (Gregorian) vs 'BS' (Bikram Sambat - Nepali)
-  const [dateMode, setDateMode] = useState<'AD' | 'BS'>('AD');
-
-  // New Post Form
-  const [showCreator, setShowCreator] = useState(false);
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [category, setCategory] = useState('General');
-  const [rawTags, setRawTags] = useState('');
-  const [timestamp, setTimestamp] = useState(new Date().toISOString().substring(0, 16));
-
-  // Form BS state initialized from initial AD timestamp
-  const initialBs = adToBs(new Date());
-  const [formBsYear, setFormBsYear] = useState<number>(initialBs.year);
-  const [formBsMonth, setFormBsMonth] = useState<number>(initialBs.month);
-  const [formBsDay, setFormBsDay] = useState<number>(initialBs.day);
-
-  const [selectedFiles, setSelectedFiles] = useState<{ name: string; type: string; base64: string }[]>([]);
+  // Social Wizard Modal State
+  const [showWizard, setShowWizard] = useState(false);
 
   // Editing state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -176,71 +72,27 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [editRawTags, setEditRawTags] = useState('');
   const [editTimestamp, setEditTimestamp] = useState('');
   const [editDateMode, setEditDateMode] = useState<'AD' | 'BS'>('AD');
-  const [editBsYear, setEditBsYear] = useState<number>(initialBs.year);
-  const [editBsMonth, setEditBsMonth] = useState<number>(initialBs.month);
-  const [editBsDay, setEditBsDay] = useState<number>(initialBs.day);
+  const [editBsYear, setEditBsYear] = useState<number>(2083);
+  const [editBsMonth, setEditBsMonth] = useState<number>(1);
+  const [editBsDay, setEditBsDay] = useState<number>(1);
 
   const [syncing, setSyncing] = useState(false);
 
-  // ── Sync AD & BS Form Handlers ─────────────────────────────────────────────
-  const handleAdTimestampChange = (newAdString: string) => {
-    setTimestamp(newAdString);
-    if (newAdString) {
-      const bs = adToBs(new Date(newAdString));
-      setFormBsYear(bs.year);
-      setFormBsMonth(bs.month);
-      setFormBsDay(bs.day);
-    }
-  };
+  // Media Lightbox
+  const [lightboxItems, setLightboxItems] = useState<LightboxMediaItem[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [showLightbox, setShowLightbox] = useState(false);
 
-  const handleBsDateChange = (year: number, month: number, day: number) => {
-    setFormBsYear(year);
-    setFormBsMonth(month);
-    setFormBsDay(day);
+  // Day Stacking Deck: active page index for each day group
+  const [dayPageIndices, setDayPageIndices] = useState<Record<string, number>>({});
+  // Inner moment photo indices for moments with multiple photos
+  const [momentPhotoIndices, setMomentPhotoIndices] = useState<Record<string, number>>({});
+  // View mode toggle per day: 'deck' (stacked page-turner) vs 'expanded' (list)
+  const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
+  // Global deck mode toggle
+  const [globalDeckMode, setGlobalDeckMode] = useState<boolean>(true);
 
-    const maxDays = getMonthDays(year, month);
-    const validDay = Math.min(day, maxDays);
-    if (validDay !== day) {
-      setFormBsDay(validDay);
-    }
-
-    const adDate = bsToAd(year, month, validDay);
-    const currentTimeStr = timestamp ? timestamp.substring(11, 16) : '12:00';
-    const yyyy = adDate.getFullYear();
-    const mm = String(adDate.getMonth() + 1).padStart(2, '0');
-    const dd = String(adDate.getDate()).padStart(2, '0');
-    setTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
-  };
-
-  const handleEditAdTimestampChange = (newAdString: string) => {
-    setEditTimestamp(newAdString);
-    if (newAdString) {
-      const bs = adToBs(new Date(newAdString));
-      setEditBsYear(bs.year);
-      setEditBsMonth(bs.month);
-      setEditBsDay(bs.day);
-    }
-  };
-
-  const handleEditBsDateChange = (year: number, month: number, day: number) => {
-    setEditBsYear(year);
-    setEditBsMonth(month);
-    setEditBsDay(day);
-
-    const maxDays = getMonthDays(year, month);
-    const validDay = Math.min(day, maxDays);
-    if (validDay !== day) {
-      setEditBsDay(validDay);
-    }
-
-    const adDate = bsToAd(year, month, validDay);
-    const currentTimeStr = editTimestamp ? editTimestamp.substring(11, 16) : '12:00';
-    const yyyy = adDate.getFullYear();
-    const mm = String(adDate.getMonth() + 1).padStart(2, '0');
-    const dd = String(adDate.getDate()).padStart(2, '0');
-    setEditTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
-  };
-
+  // Sync Google Drive
   const handleSyncDrive = async () => {
     if (!authToken || syncing) return;
     setSyncing(true);
@@ -265,16 +117,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Media Lightbox & Camera
-  const [lightboxItems, setLightboxItems] = useState<LightboxMediaItem[]>([]);
-  const [lightboxIndex, setLightboxIndex] = useState(0);
-  const [showLightbox, setShowLightbox] = useState(false);
-  const [showCameraModal, setShowCameraModal] = useState(false);
-
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
-
-  // Fetch posts & filter options
+  // Fetch posts & filter metadata
   const fetchFilterMetadata = async () => {
     if (!authToken) return;
     try {
@@ -326,7 +169,6 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Re-fetch when filters change
   useEffect(() => {
     if (authToken) {
       fetchPosts(true);
@@ -334,84 +176,46 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   }, [search, selectedCategory, selectedTag, authToken]);
 
-  // Convert files to base64
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
+  // Submit new post from Social Wizard
+  const handleWizardSubmit = async (postData: {
+    title: string;
+    content: string;
+    category: string;
+    tags: string[];
+    timestamp: string;
+    mediaFiles: DraftMediaItem[];
+  }): Promise<boolean> => {
+    if (!authToken) return false;
 
-    Array.from(files).forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedFiles(prev => [
-          ...prev,
-          {
-            name: file.name,
-            type: file.type,
-            base64: reader.result as string
-          }
-        ]);
-      };
-      reader.readAsDataURL(file);
+    const res = await fetch('/api/timeline', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': authToken
+      },
+      body: JSON.stringify({
+        title: postData.title,
+        content: postData.content,
+        category: postData.category,
+        tags: postData.tags,
+        timestamp: postData.timestamp,
+        mediaFiles: postData.mediaFiles
+      })
     });
-  };
 
-  const removeSelectedFile = (index: number) => {
-    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Submit new post
-  const handleCreatePost = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!content.trim() || !authToken) return;
-
-    setSubmitting(true);
-    setErrorMsg('');
-    try {
-      const res = await fetch('/api/timeline', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken
-        },
-        body: JSON.stringify({
-          title: title.trim(),
-          content: content.trim(),
-          category: category.trim(),
-          tags: rawTags.split(',').map(t => t.trim()).filter(Boolean),
-          timestamp: new Date(timestamp).toISOString(),
-          mediaFiles: selectedFiles
-        })
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        setTitle('');
-        setContent('');
-        setCategory('General');
-        setRawTags('');
-        setSelectedFiles([]);
-        const now = new Date();
-        setTimestamp(now.toISOString().substring(0, 16));
-        const bs = adToBs(now);
-        setFormBsYear(bs.year);
-        setFormBsMonth(bs.month);
-        setFormBsDay(bs.day);
-        setShowCreator(false);
-        fetchPosts(true);
-        fetchFilterMetadata();
-      } else {
-        setErrorMsg(data.error || 'Failed to create post.');
-      }
-    } catch {
-      setErrorMsg('Network error. Check connection or file upload size.');
-    } finally {
-      setSubmitting(false);
+    const data = await res.json();
+    if (res.ok) {
+      fetchPosts(true);
+      fetchFilterMetadata();
+      return true;
+    } else {
+      throw new Error(data.error || 'Failed to create post.');
     }
   };
 
   // Delete post
   const handleDeletePost = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this memory? Media will be deleted from Google Drive.') || !authToken) return;
+    if (!window.confirm('Delete this memory? Media will be moved to trash.') || !authToken) return;
 
     try {
       const res = await fetch(`/api/timeline/${id}`, {
@@ -431,7 +235,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Trigger editing inline
+  // Inline editing
   const startEdit = (post: Post) => {
     setEditingPostId(post._id);
     setEditTitle(post.title || '');
@@ -445,6 +249,35 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     setEditBsMonth(bs.month);
     setEditBsDay(bs.day);
     setEditDateMode('AD');
+  };
+
+  const handleEditAdTimestampChange = (newAdString: string) => {
+    setEditTimestamp(newAdString);
+    if (newAdString) {
+      const bs = adToBs(new Date(newAdString));
+      setEditBsYear(bs.year);
+      setEditBsMonth(bs.month);
+      setEditBsDay(bs.day);
+    }
+  };
+
+  const handleEditBsDateChange = (year: number, month: number, day: number) => {
+    setEditBsYear(year);
+    setEditBsMonth(month);
+    setEditBsDay(day);
+
+    const maxDays = getMonthDays(year, month);
+    const validDay = Math.min(day, maxDays);
+    if (validDay !== day) {
+      setEditBsDay(validDay);
+    }
+
+    const adDate = bsToAd(year, month, validDay);
+    const currentTimeStr = editTimestamp ? editTimestamp.substring(11, 16) : '12:00';
+    const yyyy = adDate.getFullYear();
+    const mm = String(adDate.getMonth() + 1).padStart(2, '0');
+    const dd = String(adDate.getDate()).padStart(2, '0');
+    setEditTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
   };
 
   const handleUpdatePost = async (id: string) => {
@@ -491,18 +324,19 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Format AD date helper
-  const formatDate = (isoString: string) => {
-    const date = new Date(isoString);
-    return {
-      day: date.getDate(),
-      month: date.toLocaleString('default', { month: 'short' }),
-      year: date.getFullYear(),
-      time: date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
+  // Open Lightbox
+  const handleOpenLightbox = (mediaList: MediaItem[], startIndex: number) => {
+    setLightboxItems(mediaList.map(m => ({
+      url: m.viewUrl,
+      thumbnailUrl: m.thumbnailUrl,
+      name: m.fileName,
+      type: m.mimeType
+    })));
+    setLightboxIndex(startIndex);
+    setShowLightbox(true);
   };
 
-  // Client-side Bikram Sambat (BS) Post Filtering
+  // Bikram Sambat filtering
   const filteredPosts = posts.filter(post => {
     if (!selectedBsYear && !selectedBsMonth) return true;
     const bs = adToBs(post.timestamp);
@@ -511,8 +345,64 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return true;
   });
 
-  // Current BS info for Form
-  const currentFormBs = adToBs(timestamp);
+  // Group filtered posts by day (YYYY-MM-DD)
+  const dayGroups: DayGroup[] = React.useMemo(() => {
+    const groupsMap: Record<string, Post[]> = {};
+
+    filteredPosts.forEach(post => {
+      const dateKey = new Date(post.timestamp).toISOString().substring(0, 10);
+      if (!groupsMap[dateKey]) {
+        groupsMap[dateKey] = [];
+      }
+      groupsMap[dateKey].push(post);
+    });
+
+    return Object.entries(groupsMap).map(([dateKey, dayPosts]) => {
+      // Sort day posts chronologically (latest first)
+      dayPosts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      const sampleDate = new Date(dayPosts[0].timestamp);
+      const bsDate = adToBs(sampleDate);
+      const totalSnaps = dayPosts.reduce((acc, p) => acc + (p.media?.length || 0), 0);
+
+      return {
+        dateKey,
+        adDate: sampleDate,
+        bsDate,
+        posts: dayPosts,
+        totalSnaps
+      };
+    });
+  }, [filteredPosts]);
+
+  // Turn page for a day group
+  const handleTurnDayPage = (dateKey: string, direction: 'next' | 'prev', totalPages: number) => {
+    setDayPageIndices(prev => {
+      const current = prev[dateKey] || 0;
+      const nextIndex = direction === 'next' 
+        ? (current + 1) % totalPages 
+        : (current - 1 + totalPages) % totalPages;
+      return { ...prev, [dateKey]: nextIndex };
+    });
+  };
+
+  // Turn media photo inside a single moment
+  const handleTurnMomentPhoto = (postId: string, direction: 'next' | 'prev', totalMedia: number) => {
+    setMomentPhotoIndices(prev => {
+      const current = prev[postId] || 0;
+      const nextIndex = direction === 'next'
+        ? (current + 1) % totalMedia
+        : (current - 1 + totalMedia) % totalMedia;
+      return { ...prev, [postId]: nextIndex };
+    });
+  };
+
+  // Toggle Day View Mode
+  const toggleDayViewMode = (dateKey: string) => {
+    setExpandedDays(prev => ({
+      ...prev,
+      [dateKey]: !(prev[dateKey] ?? !globalDeckMode)
+    }));
+  };
 
   // If not logged in
   if (!authToken) {
@@ -531,268 +421,60 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     <div className="max-w-4xl mx-auto px-4 py-8 space-y-8 select-none">
       
       {/* ── Header ── */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="space-y-1">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 flex items-center gap-2">
             <Sparkles className="w-7 h-7 text-amber-500" />
             Lifetime Line
           </h1>
-          <p className="text-sm text-slate-500">Your personal chronicle & timeline vault (Dual AD / BS Nepali Calendar Support)</p>
+          <p className="text-sm text-slate-500">Your personal social chronicle & photo timeline (Dual Gregorian AD & Bikram Sambat BS)</p>
         </div>
         
         <div className="flex items-center gap-2">
+          {/* Deck / List View Toggle */}
+          <button
+            onClick={() => setGlobalDeckMode(prev => !prev)}
+            className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+              globalDeckMode 
+                ? 'bg-blue-50 border-blue-200 text-blue-700' 
+                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Toggle Stacked Day Book vs Expanded Feed"
+          >
+            {globalDeckMode ? <Layers className="w-4 h-4 text-blue-600" /> : <List className="w-4 h-4 text-slate-500" />}
+            <span className="hidden md:inline">{globalDeckMode ? 'Stacked Day Book' : 'Expanded View'}</span>
+          </button>
+
           <button
             onClick={handleSyncDrive}
             disabled={syncing}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold rounded-xl text-sm transition shadow-sm"
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
           >
             {syncing ? <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> : <Clock className="w-4 h-4 text-slate-500" />}
-            {syncing ? 'Syncing...' : 'Sync GDrive'}
+            <span className="hidden sm:inline">{syncing ? 'Syncing...' : 'Sync GDrive'}</span>
           </button>
           
+          {/* New Moment Wizard Trigger Button */}
           <button
-            onClick={() => setShowCreator(!showCreator)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm transition shadow-sm"
+            onClick={() => setShowWizard(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold rounded-2xl text-xs sm:text-sm transition shadow-lg shadow-blue-500/25 active:scale-95"
           >
-            {showCreator ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-            {showCreator ? 'Close' : 'Document Moment'}
+            <Plus className="w-4 h-4" />
+            <span>Document Moment</span>
           </button>
         </div>
       </div>
 
-      {/* ── Post Creator Form ── */}
-      {showCreator && (
-        <form onSubmit={handleCreatePost} className="bg-white border border-slate-200 rounded-3xl p-6 shadow-md space-y-4 animate-in fade-in slide-in-from-top-4 duration-200">
-          
-          {/* Calendar Type Mode Toggle (AD vs BS) */}
-          <div className="flex items-center justify-between bg-slate-50 p-2 rounded-2xl border border-slate-200">
-            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 pl-2">
-              <Calendar className="w-4 h-4 text-amber-500" />
-              <span>Calendar Input System:</span>
-            </span>
-            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
-              <button
-                type="button"
-                onClick={() => setDateMode('AD')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                  dateMode === 'AD'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Gregorian (AD)
-              </button>
-              <button
-                type="button"
-                onClick={() => setDateMode('BS')}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                  dateMode === 'BS'
-                    ? 'bg-amber-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                🇳🇵 Bikram Sambat (BS)
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="md:col-span-2 space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Title (Optional)</label>
-              <input
-                type="text"
-                placeholder="What happened?"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-              />
-            </div>
-
-            {/* Date & Time Selector (Bi-directional AD <-> BS Sync) */}
-            <div className="space-y-1">
-              {dateMode === 'AD' ? (
-                <>
-                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">AD Date & Time</label>
-                  <input
-                    type="datetime-local"
-                    value={timestamp}
-                    onChange={e => handleAdTimestampChange(e.target.value)}
-                    className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-                    required
-                  />
-                  <div className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 mt-1">
-                    🇳🇵 BS: {currentFormBs.formattedBsNp} ({currentFormBs.formattedBs})
-                  </div>
-                </>
-              ) : (
-                <>
-                  <label className="text-[11px] font-extrabold text-amber-600 uppercase tracking-widest pl-1">🇳🇵 Nepali BS Date (Y-M-D)</label>
-                  <div className="grid grid-cols-3 gap-1">
-                    <select
-                      value={formBsYear}
-                      onChange={e => handleBsDateChange(parseInt(e.target.value, 10), formBsMonth, formBsDay)}
-                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
-                    >
-                      {getAvailableBsYears().map(y => (
-                        <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
-                      ))}
-                    </select>
-
-                    <select
-                      value={formBsMonth}
-                      onChange={e => handleBsDateChange(formBsYear, parseInt(e.target.value, 10), formBsDay)}
-                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
-                    >
-                      {BS_MONTHS.map(m => (
-                        <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
-                      ))}
-                    </select>
-
-                    <select
-                      value={formBsDay}
-                      onChange={e => handleBsDateChange(formBsYear, formBsMonth, parseInt(e.target.value, 10))}
-                      className="px-2 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
-                    >
-                      {Array.from({ length: getMonthDays(formBsYear, formBsMonth) }, (_, i) => i + 1).map(d => (
-                        <option key={d} value={d}>{d} गते ({toNepaliDigits(d)})</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="text-[11px] text-blue-700 font-semibold bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200 mt-1">
-                    AD Equivalent: {new Date(timestamp).toLocaleDateString()}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Write entry</label>
-            <textarea
-              placeholder="Record your thoughts or event details. Markdown is supported..."
-              rows={4}
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-sans resize-y"
-              required
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Category</label>
-              <input
-                type="text"
-                placeholder="e.g. Travel, Career, Health, Daily"
-                value={category}
-                onChange={e => setCategory(e.target.value)}
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Tags (comma separated)</label>
-              <input
-                type="text"
-                placeholder="e.g. trip, promotion, family"
-                value={rawTags}
-                onChange={e => setRawTags(e.target.value)}
-                className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50"
-              />
-            </div>
-          </div>
-
-          {/* Media Attachments Dropzone & Camera Buttons */}
-          <div className="space-y-3">
-            <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest pl-1">Attach Media (Images, Videos to Google Drive)</label>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Drag & Drop / File Browser */}
-              <div 
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-slate-200 hover:border-blue-400 rounded-2xl p-4 text-center cursor-pointer transition bg-slate-50 flex flex-col items-center justify-center gap-1"
-              >
-                <Upload className="w-5 h-5 text-blue-500" />
-                <p className="text-xs font-bold text-slate-700">Browse / Drag Files</p>
-                <p className="text-[10px] text-slate-400">Select images or videos</p>
-                <input 
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  accept="image/*,video/*"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-              </div>
-
-              {/* Take Photo / Camera Button */}
-              <div 
-                onClick={() => setShowCameraModal(true)}
-                className="border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-2xl p-4 text-center cursor-pointer transition bg-blue-50/50 flex flex-col items-center justify-center gap-1"
-              >
-                <Camera className="w-5 h-5 text-blue-600" />
-                <p className="text-xs font-bold text-blue-800">Take Photo / Camera</p>
-                <p className="text-[10px] text-blue-600">Snap live photo directly</p>
-                <input 
-                  ref={cameraInputRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-              </div>
-            </div>
-
-            {/* Selected Files Preview List */}
-            {selectedFiles.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-2">
-                {selectedFiles.map((file, idx) => (
-                  <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-700 shadow-sm">
-                    {file.type.startsWith('video/') ? <Video className="w-3.5 h-3.5 text-blue-500" /> : <Image className="w-3.5 h-3.5 text-teal-500" />}
-                    <span className="truncate max-w-[150px] font-mono font-semibold">{file.name}</span>
-                    <button 
-                      type="button" 
-                      onClick={() => removeSelectedFile(idx)}
-                      className="text-slate-400 hover:text-red-500 transition"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting || !content.trim()}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold rounded-xl text-sm transition flex items-center justify-center gap-2 shadow-md"
-          >
-            {submitting ? (
-              <><Loader2 className="w-4 h-4 animate-spin" /> Uploading media to Google Drive & saving...</>
-            ) : (
-              <><Check className="w-4 h-4" /> Save Moment</>
-            )}
-          </button>
-        </form>
-      )}
-
-      {/* ── LIVE CAMERA MODAL ── */}
-      {showCameraModal && (
-        <LiveCameraModal
-          onClose={() => setShowCameraModal(false)}
-          onCapture={(base64, fileName) => {
-            setSelectedFiles(prev => [
-              ...prev,
-              {
-                name: fileName,
-                type: 'image/jpeg',
-                base64
-              }
-            ]);
-          }}
+      {/* ── Social Moment Creation Wizard Modal ── */}
+      {showWizard && (
+        <TimelineWizardModal
+          onClose={() => setShowWizard(false)}
+          onSubmit={handleWizardSubmit}
+          categoriesList={categories}
+          tagsList={tags}
         />
       )}
+
       {errorMsg && (
         <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
           <AlertCircle className="w-4 h-4 shrink-0" />
@@ -801,63 +483,63 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       )}
 
       {/* ── Filter & Search Bar (AD & Bikram Sambat BS Support) ── */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 shadow-xs">
         {/* Search */}
         <div className="relative md:col-span-2">
-          <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
+          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
           <input
             type="text"
-            placeholder="Search moments..."
+            placeholder="Search moments, tags, titles..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-medium"
           />
         </div>
 
         {/* Category Filter */}
         <div className="relative">
-          <FolderOpen className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
+          <FolderOpen className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
           <select
             value={selectedCategory}
             onChange={e => setSelectedCategory(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white appearance-none cursor-pointer text-slate-700 font-semibold"
+            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none cursor-pointer text-slate-700 font-semibold"
           >
             <option value="">All Categories</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-slate-400 pointer-events-none" />
+          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-slate-400 pointer-events-none" />
         </div>
 
         {/* Bikram Sambat BS Year Filter */}
         <div className="relative">
-          <Calendar className="w-4 h-4 absolute left-3 top-3.5 text-amber-500" />
+          <Calendar className="w-4 h-4 absolute left-3 top-3 text-amber-500" />
           <select
             value={selectedBsYear}
             onChange={e => setSelectedBsYear(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
+            className="w-full pl-9 pr-4 py-2 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
           >
             <option value="">All BS Years</option>
             {getAvailableBsYears().map(y => (
               <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
             ))}
           </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-amber-500 pointer-events-none" />
+          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-amber-500 pointer-events-none" />
         </div>
 
         {/* Bikram Sambat BS Month Filter */}
         <div className="relative">
-          <Tag className="w-4 h-4 absolute left-3 top-3.5 text-amber-500" />
+          <Tag className="w-4 h-4 absolute left-3 top-3 text-amber-500" />
           <select
             value={selectedBsMonth}
             onChange={e => setSelectedBsMonth(e.target.value)}
-            className="w-full pl-9 pr-4 py-2.5 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
+            className="w-full pl-9 pr-4 py-2 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
           >
             <option value="">All BS Months</option>
             {BS_MONTHS.map(m => (
               <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
             ))}
           </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3.5 text-amber-500 pointer-events-none" />
+          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-amber-500 pointer-events-none" />
         </div>
       </div>
 
@@ -881,249 +563,231 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         </div>
       )}
 
-      {/* ── Feed Timeline List ── */}
+      {/* ── Feed Timeline with Horizontal Day Stacking & Page Turning ── */}
       {loading && posts.length === 0 ? (
         <div className="flex flex-col items-center py-20 gap-2 text-slate-400">
           <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
           <span className="text-xs font-semibold">Retrieving your timeline chronicle...</span>
         </div>
       ) : (
-        <div className="relative border-l border-slate-200 ml-6 pl-8 space-y-8 py-4">
+        <div className="relative border-l-2 border-slate-200 ml-4 sm:ml-6 pl-6 sm:pl-8 space-y-12 py-4">
           
-          {filteredPosts.map((post) => {
-            const dt = formatDate(post.timestamp);
-            const bsDate = adToBs(post.timestamp);
-            const isEditing = editingPostId === post._id;
+          {dayGroups.map((group) => {
+            const isDayExpanded = expandedDays[group.dateKey] ?? !globalDeckMode;
+            const currentDayPageIndex = (dayPageIndices[group.dateKey] || 0) % group.posts.length;
+            const activePost = group.posts[currentDayPageIndex] || group.posts[0];
+            const hasMultipleInDay = group.posts.length > 1;
 
             return (
-              <div key={post._id} className="relative group animate-in fade-in duration-200">
-                {/* Timeline Dot */}
-                <div className="absolute -left-[45px] top-1.5 w-8 h-8 bg-white border-2 border-slate-200 group-hover:border-blue-500 rounded-full flex flex-col items-center justify-center shadow-sm text-[9px] font-bold text-slate-600 transition">
-                  {dt.day}
-                  <span className="text-[7px] uppercase -mt-0.5">{dt.month}</span>
+              <div key={group.dateKey} className="relative group/day animate-in fade-in duration-200 space-y-4">
+                
+                {/* ── Day Timeline Dot & Milestone Connector ── */}
+                <div className="absolute -left-[37px] sm:-left-[45px] top-1.5 w-8 h-8 bg-white border-2 border-slate-300 group-hover/day:border-blue-600 rounded-full flex flex-col items-center justify-center shadow-md text-[9px] font-extrabold text-slate-700 transition z-10">
+                  {group.adDate.getDate()}
+                  <span className="text-[7px] uppercase -mt-0.5 text-slate-500">
+                    {group.adDate.toLocaleString('default', { month: 'short' })}
+                  </span>
                 </div>
 
-                {/* Post Body Container */}
-                <div className="bg-white border border-slate-100 hover:border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition space-y-4">
+                {/* ── Day Milestone Header Bar ── */}
+                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100/80 px-4 py-2 rounded-2xl border border-slate-200/80">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-extrabold text-xs sm:text-sm text-slate-900">
+                      {group.adDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 font-extrabold text-[11px] flex items-center gap-1">
+                      <span>🇳🇵</span>
+                      <span>{group.bsDate.formattedBsNp}</span>
+                    </span>
+                    <span className="text-[11px] font-bold text-slate-500 bg-white px-2.5 py-0.5 rounded-full border border-slate-200">
+                      {group.posts.length} {group.posts.length === 1 ? 'Moment' : 'Moments'}
+                      {group.totalSnaps > 0 && ` • ${group.totalSnaps} Snaps`}
+                    </span>
+                  </div>
+
+                  {/* Toggle Deck (Page-Turner) vs Expanded View for this day */}
+                  {hasMultipleInDay && (
+                    <button
+                      type="button"
+                      onClick={() => toggleDayViewMode(group.dateKey)}
+                      className="px-3 py-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1 shadow-xs"
+                    >
+                      {isDayExpanded ? (
+                        <>
+                          <Layers className="w-3.5 h-3.5 text-blue-600" />
+                          <span>Stack as Book</span>
+                        </>
+                      ) : (
+                        <>
+                          <List className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Expand All</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* ── RENDERING: STACKED PAGE-TURNER DECK vs EXPANDED LIST ── */}
+                {!isDayExpanded && hasMultipleInDay ? (
                   
-                  {isEditing ? (
-                    // ── Editing view ──
-                    <div className="space-y-4">
-                      {/* Edit Calendar Mode Toggle */}
-                      <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-200">
-                        <span className="text-xs font-bold text-slate-700">Edit Date Mode:</span>
-                        <div className="flex gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setEditDateMode('AD')}
-                            className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'AD' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}
-                          >
-                            AD
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditDateMode('BS')}
-                            className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'BS' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'}`}
-                          >
-                            BS (Nepali)
-                          </button>
-                        </div>
+                  /* ═══════════ HORIZONTAL DAY STORY DECK (PAGE-TURNER) ═══════════ */
+                  <div className="bg-white border-2 border-slate-200/90 rounded-3xl p-6 shadow-md hover:shadow-xl transition-all duration-300 space-y-5 relative overflow-hidden group/card">
+                    
+                    {/* Top Page-Turn Navigation Header */}
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                      <div className="flex items-center gap-2">
+                        <span className="bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full text-xs font-extrabold">
+                          📖 Moment {currentDayPageIndex + 1} of {group.posts.length}
+                        </span>
+                        <span className="text-xs text-slate-400 font-medium">
+                          {new Date(activePost.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
                       </div>
 
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <input
-                          type="text"
-                          value={editTitle}
-                          onChange={e => setEditTitle(e.target.value)}
-                          placeholder="Title"
-                          className="md:col-span-2 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-                        />
-
-                        {editDateMode === 'AD' ? (
-                          <input
-                            type="datetime-local"
-                            value={editTimestamp}
-                            onChange={e => handleEditAdTimestampChange(e.target.value)}
-                            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-                          />
-                        ) : (
-                          <div className="grid grid-cols-3 gap-1">
-                            <select
-                              value={editBsYear}
-                              onChange={e => handleEditBsDateChange(parseInt(e.target.value, 10), editBsMonth, editBsDay)}
-                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-                            >
-                              {getAvailableBsYears().map(y => (
-                                <option key={y} value={y}>{y}</option>
-                              ))}
-                            </select>
-                            <select
-                              value={editBsMonth}
-                              onChange={e => handleEditBsDateChange(editBsYear, parseInt(e.target.value, 10), editBsDay)}
-                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-                            >
-                              {BS_MONTHS.map(m => (
-                                <option key={m.id} value={m.id}>{m.np}</option>
-                              ))}
-                            </select>
-                            <select
-                              value={editBsDay}
-                              onChange={e => handleEditBsDateChange(editBsYear, editBsMonth, parseInt(e.target.value, 10))}
-                              className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-                            >
-                              {Array.from({ length: getMonthDays(editBsYear, editBsMonth) }, (_, i) => i + 1).map(d => (
-                                <option key={d} value={d}>{d}</option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                      <textarea
-                        value={editContent}
-                        onChange={e => setEditContent(e.target.value)}
-                        rows={3}
-                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 resize-y"
-                      />
-                      <div className="grid grid-cols-2 gap-2">
-                        <input
-                          type="text"
-                          value={editCategory}
-                          onChange={e => setEditCategory(e.target.value)}
-                          placeholder="Category"
-                          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-                        />
-                        <input
-                          type="text"
-                          value={editRawTags}
-                          onChange={e => setEditRawTags(e.target.value)}
-                          placeholder="Tags (comma separated)"
-                          className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-                        />
-                      </div>
-                      <div className="flex gap-2 justify-end">
+                      {/* Previous & Next Page Turn Arrow Buttons */}
+                      <div className="flex items-center gap-1.5">
                         <button
-                          onClick={() => setEditingPostId(null)}
-                          className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-xs font-semibold rounded-lg transition"
+                          type="button"
+                          onClick={() => handleTurnDayPage(group.dateKey, 'prev', group.posts.length)}
+                          className="p-2 rounded-xl bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
+                          title="Previous moment on this day"
                         >
-                          Cancel
+                          <ChevronLeft className="w-4 h-4" />
                         </button>
+                        
+                        {/* Dot indicators */}
+                        <div className="flex items-center gap-1 px-1">
+                          {group.posts.map((_, pIdx) => (
+                            <button
+                              key={pIdx}
+                              onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
+                              className={`h-2 rounded-full transition-all ${
+                                pIdx === currentDayPageIndex ? 'w-5 bg-blue-600' : 'w-2 bg-slate-200 hover:bg-slate-300'
+                              }`}
+                              title={`Jump to moment ${pIdx + 1}`}
+                            />
+                          ))}
+                        </div>
+
                         <button
-                          onClick={() => handleUpdatePost(post._id)}
-                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition"
+                          type="button"
+                          onClick={() => handleTurnDayPage(group.dateKey, 'next', group.posts.length)}
+                          className="p-2 rounded-xl bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
+                          title="Next moment on this day"
                         >
-                          Save
+                          <ChevronRight className="w-4 h-4" />
                         </button>
                       </div>
                     </div>
-                  ) : (
-                    // ── Display view ──
-                    <>
-                      {/* Top bar with category, AD date, and Bikram Sambat (BS) badge */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="px-2.5 py-1 bg-amber-50 border border-amber-100 text-amber-700 font-extrabold uppercase tracking-wider rounded-lg text-[9px]">
-                            {post.category}
-                          </span>
-                          
-                          {/* Gregorian AD Date */}
-                          <span className="text-slate-400 flex items-center gap-1 font-medium">
-                            <Clock className="w-3.5 h-3.5" />
-                            {dt.time}, {dt.month} {dt.day}, {dt.year} AD
-                          </span>
 
-                          {/* Bikram Sambat BS Nepali Date Badge */}
-                          <span className="px-2.5 py-0.5 rounded-full bg-amber-100/70 border border-amber-300 text-amber-900 font-bold text-[11px] flex items-center gap-1">
-                            <span>🇳🇵</span>
-                            <span>{bsDate.formattedBsNp}</span>
-                            <span className="text-[10px] text-amber-700">({bsDate.formattedBs})</span>
-                          </span>
-                        </div>
-                        
-                        <div className="opacity-0 group-hover:opacity-100 flex items-center gap-1.5 transition">
-                          <button 
-                            onClick={() => startEdit(post)}
-                            className="p-1.5 text-slate-400 hover:text-blue-500 rounded-lg hover:bg-slate-50 transition"
-                            title="Edit memory"
+                    {/* Active Post Content in the Deck */}
+                    <MomentCardBody
+                      post={activePost}
+                      isEditing={editingPostId === activePost._id}
+                      startEdit={() => startEdit(activePost)}
+                      onDelete={() => handleDeletePost(activePost._id)}
+                      onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
+                      momentPhotoIndex={momentPhotoIndices[activePost._id] || 0}
+                      onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(activePost._id, dir, count)}
+                      selectedTag={selectedTag}
+                      setSelectedTag={setSelectedTag}
+                      // Edit view props
+                      editTitle={editTitle}
+                      setEditTitle={setEditTitle}
+                      editContent={editContent}
+                      setEditContent={setEditContent}
+                      editCategory={editCategory}
+                      setEditCategory={setEditCategory}
+                      editRawTags={editRawTags}
+                      setEditRawTags={setEditRawTags}
+                      editTimestamp={editTimestamp}
+                      editDateMode={editDateMode}
+                      setEditDateMode={setEditDateMode}
+                      editBsYear={editBsYear}
+                      editBsMonth={editBsMonth}
+                      editBsDay={editBsDay}
+                      handleEditAdTimestampChange={handleEditAdTimestampChange}
+                      handleEditBsDateChange={handleEditBsDateChange}
+                      handleUpdatePost={() => handleUpdatePost(activePost._id)}
+                      cancelEdit={() => setEditingPostId(null)}
+                    />
+
+                    {/* Bottom Mini-Thumbnails Strip to Jump Quickly */}
+                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100 overflow-x-auto scrollbar-none">
+                      <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest shrink-0">
+                        Day Moments:
+                      </span>
+                      {group.posts.map((p, pIdx) => {
+                        const isCurrent = pIdx === currentDayPageIndex;
+                        const firstMedia = p.media && p.media.length > 0 ? p.media[0] : null;
+
+                        return (
+                          <button
+                            key={p._id}
+                            onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
+                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition text-xs shrink-0 ${
+                              isCurrent
+                                ? 'bg-blue-50 border-blue-300 text-blue-700 font-extrabold shadow-xs'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
                           >
-                            <Edit2 className="w-3.5 h-3.5" />
+                            {firstMedia ? (
+                              <img src={firstMedia.viewUrl} alt="" className="w-4 h-4 rounded-md object-cover" />
+                            ) : (
+                              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                            )}
+                            <span className="truncate max-w-[100px]">{p.title || `Moment #${pIdx + 1}`}</span>
                           </button>
-                          <button 
-                            onClick={() => handleDeletePost(post._id)}
-                            className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-slate-50 transition"
-                            title="Delete memory"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                ) : (
+
+                  /* ═══════════ EXPANDED CARDS FOR THIS DAY ═══════════ */
+                  <div className="space-y-6">
+                    {group.posts.map((post) => (
+                      <div
+                        key={post._id}
+                        className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-sm hover:shadow-md transition space-y-4"
+                      >
+                        <MomentCardBody
+                          post={post}
+                          isEditing={editingPostId === post._id}
+                          startEdit={() => startEdit(post)}
+                          onDelete={() => handleDeletePost(post._id)}
+                          onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
+                          momentPhotoIndex={momentPhotoIndices[post._id] || 0}
+                          onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(post._id, dir, count)}
+                          selectedTag={selectedTag}
+                          setSelectedTag={setSelectedTag}
+                          // Edit view props
+                          editTitle={editTitle}
+                          setEditTitle={setEditTitle}
+                          editContent={editContent}
+                          setEditContent={setEditContent}
+                          editCategory={editCategory}
+                          setEditCategory={setEditCategory}
+                          editRawTags={editRawTags}
+                          setEditRawTags={setEditRawTags}
+                          editTimestamp={editTimestamp}
+                          editDateMode={editDateMode}
+                          setEditDateMode={setEditDateMode}
+                          editBsYear={editBsYear}
+                          editBsMonth={editBsMonth}
+                          editBsDay={editBsDay}
+                          handleEditAdTimestampChange={handleEditAdTimestampChange}
+                          handleEditBsDateChange={handleEditBsDateChange}
+                          handleUpdatePost={() => handleUpdatePost(post._id)}
+                          cancelEdit={() => setEditingPostId(null)}
+                        />
                       </div>
+                    ))}
+                  </div>
 
-                      {/* Title & Description */}
-                      <div className="space-y-2">
-                        {post.title && (
-                          <h3 className="text-lg font-extrabold text-slate-800 tracking-tight">{post.title}</h3>
-                        )}
-                        <p className="text-sm text-slate-600 leading-relaxed font-sans whitespace-pre-wrap">
-                          {post.content}
-                        </p>
-                      </div>
+                )}
 
-                      {/* Attachments rendering */}
-                      {post.media && post.media.length > 0 && (
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 pt-2">
-                          {post.media.map((file, fIdx) => (
-                            <div 
-                              key={fIdx} 
-                              onClick={() => {
-                                setLightboxItems(post.media!.map(m => ({
-                                  url: m.viewUrl,
-                                  thumbnailUrl: m.thumbnailUrl,
-                                  name: m.fileName,
-                                  type: m.mimeType
-                                })));
-                                setLightboxIndex(fIdx);
-                                setShowLightbox(true);
-                              }}
-                              className="relative border border-slate-100 rounded-2xl overflow-hidden cursor-pointer hover:opacity-95 transition bg-slate-50 aspect-video group/media shadow-sm"
-                            >
-                              {file.mimeType.startsWith('video/') ? (
-                                <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-900 text-white">
-                                  <Film className="w-8 h-8 text-blue-400 group-hover/media:scale-110 transition duration-150" />
-                                  <span className="text-[10px] font-mono text-slate-300 absolute bottom-2 px-2 truncate max-w-full">{file.fileName}</span>
-                                </div>
-                              ) : (
-                                <img 
-                                  src={file.viewUrl} 
-                                  alt={file.fileName} 
-                                  className="w-full h-full object-cover group-hover/media:scale-105 transition duration-200" 
-                                  loading="lazy"
-                                />
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Tags */}
-                      {post.tags && post.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          {post.tags.map(t => (
-                            <span 
-                              key={t} 
-                              onClick={() => setSelectedTag(t === selectedTag ? '' : t)}
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md cursor-pointer transition ${
-                                selectedTag === t 
-                                  ? 'bg-blue-600 text-white' 
-                                  : 'bg-slate-100 hover:bg-slate-200 text-slate-500'
-                              }`}
-                            >
-                              #{t}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
               </div>
             );
           })}
@@ -1133,10 +797,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
       {/* ── Empty State ── */}
       {!loading && filteredPosts.length === 0 && (
-        <div className="text-center py-20 border border-dashed border-slate-200 rounded-3xl bg-slate-50 space-y-3">
-          <BookOpen className="w-8 h-8 text-slate-300 mx-auto" />
-          <h3 className="text-sm font-bold text-slate-600">No memories found</h3>
-          <p className="text-xs text-slate-400 max-w-xs mx-auto">No timeline posts match the selected search, category, tag, or BS date filters.</p>
+        <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white space-y-4">
+          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+            <BookOpen className="w-8 h-8" />
+          </div>
+          <div>
+            <h3 className="text-base font-extrabold text-slate-800">No memories in this view</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+              Start capturing moments with full-screen camera snaps or photos to build your lifetime chronicle.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowWizard(true)}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-2xl transition shadow-md shadow-blue-500/20 inline-flex items-center gap-1.5"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Document First Moment</span>
+          </button>
         </div>
       )}
 
@@ -1144,9 +821,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {posts.length < total && !loading && (
         <button
           onClick={() => fetchPosts(false)}
-          className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-xl text-xs transition border border-slate-200 shadow-sm"
+          className="w-full py-3 bg-white hover:bg-slate-50 text-slate-700 font-bold rounded-2xl text-xs transition border border-slate-200 shadow-sm"
         >
-          Load Older Memories
+          Load Older Memories ({posts.length} of {total})
         </button>
       )}
 
@@ -1159,6 +836,338 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         />
       )}
 
+    </div>
+  );
+};
+
+// ── Sub-Component for Rendering an Individual Moment's Card Body ──
+interface MomentCardBodyProps {
+  post: Post;
+  isEditing: boolean;
+  startEdit: () => void;
+  onDelete: () => void;
+  onOpenLightbox: (media: MediaItem[], index: number) => void;
+  momentPhotoIndex: number;
+  onTurnMomentPhoto: (direction: 'next' | 'prev', count: number) => void;
+  selectedTag: string;
+  setSelectedTag: (tag: string) => void;
+
+  // Edit Props
+  editTitle: string;
+  setEditTitle: (val: string) => void;
+  editContent: string;
+  setEditContent: (val: string) => void;
+  editCategory: string;
+  setEditCategory: (val: string) => void;
+  editRawTags: string;
+  setEditRawTags: (val: string) => void;
+  editTimestamp: string;
+  editDateMode: 'AD' | 'BS';
+  setEditDateMode: (val: 'AD' | 'BS') => void;
+  editBsYear: number;
+  editBsMonth: number;
+  editBsDay: number;
+  handleEditAdTimestampChange: (val: string) => void;
+  handleEditBsDateChange: (y: number, m: number, d: number) => void;
+  handleUpdatePost: () => void;
+  cancelEdit: () => void;
+}
+
+const MomentCardBody: React.FC<MomentCardBodyProps> = ({
+  post,
+  isEditing,
+  startEdit,
+  onDelete,
+  onOpenLightbox,
+  momentPhotoIndex,
+  onTurnMomentPhoto,
+  selectedTag,
+  setSelectedTag,
+  editTitle,
+  setEditTitle,
+  editContent,
+  setEditContent,
+  editCategory,
+  setEditCategory,
+  editRawTags,
+  setEditRawTags,
+  editTimestamp,
+  editDateMode,
+  setEditDateMode,
+  editBsYear,
+  editBsMonth,
+  editBsDay,
+  handleEditAdTimestampChange,
+  handleEditBsDateChange,
+  handleUpdatePost,
+  cancelEdit
+}) => {
+  const dt = new Date(post.timestamp);
+  const bsDate = adToBs(post.timestamp);
+  const mediaCount = post.media?.length || 0;
+  const currentMediaIdx = mediaCount > 0 ? momentPhotoIndex % mediaCount : 0;
+  const currentMedia = post.media && post.media.length > 0 ? post.media[currentMediaIdx] : null;
+
+  if (isEditing) {
+    return (
+      <div className="space-y-4 animate-in fade-in duration-150">
+        <div className="flex items-center justify-between bg-slate-50 p-2 rounded-xl border border-slate-200">
+          <span className="text-xs font-bold text-slate-700">Edit Date Mode:</span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              onClick={() => setEditDateMode('AD')}
+              className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'AD' ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+            >
+              AD
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditDateMode('BS')}
+              className={`px-2.5 py-0.5 text-xs font-bold rounded ${editDateMode === 'BS' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'}`}
+            >
+              BS (Nepali)
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <input
+            type="text"
+            value={editTitle}
+            onChange={e => setEditTitle(e.target.value)}
+            placeholder="Title"
+            className="md:col-span-2 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
+          />
+
+          {editDateMode === 'AD' ? (
+            <input
+              type="datetime-local"
+              value={editTimestamp}
+              onChange={e => handleEditAdTimestampChange(e.target.value)}
+              className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
+            />
+          ) : (
+            <div className="grid grid-cols-3 gap-1">
+              <select
+                value={editBsYear}
+                onChange={e => handleEditBsDateChange(parseInt(e.target.value, 10), editBsMonth, editBsDay)}
+                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+              >
+                {getAvailableBsYears().map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+              <select
+                value={editBsMonth}
+                onChange={e => handleEditBsDateChange(editBsYear, parseInt(e.target.value, 10), editBsDay)}
+                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+              >
+                {BS_MONTHS.map(m => (
+                  <option key={m.id} value={m.id}>{m.np}</option>
+                ))}
+              </select>
+              <select
+                value={editBsDay}
+                onChange={e => handleEditBsDateChange(editBsYear, editBsMonth, parseInt(e.target.value, 10))}
+                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
+              >
+                {Array.from({ length: getMonthDays(editBsYear, editBsMonth) }, (_, i) => i + 1).map(d => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <textarea
+          value={editContent}
+          onChange={e => setEditContent(e.target.value)}
+          rows={3}
+          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 resize-y"
+        />
+
+        <div className="grid grid-cols-2 gap-2">
+          <input
+            type="text"
+            value={editCategory}
+            onChange={e => setEditCategory(e.target.value)}
+            placeholder="Category"
+            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
+          />
+          <input
+            type="text"
+            value={editRawTags}
+            onChange={e => setEditRawTags(e.target.value)}
+            placeholder="Tags (comma separated)"
+            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
+          />
+        </div>
+
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={cancelEdit}
+            className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-xs font-semibold rounded-lg transition"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleUpdatePost}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition"
+          >
+            Save Changes
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Top Bar with Category, Time & Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="px-2.5 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 font-extrabold uppercase tracking-wider rounded-lg text-[9px]">
+            {post.category || 'General'}
+          </span>
+          <span className="text-slate-400 flex items-center gap-1 font-medium">
+            <Clock className="w-3.5 h-3.5" />
+            {dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          </span>
+          <span className="px-2.5 py-0.5 rounded-full bg-amber-100/70 border border-amber-300 text-amber-900 font-bold text-[10px] flex items-center gap-1">
+            <span>🇳🇵</span>
+            <span>{bsDate.formattedBsNp}</span>
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition">
+          <button
+            onClick={startEdit}
+            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
+            title="Edit moment"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={onDelete}
+            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
+            title="Delete moment"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Horizontal Multi-Snap Media Carousel / Deck */}
+      {currentMedia && (
+        <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video sm:aspect-[16/9] max-h-[380px] flex items-center justify-center border border-slate-100 shadow-xs group/snap">
+          {currentMedia.mimeType.startsWith('video/') ? (
+            <div 
+              onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
+              className="w-full h-full flex flex-col items-center justify-center relative cursor-pointer text-white"
+            >
+              <Film className="w-12 h-12 text-blue-400 group-hover/snap:scale-110 transition duration-150" />
+              <span className="text-xs font-mono text-slate-300 absolute bottom-3 px-3 truncate max-w-full">{currentMedia.fileName}</span>
+            </div>
+          ) : (
+            <img
+              src={currentMedia.viewUrl}
+              alt={currentMedia.fileName}
+              onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
+              className="w-full h-full object-cover cursor-pointer group-hover/snap:scale-[1.02] transition duration-300"
+              loading="lazy"
+            />
+          )}
+
+          {/* Quick Full-Screen View Overlay */}
+          <button
+            type="button"
+            onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
+            className="absolute top-3 left-3 p-1.5 bg-black/50 hover:bg-black/75 text-white rounded-lg backdrop-blur-md opacity-0 group-hover/snap:opacity-100 transition"
+            title="View Full Resolution"
+          >
+            <Eye className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Snap page count badge */}
+          {mediaCount > 1 && (
+            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full text-white text-[11px] font-bold">
+              Snap {currentMediaIdx + 1} of {mediaCount}
+            </div>
+          )}
+
+          {/* Page-turner navigation arrows inside multi-image moment */}
+          {mediaCount > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTurnMomentPhoto('prev', mediaCount);
+                }}
+                className="absolute left-2.5 p-2 bg-black/50 hover:bg-black/80 text-white rounded-full transition shadow-lg active:scale-90"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTurnMomentPhoto('next', mediaCount);
+                }}
+                className="absolute right-2.5 p-2 bg-black/50 hover:bg-black/80 text-white rounded-full transition shadow-lg active:scale-90"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </>
+          )}
+
+          {/* Dot indicators */}
+          {mediaCount > 1 && (
+            <div className="absolute bottom-2.5 flex items-center gap-1">
+              {post.media!.map((_, dotIdx) => (
+                <div
+                  key={dotIdx}
+                  className={`h-1.5 rounded-full transition-all ${
+                    dotIdx === currentMediaIdx ? 'w-4 bg-white' : 'w-1.5 bg-white/50'
+                  }`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Title & Description */}
+      <div className="space-y-1.5">
+        {post.title && (
+          <h3 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-snug">
+            {post.title}
+          </h3>
+        )}
+        <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-sans whitespace-pre-wrap">
+          {post.content}
+        </p>
+      </div>
+
+      {/* Tags */}
+      {post.tags && post.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {post.tags.map(t => (
+            <span
+              key={t}
+              onClick={() => setSelectedTag(t === selectedTag ? '' : t)}
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-md cursor-pointer transition ${
+                selectedTag === t
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+              }`}
+            >
+              #{t}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
