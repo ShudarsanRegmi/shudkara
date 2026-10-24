@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
-  Tag, Search, Plus, Trash2, Edit2, 
-  Film, AlertCircle, ChevronDown, 
-  Loader2, Sparkles, BookOpen, Clock, FolderOpen, Calendar,
-  ChevronLeft, ChevronRight, Layers, List, Eye
+  Plus, Trash2, Edit2, 
+  Film, AlertCircle, 
+  Loader2, Sparkles, BookOpen, Clock, Calendar,
+  ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
-  toNepaliDigits, type BikramSambatDate 
+  type BikramSambatDate 
 } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
 import { TimelineWizardModal, type DraftMediaItem } from './TimelineWizardModal';
+import { TimelineSidebar } from './TimelineSidebar';
 
 export interface MediaItem {
   googleDriveId: string;
@@ -35,6 +36,16 @@ interface LifetimeLineProps {
   authToken?: string | null;
 }
 
+// Robust Local Day Date Key Calculation (Fixes Timezone Shift Bug)
+export function getLocalDateKey(isoString: string): string {
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return 'unknown';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 interface DayGroup {
   dateKey: string;
   adDate: Date;
@@ -47,9 +58,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   
-  // Filters & Pagination
+  // Filters & Search
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedTag, setSelectedTag] = useState('');
@@ -58,8 +70,11 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
   const [categories, setCategories] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
-  const [limit] = useState(20);
+  const [limit] = useState(15);
   const [skip, setSkip] = useState(0);
+
+  // Sidebar Drawer state
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Social Wizard Modal State
   const [showWizard, setShowWizard] = useState(false);
@@ -89,8 +104,11 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [momentPhotoIndices, setMomentPhotoIndices] = useState<Record<string, number>>({});
   // View mode toggle per day: 'deck' (stacked page-turner) vs 'expanded' (list)
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
-  // Global deck mode toggle
+  // Global deck mode toggle (Stored in state and easily configured via Sidebar)
   const [globalDeckMode, setGlobalDeckMode] = useState<boolean>(true);
+
+  // Infinite Scroll / Lazy Load Sentinel Ref
+  const observerTargetRef = useRef<HTMLDivElement>(null);
 
   // Sync Google Drive
   const handleSyncDrive = async () => {
@@ -117,7 +135,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   };
 
-  // Fetch posts & filter metadata
+  // Fetch filter metadata
   const fetchFilterMetadata = async () => {
     if (!authToken) return;
     try {
@@ -132,9 +150,14 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     } catch {}
   };
 
+  // Fetch posts with pagination
   const fetchPosts = async (reset = false) => {
     if (!authToken) return;
-    setLoading(true);
+    if (reset) {
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     setErrorMsg('');
     try {
       const currentSkip = reset ? 0 : skip;
@@ -166,15 +189,38 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       setErrorMsg('Network error while loading timeline feed.');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   };
 
+  // Re-fetch when search or category/tag filters change
   useEffect(() => {
     if (authToken) {
       fetchPosts(true);
       fetchFilterMetadata();
     }
   }, [search, selectedCategory, selectedTag, authToken]);
+
+  // Infinite Scroll / Lazy Load Observer
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0].isIntersecting && !loading && !loadingMore && posts.length < total) {
+          fetchPosts(false);
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    const currentTarget = observerTargetRef.current;
+    if (currentTarget) {
+      observer.observe(currentTarget);
+    }
+
+    return () => {
+      if (currentTarget) observer.unobserve(currentTarget);
+    };
+  }, [loading, loadingMore, posts.length, total]);
 
   // Submit new post from Social Wizard
   const handleWizardSubmit = async (postData: {
@@ -337,20 +383,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   };
 
   // Bikram Sambat filtering
-  const filteredPosts = posts.filter(post => {
-    if (!selectedBsYear && !selectedBsMonth) return true;
-    const bs = adToBs(post.timestamp);
-    if (selectedBsYear && bs.year !== parseInt(selectedBsYear, 10)) return false;
-    if (selectedBsMonth && bs.month !== parseInt(selectedBsMonth, 10)) return false;
-    return true;
-  });
+  const filteredPosts = useMemo(() => {
+    return posts.filter(post => {
+      if (!selectedBsYear && !selectedBsMonth) return true;
+      const bs = adToBs(post.timestamp);
+      if (selectedBsYear && bs.year !== parseInt(selectedBsYear, 10)) return false;
+      if (selectedBsMonth && bs.month !== parseInt(selectedBsMonth, 10)) return false;
+      return true;
+    });
+  }, [posts, selectedBsYear, selectedBsMonth]);
 
-  // Group filtered posts by day (YYYY-MM-DD)
-  const dayGroups: DayGroup[] = React.useMemo(() => {
+  // Robust Grouping of Filtered Posts by Local Calendar Day
+  const dayGroups: DayGroup[] = useMemo(() => {
     const groupsMap: Record<string, Post[]> = {};
 
     filteredPosts.forEach(post => {
-      const dateKey = new Date(post.timestamp).toISOString().substring(0, 10);
+      // Use local date key so timezone offsets never split same-day snaps
+      const dateKey = getLocalDateKey(post.timestamp);
       if (!groupsMap[dateKey]) {
         groupsMap[dateKey] = [];
       }
@@ -358,7 +407,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     });
 
     return Object.entries(groupsMap).map(([dateKey, dayPosts]) => {
-      // Sort day posts chronologically (latest first)
+      // Sort day posts latest first
       dayPosts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
       const sampleDate = new Date(dayPosts[0].timestamp);
       const bsDate = adToBs(sampleDate);
@@ -404,6 +453,21 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }));
   };
 
+  // Calculate active filter count
+  const activeFilterCount = (search ? 1 : 0) + 
+    (selectedCategory ? 1 : 0) + 
+    (selectedTag ? 1 : 0) + 
+    (selectedBsYear ? 1 : 0) + 
+    (selectedBsMonth ? 1 : 0);
+
+  const handleResetFilters = () => {
+    setSearch('');
+    setSelectedCategory('');
+    setSelectedTag('');
+    setSelectedBsYear('');
+    setSelectedBsMonth('');
+  };
+
   // If not logged in
   if (!authToken) {
     return (
@@ -418,46 +482,50 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8 space-y-8 select-none">
+    <div className="w-full pb-20 select-none">
       
-      {/* ── Header ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 flex items-center gap-2">
-            <Sparkles className="w-7 h-7 text-amber-500" />
-            Lifetime Line
-          </h1>
-          <p className="text-sm text-slate-500">Your personal social chronicle & photo timeline (Dual Gregorian AD & Bikram Sambat BS)</p>
+      {/* ── Compact Space-Saving Top Header Bar ── */}
+      <div className="flex items-center justify-between gap-3 mb-6 bg-white border border-slate-200/90 px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
+            <Sparkles className="w-5 h-5 text-blue-600" />
+          </div>
+          <div>
+            <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 leading-none">
+              Lifetime Line
+            </h1>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {total} memories in chronicle
+            </p>
+          </div>
         </div>
         
         <div className="flex items-center gap-2">
-          {/* Deck / List View Toggle */}
+          {/* Filters & Config Drawer Toggle Button */}
           <button
-            onClick={() => setGlobalDeckMode(prev => !prev)}
-            className={`p-2.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
-              globalDeckMode 
-                ? 'bg-blue-50 border-blue-200 text-blue-700' 
-                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+            type="button"
+            onClick={() => setIsSidebarOpen(prev => !prev)}
+            className={`px-3 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 shadow-xs ${
+              activeFilterCount > 0 
+                ? 'bg-blue-50 border-blue-300 text-blue-700' 
+                : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
             }`}
-            title="Toggle Stacked Day Book vs Expanded Feed"
+            title="Configure feed, search & calendar filters"
           >
-            {globalDeckMode ? <Layers className="w-4 h-4 text-blue-600" /> : <List className="w-4 h-4 text-slate-500" />}
-            <span className="hidden md:inline">{globalDeckMode ? 'Stacked Day Book' : 'Expanded View'}</span>
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Filters & Config</span>
+            {activeFilterCount > 0 && (
+              <span className="w-4 h-4 rounded-full bg-blue-600 text-white text-[9px] font-extrabold flex items-center justify-center">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
 
+          {/* Clean Solid Document Moment Button (Zero Garish Gradients) */}
           <button
-            onClick={handleSyncDrive}
-            disabled={syncing}
-            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-100 border border-slate-200 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold rounded-xl text-xs transition shadow-xs"
-          >
-            {syncing ? <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> : <Clock className="w-4 h-4 text-slate-500" />}
-            <span className="hidden sm:inline">{syncing ? 'Syncing...' : 'Sync GDrive'}</span>
-          </button>
-          
-          {/* New Moment Wizard Trigger Button */}
-          <button
+            type="button"
             onClick={() => setShowWizard(true)}
-            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold rounded-2xl text-xs sm:text-sm transition shadow-lg shadow-blue-500/25 active:scale-95"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold rounded-xl text-xs sm:text-sm transition shadow-sm"
           >
             <Plus className="w-4 h-4" />
             <span>Document Moment</span>
@@ -465,304 +533,192 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         </div>
       </div>
 
-      {/* ── Social Moment Creation Wizard Modal ── */}
-      {showWizard && (
-        <TimelineWizardModal
-          onClose={() => setShowWizard(false)}
-          onSubmit={handleWizardSubmit}
-          categoriesList={categories}
-          tagsList={tags}
-        />
-      )}
-
-      {errorMsg && (
-        <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl text-xs text-red-700 font-medium">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          {errorMsg}
-        </div>
-      )}
-
-      {/* ── Filter & Search Bar (AD & Bikram Sambat BS Support) ── */}
-      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 shadow-xs">
-        {/* Search */}
-        <div className="relative md:col-span-2">
-          <Search className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search moments, tags, titles..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-medium"
-          />
-        </div>
-
-        {/* Category Filter */}
-        <div className="relative">
-          <FolderOpen className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-          <select
-            value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 appearance-none cursor-pointer text-slate-700 font-semibold"
-          >
-            <option value="">All Categories</option>
-            {categories.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-slate-400 pointer-events-none" />
-        </div>
-
-        {/* Bikram Sambat BS Year Filter */}
-        <div className="relative">
-          <Calendar className="w-4 h-4 absolute left-3 top-3 text-amber-500" />
-          <select
-            value={selectedBsYear}
-            onChange={e => setSelectedBsYear(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
-          >
-            <option value="">All BS Years</option>
-            {getAvailableBsYears().map(y => (
-              <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
-            ))}
-          </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-amber-500 pointer-events-none" />
-        </div>
-
-        {/* Bikram Sambat BS Month Filter */}
-        <div className="relative">
-          <Tag className="w-4 h-4 absolute left-3 top-3 text-amber-500" />
-          <select
-            value={selectedBsMonth}
-            onChange={e => setSelectedBsMonth(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 border border-amber-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500 bg-amber-50/60 appearance-none cursor-pointer text-amber-900 font-semibold"
-          >
-            <option value="">All BS Months</option>
-            {BS_MONTHS.map(m => (
-              <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
-            ))}
-          </select>
-          <ChevronDown className="w-4 h-4 absolute right-3 top-3 text-amber-500 pointer-events-none" />
-        </div>
-      </div>
-
-      {/* Tag Pills */}
-      {tags.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 items-center pt-1">
-          <span className="text-xs font-bold text-slate-400 mr-1">Tags:</span>
-          {tags.map(t => (
-            <button
-              key={t}
-              onClick={() => setSelectedTag(selectedTag === t ? '' : t)}
-              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition ${
-                selectedTag === t
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-              }`}
-            >
-              #{t}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* ── Feed Timeline with Horizontal Day Stacking & Page Turning ── */}
-      {loading && posts.length === 0 ? (
-        <div className="flex flex-col items-center py-20 gap-2 text-slate-400">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-          <span className="text-xs font-semibold">Retrieving your timeline chronicle...</span>
-        </div>
-      ) : (
-        <div className="relative border-l-2 border-slate-200 ml-4 sm:ml-6 pl-6 sm:pl-8 space-y-12 py-4">
+      {/* ── Main Two-Column Layout (Timeline Feed + Side Configuration Bar) ── */}
+      <div className="flex items-start gap-8">
+        
+        {/* Main Feed Content Area */}
+        <div className="flex-1 min-w-0 space-y-8">
           
-          {dayGroups.map((group) => {
-            const isDayExpanded = expandedDays[group.dateKey] ?? !globalDeckMode;
-            const currentDayPageIndex = (dayPageIndices[group.dateKey] || 0) % group.posts.length;
-            const activePost = group.posts[currentDayPageIndex] || group.posts[0];
-            const hasMultipleInDay = group.posts.length > 1;
+          {errorMsg && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
 
-            return (
-              <div key={group.dateKey} className="relative group/day animate-in fade-in duration-200 space-y-4">
-                
-                {/* ── Day Timeline Dot & Milestone Connector ── */}
-                <div className="absolute -left-[37px] sm:-left-[45px] top-1.5 w-8 h-8 bg-white border-2 border-slate-300 group-hover/day:border-blue-600 rounded-full flex flex-col items-center justify-center shadow-md text-[9px] font-extrabold text-slate-700 transition z-10">
-                  {group.adDate.getDate()}
-                  <span className="text-[7px] uppercase -mt-0.5 text-slate-500">
-                    {group.adDate.toLocaleString('default', { month: 'short' })}
-                  </span>
-                </div>
+          {/* Active Filter Chips Bar (If filters applied, show quick dismiss chips) */}
+          {activeFilterCount > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 bg-slate-50 p-2.5 rounded-2xl border border-slate-200 text-xs">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">Active:</span>
+              {search && (
+                <span className="bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-lg flex items-center gap-1 font-semibold">
+                  "{search}"
+                  <button onClick={() => setSearch('')} className="text-slate-400 hover:text-slate-700">&times;</button>
+                </span>
+              )}
+              {selectedCategory && (
+                <span className="bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-lg flex items-center gap-1 font-semibold">
+                  Category: {selectedCategory}
+                  <button onClick={() => setSelectedCategory('')} className="text-slate-400 hover:text-slate-700">&times;</button>
+                </span>
+              )}
+              {selectedTag && (
+                <span className="bg-white border border-slate-200 text-slate-700 px-2 py-0.5 rounded-lg flex items-center gap-1 font-semibold">
+                  #{selectedTag}
+                  <button onClick={() => setSelectedTag('')} className="text-slate-400 hover:text-slate-700">&times;</button>
+                </span>
+              )}
+              {selectedBsYear && (
+                <span className="bg-amber-50 border border-amber-200 text-amber-900 px-2 py-0.5 rounded-lg flex items-center gap-1 font-semibold">
+                  BS Year: {selectedBsYear}
+                  <button onClick={() => setSelectedBsYear('')} className="text-amber-600 hover:text-amber-900">&times;</button>
+                </span>
+              )}
+              {selectedBsMonth && (
+                <span className="bg-amber-50 border border-amber-200 text-amber-900 px-2 py-0.5 rounded-lg flex items-center gap-1 font-semibold">
+                  BS Month: {BS_MONTHS.find(m => String(m.id) === selectedBsMonth)?.en}
+                  <button onClick={() => setSelectedBsMonth('')} className="text-amber-600 hover:text-amber-900">&times;</button>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="text-xs font-bold text-blue-600 hover:underline ml-auto pl-2"
+              >
+                Reset All
+              </button>
+            </div>
+          )}
 
-                {/* ── Day Milestone Header Bar ── */}
-                <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100/80 px-4 py-2 rounded-2xl border border-slate-200/80">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-extrabold text-xs sm:text-sm text-slate-900">
-                      {group.adDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 font-extrabold text-[11px] flex items-center gap-1">
-                      <span>🇳🇵</span>
-                      <span>{group.bsDate.formattedBsNp}</span>
-                    </span>
-                    <span className="text-[11px] font-bold text-slate-500 bg-white px-2.5 py-0.5 rounded-full border border-slate-200">
-                      {group.posts.length} {group.posts.length === 1 ? 'Moment' : 'Moments'}
-                      {group.totalSnaps > 0 && ` • ${group.totalSnaps} Snaps`}
-                    </span>
-                  </div>
+          {/* Timeline Feed Container */}
+          {loading && posts.length === 0 ? (
+            <div className="flex flex-col items-center py-20 gap-2 text-slate-400">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+              <span className="text-xs font-semibold">Loading your chronicle feed...</span>
+            </div>
+          ) : (
+            <div className="relative border-l-2 border-slate-200 ml-4 sm:ml-6 pl-6 sm:pl-8 space-y-10 py-2">
+              
+              {dayGroups.map((group) => {
+                const isDayExpanded = expandedDays[group.dateKey] ?? !globalDeckMode;
+                const currentDayPageIndex = (dayPageIndices[group.dateKey] || 0) % group.posts.length;
+                const activePost = group.posts[currentDayPageIndex] || group.posts[0];
+                const hasMultipleInDay = group.posts.length > 1;
 
-                  {/* Toggle Deck (Page-Turner) vs Expanded View for this day */}
-                  {hasMultipleInDay && (
-                    <button
-                      type="button"
-                      onClick={() => toggleDayViewMode(group.dateKey)}
-                      className="px-3 py-1 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1 shadow-xs"
-                    >
-                      {isDayExpanded ? (
-                        <>
-                          <Layers className="w-3.5 h-3.5 text-blue-600" />
-                          <span>Stack as Book</span>
-                        </>
-                      ) : (
-                        <>
-                          <List className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Expand All</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-                </div>
-
-                {/* ── RENDERING: STACKED PAGE-TURNER DECK vs EXPANDED LIST ── */}
-                {!isDayExpanded && hasMultipleInDay ? (
-                  
-                  /* ═══════════ HORIZONTAL DAY STORY DECK (PAGE-TURNER) ═══════════ */
-                  <div className="bg-white border-2 border-slate-200/90 rounded-3xl p-6 shadow-md hover:shadow-xl transition-all duration-300 space-y-5 relative overflow-hidden group/card">
+                return (
+                  <div key={group.dateKey} className="relative group/day animate-in fade-in duration-200 space-y-3.5">
                     
-                    {/* Top Page-Turn Navigation Header */}
-                    <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="bg-blue-50 text-blue-700 border border-blue-200 px-3 py-1 rounded-full text-xs font-extrabold">
-                          📖 Moment {currentDayPageIndex + 1} of {group.posts.length}
+                    {/* Day Timeline Dot & Milestone Connector */}
+                    <div className="absolute -left-[37px] sm:-left-[45px] top-1.5 w-8 h-8 bg-white border-2 border-slate-300 group-hover/day:border-blue-600 rounded-full flex flex-col items-center justify-center shadow-xs text-[9px] font-extrabold text-slate-700 transition z-10">
+                      {group.adDate.getDate()}
+                      <span className="text-[7px] uppercase -mt-0.5 text-slate-400">
+                        {group.adDate.toLocaleString('default', { month: 'short' })}
+                      </span>
+                    </div>
+
+                    {/* Day Milestone Header Bar */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100/90 px-3.5 py-1.5 rounded-xl border border-slate-200/80">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-extrabold text-xs text-slate-900">
+                          {group.adDate.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
                         </span>
-                        <span className="text-xs text-slate-400 font-medium">
-                          {new Date(activePost.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        <span className="px-2 py-0.5 rounded-lg bg-amber-100/80 border border-amber-300/80 text-amber-900 font-extrabold text-[10px] flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-amber-700" />
+                          <span>{group.bsDate.formattedBsNp}</span>
+                        </span>
+                        <span className="text-[10px] font-bold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                          {group.posts.length} {group.posts.length === 1 ? 'Moment' : 'Moments'}
+                          {group.totalSnaps > 0 && ` • ${group.totalSnaps} Snaps`}
                         </span>
                       </div>
 
-                      {/* Previous & Next Page Turn Arrow Buttons */}
-                      <div className="flex items-center gap-1.5">
+                      {/* Day View Toggle */}
+                      {hasMultipleInDay && (
                         <button
                           type="button"
-                          onClick={() => handleTurnDayPage(group.dateKey, 'prev', group.posts.length)}
-                          className="p-2 rounded-xl bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
-                          title="Previous moment on this day"
+                          onClick={() => toggleDayViewMode(group.dateKey)}
+                          className="px-2.5 py-0.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-[11px] font-bold rounded-lg transition flex items-center gap-1 shadow-xs"
                         >
-                          <ChevronLeft className="w-4 h-4" />
+                          {isDayExpanded ? (
+                            <>
+                              <Layers className="w-3 h-3 text-blue-600" />
+                              <span>Stack Book</span>
+                            </>
+                          ) : (
+                            <>
+                              <List className="w-3 h-3 text-slate-500" />
+                              <span>Expand</span>
+                            </>
+                          )}
                         </button>
+                      )}
+                    </div>
+
+                    {/* RENDERING: STACKED PAGE-TURNER DECK vs EXPANDED LIST */}
+                    {!isDayExpanded && hasMultipleInDay ? (
+                      
+                      /* ═══════════ HORIZONTAL DAY STORY DECK (PAGE-TURNER) ═══════════ */
+                      <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-sm hover:shadow-md transition-all duration-300 space-y-4 relative overflow-hidden group/card">
                         
-                        {/* Dot indicators */}
-                        <div className="flex items-center gap-1 px-1">
-                          {group.posts.map((_, pIdx) => (
+                        {/* Top Page-Turn Navigation Header */}
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full text-xs font-bold flex items-center gap-1">
+                              <Layers className="w-3 h-3 text-blue-600" />
+                              <span>Moment {currentDayPageIndex + 1} of {group.posts.length}</span>
+                            </span>
+                            <span className="text-xs text-slate-400 font-medium">
+                              {new Date(activePost.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+
+                          {/* Previous & Next Page Turn Arrow Buttons */}
+                          <div className="flex items-center gap-1">
                             <button
-                              key={pIdx}
-                              onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
-                              className={`h-2 rounded-full transition-all ${
-                                pIdx === currentDayPageIndex ? 'w-5 bg-blue-600' : 'w-2 bg-slate-200 hover:bg-slate-300'
-                              }`}
-                              title={`Jump to moment ${pIdx + 1}`}
-                            />
-                          ))}
+                              type="button"
+                              onClick={() => handleTurnDayPage(group.dateKey, 'prev', group.posts.length)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
+                              title="Previous moment on this day"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </button>
+                            
+                            {/* Dot indicators */}
+                            <div className="flex items-center gap-1 px-1">
+                              {group.posts.map((_, pIdx) => (
+                                <button
+                                  key={pIdx}
+                                  onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
+                                  className={`h-1.5 rounded-full transition-all ${
+                                    pIdx === currentDayPageIndex ? 'w-4 bg-blue-600' : 'w-1.5 bg-slate-200 hover:bg-slate-300'
+                                  }`}
+                                  title={`Jump to moment ${pIdx + 1}`}
+                                />
+                              ))}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleTurnDayPage(group.dateKey, 'next', group.posts.length)}
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
+                              title="Next moment on this day"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleTurnDayPage(group.dateKey, 'next', group.posts.length)}
-                          className="p-2 rounded-xl bg-slate-100 hover:bg-blue-600 hover:text-white text-slate-700 transition active:scale-95 shadow-xs"
-                          title="Next moment on this day"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Active Post Content in the Deck */}
-                    <MomentCardBody
-                      post={activePost}
-                      isEditing={editingPostId === activePost._id}
-                      startEdit={() => startEdit(activePost)}
-                      onDelete={() => handleDeletePost(activePost._id)}
-                      onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
-                      momentPhotoIndex={momentPhotoIndices[activePost._id] || 0}
-                      onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(activePost._id, dir, count)}
-                      selectedTag={selectedTag}
-                      setSelectedTag={setSelectedTag}
-                      // Edit view props
-                      editTitle={editTitle}
-                      setEditTitle={setEditTitle}
-                      editContent={editContent}
-                      setEditContent={setEditContent}
-                      editCategory={editCategory}
-                      setEditCategory={setEditCategory}
-                      editRawTags={editRawTags}
-                      setEditRawTags={setEditRawTags}
-                      editTimestamp={editTimestamp}
-                      editDateMode={editDateMode}
-                      setEditDateMode={setEditDateMode}
-                      editBsYear={editBsYear}
-                      editBsMonth={editBsMonth}
-                      editBsDay={editBsDay}
-                      handleEditAdTimestampChange={handleEditAdTimestampChange}
-                      handleEditBsDateChange={handleEditBsDateChange}
-                      handleUpdatePost={() => handleUpdatePost(activePost._id)}
-                      cancelEdit={() => setEditingPostId(null)}
-                    />
-
-                    {/* Bottom Mini-Thumbnails Strip to Jump Quickly */}
-                    <div className="flex items-center gap-2 pt-2 border-t border-slate-100 overflow-x-auto scrollbar-none">
-                      <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest shrink-0">
-                        Day Moments:
-                      </span>
-                      {group.posts.map((p, pIdx) => {
-                        const isCurrent = pIdx === currentDayPageIndex;
-                        const firstMedia = p.media && p.media.length > 0 ? p.media[0] : null;
-
-                        return (
-                          <button
-                            key={p._id}
-                            onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
-                            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition text-xs shrink-0 ${
-                              isCurrent
-                                ? 'bg-blue-50 border-blue-300 text-blue-700 font-extrabold shadow-xs'
-                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                            }`}
-                          >
-                            {firstMedia ? (
-                              <img src={firstMedia.viewUrl} alt="" className="w-4 h-4 rounded-md object-cover" />
-                            ) : (
-                              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                            )}
-                            <span className="truncate max-w-[100px]">{p.title || `Moment #${pIdx + 1}`}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                ) : (
-
-                  /* ═══════════ EXPANDED CARDS FOR THIS DAY ═══════════ */
-                  <div className="space-y-6">
-                    {group.posts.map((post) => (
-                      <div
-                        key={post._id}
-                        className="bg-white border border-slate-200/90 rounded-3xl p-6 shadow-sm hover:shadow-md transition space-y-4"
-                      >
+                        {/* Active Post Content in the Deck */}
                         <MomentCardBody
-                          post={post}
-                          isEditing={editingPostId === post._id}
-                          startEdit={() => startEdit(post)}
-                          onDelete={() => handleDeletePost(post._id)}
+                          post={activePost}
+                          isEditing={editingPostId === activePost._id}
+                          startEdit={() => startEdit(activePost)}
+                          onDelete={() => handleDeletePost(activePost._id)}
                           onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
-                          momentPhotoIndex={momentPhotoIndices[post._id] || 0}
-                          onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(post._id, dir, count)}
+                          momentPhotoIndex={momentPhotoIndices[activePost._id] || 0}
+                          onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(activePost._id, dir, count)}
                           selectedTag={selectedTag}
                           setSelectedTag={setSelectedTag}
-                          // Edit view props
                           editTitle={editTitle}
                           setEditTitle={setEditTitle}
                           editContent={editContent}
@@ -779,52 +735,201 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           editBsDay={editBsDay}
                           handleEditAdTimestampChange={handleEditAdTimestampChange}
                           handleEditBsDateChange={handleEditBsDateChange}
-                          handleUpdatePost={() => handleUpdatePost(post._id)}
+                          handleUpdatePost={() => handleUpdatePost(activePost._id)}
                           cancelEdit={() => setEditingPostId(null)}
                         />
+
+                        {/* Bottom Mini-Thumbnails Strip to Jump Quickly */}
+                        <div className="flex items-center gap-1.5 pt-2 border-t border-slate-100 overflow-x-auto scrollbar-none">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
+                            Day Snaps:
+                          </span>
+                          {group.posts.map((p, pIdx) => {
+                            const isCurrent = pIdx === currentDayPageIndex;
+                            const firstMedia = p.media && p.media.length > 0 ? p.media[0] : null;
+
+                            return (
+                              <button
+                                key={p._id}
+                                onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border transition text-xs shrink-0 ${
+                                  isCurrent
+                                    ? 'bg-blue-50 border-blue-300 text-blue-700 font-bold shadow-xs'
+                                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                {firstMedia ? (
+                                  <img 
+                                    src={firstMedia.thumbnailUrl || firstMedia.viewUrl} 
+                                    alt="" 
+                                    loading="lazy"
+                                    className="w-4 h-4 rounded-sm object-cover" 
+                                  />
+                                ) : (
+                                  <Sparkles className="w-3 h-3 text-amber-500" />
+                                )}
+                                <span className="truncate max-w-[90px]">{p.title || `Moment #${pIdx + 1}`}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    ))}
+
+                    ) : (
+
+                      /* ═══════════ EXPANDED LIST OF MOMENTS FOR THIS DAY ═══════════ */
+                      <div className="space-y-4">
+                        {group.posts.map((post) => (
+                          <div
+                            key={post._id}
+                            className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xs hover:shadow-sm transition space-y-4"
+                          >
+                            <MomentCardBody
+                              post={post}
+                              isEditing={editingPostId === post._id}
+                              startEdit={() => startEdit(post)}
+                              onDelete={() => handleDeletePost(post._id)}
+                              onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
+                              momentPhotoIndex={momentPhotoIndices[post._id] || 0}
+                              onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(post._id, dir, count)}
+                              selectedTag={selectedTag}
+                              setSelectedTag={setSelectedTag}
+                              editTitle={editTitle}
+                              setEditTitle={setEditTitle}
+                              editContent={editContent}
+                              setEditContent={setEditContent}
+                              editCategory={editCategory}
+                              setEditCategory={setEditCategory}
+                              editRawTags={editRawTags}
+                              setEditRawTags={setEditRawTags}
+                              editTimestamp={editTimestamp}
+                              editDateMode={editDateMode}
+                              setEditDateMode={setEditDateMode}
+                              editBsYear={editBsYear}
+                              editBsMonth={editBsMonth}
+                              editBsDay={editBsDay}
+                              handleEditAdTimestampChange={handleEditAdTimestampChange}
+                              handleEditBsDateChange={handleEditBsDateChange}
+                              handleUpdatePost={() => handleUpdatePost(post._id)}
+                              cancelEdit={() => setEditingPostId(null)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                    )}
+
                   </div>
+                );
+              })}
 
-                )}
+            </div>
+          )}
 
+          {/* ── Empty State ── */}
+          {!loading && filteredPosts.length === 0 && (
+            <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white space-y-4">
+              <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+                <BookOpen className="w-7 h-7" />
               </div>
-            );
-          })}
+              <div>
+                <h3 className="text-base font-bold text-slate-800">No moments found</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                  Start documenting memories or adjust your calendar/search filters.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWizard(true)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl transition shadow-xs inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Document First Moment</span>
+              </button>
+            </div>
+          )}
+
+          {/* ── Lazy Load / Infinite Scroll Sentinel ── */}
+          <div ref={observerTargetRef} className="py-6 flex items-center justify-center">
+            {loadingMore && (
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <span>Loading more moments...</span>
+              </div>
+            )}
+            {!loading && !loadingMore && posts.length >= total && posts.length > 0 && (
+              <span className="text-[11px] font-semibold text-slate-400">
+                All {total} chronicle memories loaded
+              </span>
+            )}
+          </div>
 
         </div>
-      )}
 
-      {/* ── Empty State ── */}
-      {!loading && filteredPosts.length === 0 && (
-        <div className="text-center py-20 border-2 border-dashed border-slate-200 rounded-3xl bg-white space-y-4">
-          <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
-            <BookOpen className="w-8 h-8" />
-          </div>
-          <div>
-            <h3 className="text-base font-extrabold text-slate-800">No memories in this view</h3>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-              Start capturing moments with full-screen camera snaps or photos to build your lifetime chronicle.
-            </p>
-          </div>
-          <button
-            onClick={() => setShowWizard(true)}
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-2xl transition shadow-md shadow-blue-500/20 inline-flex items-center gap-1.5"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Document First Moment</span>
-          </button>
+        {/* ── Right-Side Desktop Configuration & Filters Sidebar ── */}
+        <div className="hidden lg:block">
+          <TimelineSidebar
+            search={search}
+            onSearchChange={setSearch}
+            selectedCategory={selectedCategory}
+            onCategoryChange={setSelectedCategory}
+            selectedTag={selectedTag}
+            onTagChange={setSelectedTag}
+            categories={categories}
+            tags={tags}
+            selectedBsYear={selectedBsYear}
+            onBsYearChange={setSelectedBsYear}
+            selectedBsMonth={selectedBsMonth}
+            onBsMonthChange={setSelectedBsMonth}
+            globalDeckMode={globalDeckMode}
+            onToggleGlobalDeckMode={() => setGlobalDeckMode(prev => !prev)}
+            onSyncDrive={handleSyncDrive}
+            syncing={syncing}
+            totalMoments={total}
+            isOpen={true}
+            onClose={() => {}}
+            activeFilterCount={activeFilterCount}
+            onResetFilters={handleResetFilters}
+          />
         </div>
-      )}
 
-      {/* ── Load More / Pagination ── */}
-      {posts.length < total && !loading && (
-        <button
-          onClick={() => fetchPosts(false)}
-          className="w-full py-3 bg-white hover:bg-slate-50 text-slate-700 font-bold rounded-2xl text-xs transition border border-slate-200 shadow-sm"
-        >
-          Load Older Memories ({posts.length} of {total})
-        </button>
+      </div>
+
+      {/* ── Mobile Sidebar Drawer ── */}
+      <div className="lg:hidden">
+        <TimelineSidebar
+          search={search}
+          onSearchChange={setSearch}
+          selectedCategory={selectedCategory}
+          onCategoryChange={setSelectedCategory}
+          selectedTag={selectedTag}
+          onTagChange={setSelectedTag}
+          categories={categories}
+          tags={tags}
+          selectedBsYear={selectedBsYear}
+          onBsYearChange={setSelectedBsYear}
+          selectedBsMonth={selectedBsMonth}
+          onBsMonthChange={setSelectedBsMonth}
+          globalDeckMode={globalDeckMode}
+          onToggleGlobalDeckMode={() => setGlobalDeckMode(prev => !prev)}
+          onSyncDrive={handleSyncDrive}
+          syncing={syncing}
+          totalMoments={total}
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          activeFilterCount={activeFilterCount}
+          onResetFilters={handleResetFilters}
+        />
+      </div>
+
+      {/* ── Social Moment Creation Wizard Modal ── */}
+      {showWizard && (
+        <TimelineWizardModal
+          onClose={() => setShowWizard(false)}
+          onSubmit={handleWizardSubmit}
+          categoriesList={categories}
+          tagsList={tags}
+        />
       )}
 
       {/* ── Media Lightbox Modal ── */}
@@ -1023,19 +1128,19 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       {/* Top Bar with Category, Time & Controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="px-2.5 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 font-extrabold uppercase tracking-wider rounded-lg text-[9px]">
+          <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 font-bold uppercase tracking-wider rounded-md text-[9px]">
             {post.category || 'General'}
           </span>
-          <span className="text-slate-400 flex items-center gap-1 font-medium">
-            <Clock className="w-3.5 h-3.5" />
+          <span className="text-slate-400 flex items-center gap-1 font-medium text-[11px]">
+            <Clock className="w-3 h-3" />
             {dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
-          <span className="px-2.5 py-0.5 rounded-full bg-amber-100/70 border border-amber-300 text-amber-900 font-bold text-[10px] flex items-center gap-1">
-            <span>🇳🇵</span>
+          <span className="px-2 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-amber-900 font-semibold text-[10px] flex items-center gap-1">
+            <Calendar className="w-2.5 h-2.5 text-amber-700" />
             <span>{bsDate.formattedBsNp}</span>
           </span>
         </div>
@@ -1074,8 +1179,8 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
               src={currentMedia.viewUrl}
               alt={currentMedia.fileName}
               onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
-              className="w-full h-full object-cover cursor-pointer group-hover/snap:scale-[1.02] transition duration-300"
               loading="lazy"
+              className="w-full h-full object-cover cursor-pointer group-hover/snap:scale-[1.02] transition duration-300"
             />
           )}
 
@@ -1091,7 +1196,7 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
 
           {/* Snap page count badge */}
           {mediaCount > 1 && (
-            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full text-white text-[11px] font-bold">
+            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2.5 py-0.5 rounded-full text-white text-[10px] font-bold">
               Snap {currentMediaIdx + 1} of {mediaCount}
             </div>
           )}
@@ -1139,9 +1244,9 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
       )}
 
       {/* Title & Description */}
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         {post.title && (
-          <h3 className="text-base sm:text-lg font-extrabold text-slate-900 tracking-tight leading-snug">
+          <h3 className="text-sm sm:text-base font-extrabold text-slate-900 tracking-tight leading-snug">
             {post.title}
           </h3>
         )}
@@ -1152,7 +1257,7 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
 
       {/* Tags */}
       {post.tags && post.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pt-1">
+        <div className="flex flex-wrap gap-1 pt-0.5">
           {post.tags.map(t => (
             <span
               key={t}
