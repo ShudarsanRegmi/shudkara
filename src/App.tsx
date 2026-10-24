@@ -73,11 +73,33 @@ const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: 
   timeline: { requiresLogin: true, label: 'Timeline', icon: Sparkles },
   links: { requiresLogin: false, label: 'LinkManager', icon: LinkIcon },
   keyval: { requiresLogin: false, label: 'KeyVal', icon: KeyIcon },
-  imgdrop: { requiresLogin: false, label: 'ImgDrop', icon: ImageIcon }
+  imgdrop: { requiresLogin: false, label: 'ImgDrop', icon: ImageIcon },
+  privacy: { requiresLogin: false, label: 'Privacy Policy', icon: FileText },
+  terms: { requiresLogin: false, label: 'Terms of Service', icon: FileText }
+};
+
+const getInitialTab = (): string => {
+  if (typeof window === 'undefined') return 'dashboard';
+  const params = new URLSearchParams(window.location.search);
+  const tab = params.get('tab');
+  if (tab && (TAB_CONFIG[tab] || tab === 'login' || tab === 'privacy' || tab === 'terms')) {
+    return tab;
+  }
+  if (params.get('room')) return 'textroom';
+  if (params.get('timerId')) return 'timers';
+  if (params.get('pasteId')) return 'pastebin';
+  const pathname = window.location.pathname.toLowerCase();
+  if (pathname.includes('/privacy')) return 'privacy';
+  if (pathname.includes('/terms')) return 'terms';
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  if (hash && (TAB_CONFIG[hash] || hash === 'login' || hash === 'privacy' || hash === 'terms')) {
+    return hash;
+  }
+  return 'dashboard';
 };
 
 function App() {
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>(getInitialTab);
   const [urlRoomId, setUrlRoomId] = useState<string | null>(null);
   const [urlTimerId, setUrlTimerId] = useState<string | null>(null);
   const [urlPasteId, setUrlPasteId] = useState<string | null>(null);
@@ -86,8 +108,13 @@ function App() {
   const [sharedPromptId, setSharedPromptId] = useState<string | null>(null);
   const [sharedPrompt, setSharedPrompt] = useState<any | null>(null);
 
-  // Authentication State
-  const [authToken, setAuthToken] = useState<string | null>(null);
+  // Authentication State (read synchronously from localStorage to prevent auth-gate blink on reload)
+  const [authToken, setAuthToken] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('shudkara_auth_token');
+    }
+    return null;
+  });
 
   // Database Sync States (silent background sync)
   const [leetcodeProgress, setLeetcodeProgress] = useState<Record<string, any>>({});
@@ -100,13 +127,12 @@ function App() {
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Check URL parameters on mount
+  // Check URL parameters on mount and listen to browser navigation (back/forward)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const room = params.get('room');
     if (room) {
       setUrlRoomId(room);
-      setActiveTab('textroom');
     }
 
     const promptId = params.get('promptId');
@@ -117,22 +143,41 @@ function App() {
     const timerId = params.get('timerId');
     if (timerId) {
       setUrlTimerId(timerId);
-      setActiveTab('timers');
-    }
-
-    const pathname = window.location.pathname.toLowerCase();
-    if (pathname.includes('/privacy')) {
-      setActiveTab('privacy');
-    } else if (pathname.includes('/terms')) {
-      setActiveTab('terms');
     }
 
     const pasteId = params.get('pasteId');
     if (pasteId) {
       setUrlPasteId(pasteId);
-      setActiveTab('pastebin');
     }
+
+    const handlePopState = () => {
+      const currentTab = getInitialTab();
+      setActiveTab(currentTab);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Synchronize browser URL query param with activeTab
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const urlTab = url.searchParams.get('tab') || '';
+    const targetTab = activeTab === 'dashboard' ? '' : activeTab;
+
+    if (urlTab !== targetTab) {
+      if (targetTab) {
+        url.searchParams.set('tab', targetTab);
+      } else {
+        url.searchParams.delete('tab');
+      }
+      window.history.pushState(
+        { tab: activeTab },
+        '',
+        url.pathname + (url.search ? url.search : '') + url.hash
+      );
+    }
+  }, [activeTab]);
 
   // Ensure dark mode class is never present on document element
   useEffect(() => {
@@ -237,7 +282,9 @@ function App() {
   const handleLoginSuccess = (token: string) => {
     localStorage.setItem('shudkara_auth_token', token);
     setAuthToken(token);
-    setActiveTab('dashboard');
+    if (activeTab === 'login') {
+      setActiveTab('dashboard');
+    }
   };
 
   const handleLogout = () => {
@@ -250,7 +297,9 @@ function App() {
     }
     localStorage.removeItem('shudkara_auth_token');
     setAuthToken(null);
-    setActiveTab('dashboard');
+    if (TAB_CONFIG[activeTab]?.requiresLogin) {
+      setActiveTab('dashboard');
+    }
   };
 
   const handleRoomChange = (roomId: string | null) => {

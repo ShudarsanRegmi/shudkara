@@ -4,6 +4,7 @@ import {
   Shield, Check, Copy, RefreshCw, Smartphone
 } from 'lucide-react';
 import { BLIND75_QUESTIONS } from '../data/blind75';
+import { AppDrawer } from './AppDrawer';
 
 interface DashboardProps {
   setActiveTab: (tab: string) => void;
@@ -167,6 +168,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
           </div>
         </div>
       </div>
+
+      {/* App Drawer & Customizable Shortcuts */}
+      <AppDrawer onNavigate={setActiveTab} authToken={authToken} />
 
       {/* Authenticator settings card (Only shown to Logged-in Owner) */}
       {authToken && (
