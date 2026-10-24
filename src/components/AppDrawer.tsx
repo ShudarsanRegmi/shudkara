@@ -26,7 +26,9 @@ import {
   Eye,
   EyeOff,
   LayoutGrid,
-  Pencil
+  Pencil,
+  Cloud,
+  RefreshCw
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -223,7 +225,7 @@ interface AppDrawerProps {
 }
 
 export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) => {
-  // Initialize shortcut preferences
+  // Initialize shortcut preferences from localStorage for instant zero-latency UI
   const [preferences, setPreferences] = useState<ShortcutPreference[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -251,15 +253,84 @@ export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) =
   const [activeCategory, setActiveCategory] = useState<'all' | 'Tools & Utilities' | 'Knowledge & Vaults' | 'pinned'>('all');
   const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
   const [tempLabel, setTempLabel] = useState('');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
-  // Persist preferences whenever they change
-  useEffect(() => {
+  // Fetch shortcuts from server and merge with client
+  const fetchShortcutsFromServer = async () => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(preferences));
-    } catch (e) {
-      console.error('Failed to save shortcut preferences:', e);
+      setSyncStatus('syncing');
+      const res = await fetch('/api/shortcuts');
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.shortcuts) && data.shortcuts.length > 0) {
+          const serverShortcuts: ShortcutPreference[] = data.shortcuts;
+          const serverIds = new Set(serverShortcuts.map(s => s.id));
+          const missing = ALL_APPS.filter(app => !serverIds.has(app.id)).map(app => ({
+            id: app.id,
+            visible: true
+          }));
+          const merged = [...serverShortcuts, ...missing];
+          setPreferences(merged);
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
+          } catch {}
+          setSyncStatus('synced');
+          return;
+        }
+      }
+      setSyncStatus('synced');
+    } catch (err) {
+      console.warn('Failed to fetch shortcuts from server:', err);
+      setSyncStatus('idle');
     }
-  }, [preferences]);
+  };
+
+  // Sync from server on mount and listen to multi-tab storage updates
+  useEffect(() => {
+    fetchShortcutsFromServer();
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setPreferences(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  // Update preferences locally and persist immediately to server
+  const savePreferences = async (newPrefs: ShortcutPreference[]) => {
+    setPreferences(newPrefs);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newPrefs));
+    } catch (e) {
+      console.error('Failed to save to localStorage:', e);
+    }
+
+    setSyncStatus('syncing');
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+      const res = await fetch('/api/shortcuts', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ shortcuts: newPrefs })
+      });
+      if (res.ok) {
+        setSyncStatus('synced');
+      } else {
+        setSyncStatus('error');
+      }
+    } catch (err) {
+      console.error('Failed to save shortcuts to server:', err);
+      setSyncStatus('error');
+    }
+  };
 
   // Map preferences to combined app objects
   const appMap = new Map(ALL_APPS.map(a => [a.id, a]));
@@ -283,13 +354,14 @@ export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) =
     const temp = newPrefs[index];
     newPrefs[index] = newPrefs[targetIndex];
     newPrefs[targetIndex] = temp;
-    setPreferences(newPrefs);
+    savePreferences(newPrefs);
   };
 
   const toggleVisibility = (id: string) => {
-    setPreferences(prev =>
-      prev.map(p => (p.id === id ? { ...p, visible: !p.visible } : p))
+    const newPrefs = preferences.map(p =>
+      p.id === id ? { ...p, visible: !p.visible } : p
     );
+    savePreferences(newPrefs);
   };
 
   const startRename = (id: string, currentLabel: string) => {
@@ -298,16 +370,17 @@ export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) =
   };
 
   const saveRename = (id: string) => {
-    setPreferences(prev =>
-      prev.map(p => (p.id === id ? { ...p, customLabel: tempLabel.trim() || undefined } : p))
+    const newPrefs = preferences.map(p =>
+      p.id === id ? { ...p, customLabel: tempLabel.trim() || undefined } : p
     );
+    savePreferences(newPrefs);
     setEditingLabelId(null);
   };
 
   const resetToDefault = () => {
     if (window.confirm('Reset all app shortcuts to original defaults?')) {
       const defaults = ALL_APPS.map(app => ({ id: app.id, visible: true }));
-      setPreferences(defaults);
+      savePreferences(defaults);
       setIsEditing(false);
     }
   };
@@ -353,6 +426,42 @@ export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) =
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold">
               {pinnedCount} / {ALL_APPS.length} active
             </span>
+
+            {/* Cloud Sync Status Pill */}
+            <div
+              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border transition ${
+                syncStatus === 'syncing'
+                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                  : syncStatus === 'synced'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : syncStatus === 'error'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-slate-50 text-slate-600 border-slate-200'
+              }`}
+              title="Synced with server across laptop and phone"
+            >
+              {syncStatus === 'syncing' ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />
+                  <span className="text-[11px]">Syncing...</span>
+                </>
+              ) : syncStatus === 'synced' ? (
+                <>
+                  <Cloud className="w-3 h-3 text-emerald-600" />
+                  <span className="text-[11px]">Synced to cloud</span>
+                </>
+              ) : syncStatus === 'error' ? (
+                <>
+                  <Cloud className="w-3 h-3 text-amber-600" />
+                  <span className="text-[11px]">Saved locally</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-3 h-3 text-slate-400" />
+                  <span className="text-[11px]">Cloud sync</span>
+                </>
+              )}
+            </div>
           </div>
           <p className="text-xs text-slate-500">
             Click any shortcut to launch the app. Customize the grid order or toggle visibility anytime.
@@ -361,6 +470,15 @@ export const AppDrawer: React.FC<AppDrawerProps> = ({ onNavigate, authToken }) =
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
+          {/* Quick sync reload button */}
+          <button
+            onClick={fetchShortcutsFromServer}
+            disabled={syncStatus === 'syncing'}
+            className="p-2 text-slate-500 hover:text-slate-800 border border-slate-200 hover:bg-slate-50 rounded-xl transition disabled:opacity-50"
+            title="Refresh shortcuts from server"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+          </button>
           {isEditing && (
             <button
               onClick={resetToDefault}

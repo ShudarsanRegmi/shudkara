@@ -26,6 +26,7 @@ const { linksHandler } = require('./dist/src/functions/links');
 const { keyValHandler } = require('./dist/src/functions/keyval');
 const { imgDropHandler } = require('./dist/src/functions/imgdrop');
 const { timelineHandler } = require('./dist/src/functions/timeline');
+const { shortcutsHandler } = require('./dist/src/functions/shortcuts');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -70,6 +71,8 @@ const server = http.createServer(async (req, res) => {
   } else if (resource === 'timeline') {
     handlerToUse = timelineHandler;
     params = { id: parts[baseIndex + 1] || null };
+  } else if (resource === 'shortcuts') {
+    handlerToUse = shortcutsHandler;
   }
 
   if (!handlerToUse) {
