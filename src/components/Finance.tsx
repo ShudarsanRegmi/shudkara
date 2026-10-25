@@ -1308,7 +1308,31 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Date</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-slate-700">
+                      {expenseForm.category === 'Transport & Fuel' ? 'Travel / Transport Date' : 'Date'}
+                    </label>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setExpenseForm(prev => ({ ...prev, date: new Date().toISOString().slice(0, 10) }))}
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                      >
+                        Today
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const y = new Date();
+                          y.setDate(y.getDate() - 1);
+                          setExpenseForm(prev => ({ ...prev, date: y.toISOString().slice(0, 10) }));
+                        }}
+                        className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                      >
+                        Yesterday
+                      </button>
+                    </div>
+                  </div>
                   <input
                     type="date"
                     required

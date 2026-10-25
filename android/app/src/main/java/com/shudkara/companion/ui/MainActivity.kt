@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import android.util.Base64
@@ -13,14 +14,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraControl
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -31,22 +44,30 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import com.shudkara.companion.data.*
 import com.shudkara.companion.ui.theme.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -129,173 +150,191 @@ fun MainScreen(
     var isSettingsOpen by remember { mutableStateOf(!prefs.isConfigured()) }
     var isSyncing by remember { mutableStateOf(false) }
     var pendingCount by remember { mutableStateOf(queueManager.getQueue().size) }
+    var activeCameraCallback by remember { mutableStateOf<((Bitmap) -> Unit)?>(null) }
 
     // Refresh pending count periodically
     LaunchedEffect(Unit) {
         pendingCount = queueManager.getQueue().size
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Shudkara Capture",
-                            fontWeight = FontWeight.Black,
-                            fontSize = 18.sp,
-                            color = Slate900
-                        )
-                        Text(
-                            text = "Fast logging & native entry",
-                            fontSize = 11.sp,
-                            color = Slate400
-                        )
-                    }
-                },
-                actions = {
-                    if (pendingCount > 0) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = Amber50,
-                            modifier = Modifier
-                                .clickable {
-                                    coroutineScope.launch {
-                                        isSyncing = true
-                                        val (synced, failed) = queueManager.syncAll()
-                                        pendingCount = queueManager.getQueue().size
-                                        isSyncing = false
-                                        Toast.makeText(context, "Synced $synced items ($failed failed)", Toast.LENGTH_SHORT).show()
+    Box(modifier = Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Column {
+                            Text(
+                                text = "Shudkara Capture",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp,
+                                color = Slate900
+                            )
+                            Text(
+                                text = "Fast logging & native entry",
+                                fontSize = 11.sp,
+                                color = Slate400
+                            )
+                        }
+                    },
+                    actions = {
+                        if (pendingCount > 0) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Amber50,
+                                modifier = Modifier
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            isSyncing = true
+                                            val (synced, failed) = queueManager.syncAll()
+                                            pendingCount = queueManager.getQueue().size
+                                            isSyncing = false
+                                            Toast.makeText(context, "Synced $synced items ($failed failed)", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
-                                }
-                                .padding(end = 8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(end = 8.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.Sync,
-                                    contentDescription = "Sync",
-                                    tint = Amber600,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "$pendingCount queued",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Amber600
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Sync,
+                                        contentDescription = "Sync",
+                                        tint = Amber600,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "$pendingCount queued",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Amber600
+                                    )
+                                }
                             }
                         }
-                    }
 
-                    IconButton(onClick = { isSettingsOpen = true }) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Settings",
-                            tint = Slate600
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .background(Slate50)
-        ) {
-            // Tab Selector
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color.White,
-                contentColor = Indigo600,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Whatshot, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 0) Orange600 else Slate400)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Streaks", fontWeight = FontWeight.Bold, color = if (selectedTab == 0) Orange600 else Slate600)
+                        IconButton(onClick = { isSettingsOpen = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Settings,
+                                contentDescription = "Settings",
+                                tint = Slate600
+                            )
                         }
-                    }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 1) Indigo600 else Slate400)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Timeline", fontWeight = FontWeight.Bold, color = if (selectedTab == 1) Indigo600 else Slate600)
-                        }
-                    }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 2) Emerald600 else Slate400)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Finance", fontWeight = FontWeight.Bold, color = if (selectedTab == 2) Emerald600 else Slate600)
-                        }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
                 )
             }
-
-            // Tab Content View
-            Box(modifier = Modifier.fillMaxSize()) {
-                when (selectedTab) {
-                    0 -> StreakCaptureScreen(
-                        api = api,
-                        queueManager = queueManager,
-                        onCheckInSuccess = {
-                            pendingCount = queueManager.getQueue().size
-                            Toast.makeText(context, "Check-in recorded!", Toast.LENGTH_SHORT).show()
+        ) { paddingValues ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .background(Slate50)
+            ) {
+                // Tab Selector
+                TabRow(
+                    selectedTabIndex = selectedTab,
+                    containerColor = Color.White,
+                    contentColor = Indigo600,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Tab(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Whatshot, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 0) Orange600 else Slate400)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Streaks", fontWeight = FontWeight.Bold, color = if (selectedTab == 0) Orange600 else Slate600)
+                            }
                         }
                     )
-                    1 -> TimelineCaptureScreen(
-                        api = api,
-                        queueManager = queueManager,
-                        onPostSuccess = {
-                            pendingCount = queueManager.getQueue().size
-                            Toast.makeText(context, "Timeline moment posted!", Toast.LENGTH_SHORT).show()
+                    Tab(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 1) Indigo600 else Slate400)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Timeline", fontWeight = FontWeight.Bold, color = if (selectedTab == 1) Indigo600 else Slate600)
+                            }
                         }
                     )
-                    2 -> FinanceCaptureScreen(
-                        api = api,
-                        queueManager = queueManager,
-                        initialMode = initialFinanceMode,
-                        initialAmount = initialFinanceAmount,
-                        initialDesc = initialFinanceDesc,
-                        initialRotation = initialFinanceRotation,
-                        onSuccess = {
-                            pendingCount = queueManager.getQueue().size
+                    Tab(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 2) Emerald600 else Slate400)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Finance", fontWeight = FontWeight.Bold, color = if (selectedTab == 2) Emerald600 else Slate600)
+                            }
                         }
                     )
                 }
+
+                // Tab Content View
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when (selectedTab) {
+                        0 -> StreakCaptureScreen(
+                            api = api,
+                            queueManager = queueManager,
+                            onRequestCamera = { cb -> activeCameraCallback = cb },
+                            onCheckInSuccess = {
+                                pendingCount = queueManager.getQueue().size
+                                Toast.makeText(context, "Check-in recorded!", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        1 -> TimelineCaptureScreen(
+                            api = api,
+                            queueManager = queueManager,
+                            onRequestCamera = { cb -> activeCameraCallback = cb },
+                            onPostSuccess = {
+                                pendingCount = queueManager.getQueue().size
+                                Toast.makeText(context, "Timeline moment posted!", Toast.LENGTH_SHORT).show()
+                            }
+                        )
+                        2 -> FinanceCaptureScreen(
+                            api = api,
+                            queueManager = queueManager,
+                            initialMode = initialFinanceMode,
+                            initialAmount = initialFinanceAmount,
+                            initialDesc = initialFinanceDesc,
+                            initialRotation = initialFinanceRotation,
+                            onSuccess = {
+                                pendingCount = queueManager.getQueue().size
+                            }
+                        )
+                    }
+                }
             }
         }
-    }
 
-    if (isSettingsOpen) {
-        SettingsDialog(
-            prefs = prefs,
-            api = api,
-            queueManager = queueManager,
-            onDismiss = { isSettingsOpen = false },
-            onSync = {
-                pendingCount = queueManager.getQueue().size
-            }
-        )
+        if (isSettingsOpen) {
+            SettingsDialog(
+                prefs = prefs,
+                api = api,
+                queueManager = queueManager,
+                onDismiss = { isSettingsOpen = false },
+                onSync = {
+                    pendingCount = queueManager.getQueue().size
+                }
+            )
+        }
+
+        if (activeCameraCallback != null) {
+            FullScreenCameraView(
+                onPhotoCaptured = { bitmap ->
+                    val cb = activeCameraCallback
+                    activeCameraCallback = null
+                    cb?.invoke(bitmap)
+                },
+                onClose = {
+                    activeCameraCallback = null
+                }
+            )
+        }
     }
 }
 
@@ -306,6 +345,7 @@ fun MainScreen(
 fun StreakCaptureScreen(
     api: ShudkaraApi,
     queueManager: OfflineQueueManager,
+    onRequestCamera: ((Bitmap) -> Unit) -> Unit,
     onCheckInSuccess: () -> Unit
 ) {
     val context = LocalContext.current
@@ -322,13 +362,30 @@ fun StreakCaptureScreen(
 
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
-    // Camera launcher
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) {
-            photoBitmap = bitmap
-            coroutineScope.launch(Dispatchers.IO) {
-                photoBase64 = compressBitmapToBase64(bitmap)
+    // Camera permission and launcher
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            onRequestCamera { bitmap ->
+                photoBitmap = bitmap
+                coroutineScope.launch(Dispatchers.IO) {
+                    photoBase64 = compressBitmapToBase64(bitmap)
+                }
             }
+        } else {
+            Toast.makeText(context, "Camera permission is required to capture photo proof", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val launchCamera = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            onRequestCamera { bitmap ->
+                photoBitmap = bitmap
+                coroutineScope.launch(Dispatchers.IO) {
+                    photoBase64 = compressBitmapToBase64(bitmap)
+                }
+            }
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -515,7 +572,7 @@ fun StreakCaptureScreen(
                                     .fillMaxWidth()
                                     .height(130.dp)
                                     .border(1.dp, Slate200, RoundedCornerShape(12.dp))
-                                    .clickable { cameraLauncher.launch(null) },
+                                    .clickable { launchCamera() },
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.Center
                             ) {
@@ -529,7 +586,7 @@ fun StreakCaptureScreen(
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(
-                                onClick = { cameraLauncher.launch(null) },
+                                onClick = { launchCamera() },
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier.weight(1f)
                             ) {
@@ -637,6 +694,7 @@ fun StreakCaptureScreen(
 fun TimelineCaptureScreen(
     api: ShudkaraApi,
     queueManager: OfflineQueueManager,
+    onRequestCamera: ((Bitmap) -> Unit) -> Unit,
     onPostSuccess: () -> Unit
 ) {
     val context = LocalContext.current
@@ -652,12 +710,29 @@ fun TimelineCaptureScreen(
 
     val categories = listOf("Life", "General", "Thoughts", "Work", "Fitness", "Coding", "Creative")
 
-    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        if (bitmap != null) {
-            photoBitmap = bitmap
-            coroutineScope.launch(Dispatchers.IO) {
-                photoBase64 = compressBitmapToBase64(bitmap)
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            onRequestCamera { bitmap ->
+                photoBitmap = bitmap
+                coroutineScope.launch(Dispatchers.IO) {
+                    photoBase64 = compressBitmapToBase64(bitmap)
+                }
             }
+        } else {
+            Toast.makeText(context, "Camera permission is required to take photo", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val launchCamera = {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            onRequestCamera { bitmap ->
+                photoBitmap = bitmap
+                coroutineScope.launch(Dispatchers.IO) {
+                    photoBase64 = compressBitmapToBase64(bitmap)
+                }
+            }
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -772,7 +847,7 @@ fun TimelineCaptureScreen(
                             horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
                             OutlinedButton(
-                                onClick = { cameraLauncher.launch(null) },
+                                onClick = { launchCamera() },
                                 shape = RoundedCornerShape(10.dp)
                             ) {
                                 Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -902,6 +977,9 @@ fun FinanceCaptureScreen(
     var paymentMethod by remember { mutableStateOf("Bank / Card") }
     var isRotation by remember { mutableStateOf(initialRotation || mode == "rotation") }
     var rotationNote by remember { mutableStateOf("") }
+
+    val todayDateStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
+    var expenseDate by remember { mutableStateOf(todayDateStr) }
 
     // Lend/Borrow fields
     var personName by remember { mutableStateOf("") }
@@ -1112,6 +1190,64 @@ fun FinanceCaptureScreen(
                     }
                 }
 
+                item {
+                    Column(modifier = Modifier.fillMaxWidth().padding(top = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = if (category == "Transport & Fuel") "Date of Travel / Transportation" else "Transaction Date",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = Slate700
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (expenseDate == todayDateStr) Emerald50 else Slate100,
+                                    border = if (expenseDate == todayDateStr) androidx.compose.foundation.BorderStroke(1.dp, Emerald600) else null,
+                                    modifier = Modifier.clickable { expenseDate = todayDateStr }
+                                ) {
+                                    Text(
+                                        "Today",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (expenseDate == todayDateStr) Emerald600 else Slate700,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = Slate100,
+                                    modifier = Modifier.clickable {
+                                        val cal = Calendar.getInstance()
+                                        cal.add(Calendar.DAY_OF_YEAR, -1)
+                                        expenseDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+                                    }
+                                ) {
+                                    Text(
+                                        "Yesterday",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Slate700,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = expenseDate,
+                            onValueChange = { expenseDate = it },
+                            label = { Text("Date (YYYY-MM-DD)", fontSize = 11.sp) },
+                            placeholder = { Text(todayDateStr, fontSize = 11.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+
                 if (mode == "rotation") {
                     item {
                         OutlinedTextField(
@@ -1206,13 +1342,15 @@ fun FinanceCaptureScreen(
                                     expenseSetId = selectedSetId,
                                     paymentMethod = paymentMethod,
                                     isRotation = isRotation,
-                                    rotationNote = rotationNote.ifBlank { null }
+                                    rotationNote = rotationNote.ifBlank { null },
+                                    date = expenseDate.ifBlank { todayDateStr }
                                 )
                                 isSubmitting = false
                                 if (res.isSuccess) {
                                     Toast.makeText(context, "Expense saved!", Toast.LENGTH_SHORT).show()
                                     amountText = ""
                                     description = ""
+                                    expenseDate = todayDateStr
                                     onSuccess()
                                 } else {
                                     // Fallback to offline queue
@@ -1223,11 +1361,13 @@ fun FinanceCaptureScreen(
                                         expenseSetId = selectedSetId,
                                         paymentMethod = paymentMethod,
                                         isRotation = isRotation,
-                                        rotationNote = rotationNote.ifBlank { null }
+                                        rotationNote = rotationNote.ifBlank { null },
+                                        date = expenseDate.ifBlank { todayDateStr }
                                     )
                                     Toast.makeText(context, "Saved to offline outbox!", Toast.LENGTH_SHORT).show()
                                     amountText = ""
                                     description = ""
+                                    expenseDate = todayDateStr
                                     onSuccess()
                                 }
                             }
@@ -1668,4 +1808,350 @@ suspend fun compressBitmapToBase64(original: Bitmap): String = withContext(Dispa
     scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 75, stream)
     val bytes = stream.toByteArray()
     Base64.encodeToString(bytes, Base64.NO_WRAP)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FULL-SCREEN CAMERAX IN-APP VIEWFINDER
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun FullScreenCameraView(
+    onPhotoCaptured: (Bitmap) -> Unit,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var lensFacing by remember { mutableIntStateOf(CameraSelector.LENS_FACING_BACK) }
+    var flashMode by remember { mutableIntStateOf(ImageCapture.FLASH_MODE_OFF) }
+    var isCapturing by remember { mutableStateOf(false) }
+    var showFlashOverlay by remember { mutableStateOf(false) }
+
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
+    var imageCapture by remember { mutableStateOf<ImageCapture?>(null) }
+    var cameraControl by remember { mutableStateOf<CameraControl?>(null) }
+    var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+    // Tap to focus position
+    var focusPoint by remember { mutableStateOf<Offset?>(null) }
+
+    // In-camera gallery picker alternative
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                val stream = context.contentResolver.openInputStream(uri)
+                val bmp = BitmapFactory.decodeStream(stream)
+                stream?.close()
+                if (bmp != null) {
+                    onPhotoCaptured(bmp)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to load image: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Bind CameraX lifecycle
+    LaunchedEffect(lensFacing, lifecycleOwner, previewView) {
+        val pv = previewView ?: return@LaunchedEffect
+        val providerFuture = ProcessCameraProvider.getInstance(context)
+        val provider = withContext(Dispatchers.IO) {
+            providerFuture.get()
+        }
+        cameraProvider = provider
+
+        try {
+            provider.unbindAll()
+
+            val selector = CameraSelector.Builder()
+                .requireLensFacing(lensFacing)
+                .build()
+
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(pv.surfaceProvider)
+            }
+
+            val capture = ImageCapture.Builder()
+                .setFlashMode(flashMode)
+                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .build()
+
+            val camera = provider.bindToLifecycle(lifecycleOwner, selector, preview, capture)
+            imageCapture = capture
+            cameraControl = camera.cameraControl
+        } catch (e: Exception) {
+            Toast.makeText(context, "Camera initialization failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Flash mode update
+    LaunchedEffect(flashMode) {
+        imageCapture?.flashMode = flashMode
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
+        // Fullscreen Live Preview
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures { offset ->
+                        focusPoint = offset
+                        val pv = previewView ?: return@detectTapGestures
+                        val factory = pv.meteringPointFactory
+                        val point = factory.createPoint(offset.x, offset.y)
+                        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+                            .setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
+                            .build()
+                        cameraControl?.startFocusAndMetering(action)
+                    }
+                },
+            factory = { ctx ->
+                PreviewView(ctx).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    previewView = this
+                }
+            },
+            update = { pv ->
+                if (previewView == null) {
+                    previewView = pv
+                }
+            }
+        )
+
+        // Tap to focus reticle indicator
+        focusPoint?.let { pt ->
+            Box(
+                modifier = Modifier
+                    .offset { IntOffset(pt.x.toInt() - 32, pt.y.toInt() - 32) }
+                    .size(64.dp)
+                    .border(1.5.dp, Color(0xFFFBBF24), RoundedCornerShape(8.dp))
+            )
+            LaunchedEffect(pt) {
+                delay(1200)
+                focusPoint = null
+            }
+        }
+
+        // Shutter Flash Effect
+        if (showFlashOverlay) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.White.copy(alpha = 0.85f))
+            )
+            LaunchedEffect(Unit) {
+                delay(60)
+                showFlashOverlay = false
+            }
+        }
+
+        // FLOATING TOP BAR
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 48.dp, start = 20.dp, end = 20.dp)
+                .align(Alignment.TopCenter),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Close / Exit Camera
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Close Camera",
+                    tint = Color.White
+                )
+            }
+
+            // Flash Mode Toggle Pill
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color.Black.copy(alpha = 0.5f),
+                modifier = Modifier.clickable {
+                    flashMode = when (flashMode) {
+                        ImageCapture.FLASH_MODE_OFF -> ImageCapture.FLASH_MODE_AUTO
+                        ImageCapture.FLASH_MODE_AUTO -> ImageCapture.FLASH_MODE_ON
+                        else -> ImageCapture.FLASH_MODE_OFF
+                    }
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val (icon, label) = when (flashMode) {
+                        ImageCapture.FLASH_MODE_ON -> Icons.Default.FlashOn to "ON"
+                        ImageCapture.FLASH_MODE_AUTO -> Icons.Default.FlashAuto to "AUTO"
+                        else -> Icons.Default.FlashOff to "OFF"
+                    }
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = "Flash Mode",
+                        tint = if (flashMode == ImageCapture.FLASH_MODE_OFF) Color.White.copy(alpha = 0.8f) else Color(0xFFFBBF24),
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = label,
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            // Quick Lens Switch on Top Right
+            IconButton(
+                onClick = {
+                    lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                        CameraSelector.LENS_FACING_FRONT
+                    } else {
+                        CameraSelector.LENS_FACING_BACK
+                    }
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Cameraswitch,
+                    contentDescription = "Switch Camera",
+                    tint = Color.White
+                )
+            }
+        }
+
+        // FLOATING BOTTOM CONTROLS
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 44.dp, start = 28.dp, end = 28.dp)
+                .align(Alignment.BottomCenter)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 1. Gallery Shortcut Button (Left)
+                IconButton(
+                    onClick = { galleryLauncher.launch("image/*") },
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoLibrary,
+                        contentDescription = "Pick from Gallery",
+                        tint = Color.White,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                // 2. Real Camera Shutter Button (Center)
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .border(4.dp, Color.White, CircleShape)
+                        .padding(5.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val scale by animateFloatAsState(
+                        targetValue = if (isCapturing) 0.85f else 1f,
+                        label = "shutterScale"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .scale(scale)
+                            .background(if (isCapturing) Color.LightGray else Color.White, CircleShape)
+                            .clickable(enabled = !isCapturing && imageCapture != null) {
+                                val capture = imageCapture ?: return@clickable
+                                isCapturing = true
+                                showFlashOverlay = true
+
+                                capture.takePicture(
+                                    ContextCompat.getMainExecutor(context),
+                                    object : ImageCapture.OnImageCapturedCallback() {
+                                        override fun onCaptureSuccess(image: ImageProxy) {
+                                            try {
+                                                val rawBitmap = image.toBitmap()
+                                                val rotation = image.imageInfo.rotationDegrees
+                                                val isFront = (lensFacing == CameraSelector.LENS_FACING_FRONT)
+                                                val rotatedBitmap = if (rotation != 0 || isFront) {
+                                                    val matrix = Matrix().apply {
+                                                        if (isFront) postScale(-1f, 1f)
+                                                        if (rotation != 0) postRotate(rotation.toFloat())
+                                                    }
+                                                    Bitmap.createBitmap(
+                                                        rawBitmap, 0, 0,
+                                                        rawBitmap.width, rawBitmap.height,
+                                                        matrix, true
+                                                    )
+                                                } else {
+                                                    rawBitmap
+                                                }
+                                                onPhotoCaptured(rotatedBitmap)
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Error processing photo: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            } finally {
+                                                image.close()
+                                                isCapturing = false
+                                            }
+                                        }
+
+                                        override fun onError(exception: ImageCaptureException) {
+                                            isCapturing = false
+                                            Toast.makeText(context, "Photo capture failed: ${exception.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isCapturing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                color = Color.DarkGray,
+                                strokeWidth = 3.dp
+                            )
+                        }
+                    }
+                }
+
+                // 3. Flip Camera Switch (Right)
+                IconButton(
+                    onClick = {
+                        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+                            CameraSelector.LENS_FACING_FRONT
+                        } else {
+                            CameraSelector.LENS_FACING_BACK
+                        }
+                    },
+                    modifier = Modifier
+                        .size(52.dp)
+                        .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                        .border(1.5.dp, Color.White.copy(alpha = 0.4f), CircleShape)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.FlipCameraAndroid,
+                        contentDescription = "Switch Camera",
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+        }
+    }
 }

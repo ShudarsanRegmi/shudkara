@@ -371,7 +371,8 @@ class ShudkaraApi(private val context: Context) {
         expenseSetId: String?,
         paymentMethod: String,
         isRotation: Boolean,
-        rotationNote: String?
+        rotationNote: String?,
+        date: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
@@ -384,7 +385,7 @@ class ShudkaraApi(private val context: Context) {
                 put("paymentMethod", paymentMethod)
                 put("isRotation", isRotation)
                 if (rotationNote != null) put("rotationNote", rotationNote)
-                put("date", now)
+                put("date", if (!date.isNullOrBlank()) date else now)
                 put("time", time)
             }
 

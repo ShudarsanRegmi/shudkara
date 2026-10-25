@@ -127,7 +127,8 @@ class OfflineQueueManager(private val context: Context) {
         expenseSetId: String?,
         paymentMethod: String,
         isRotation: Boolean,
-        rotationNote: String?
+        rotationNote: String?,
+        date: String? = null
     ) {
         val json = JSONObject().apply {
             put("amount", amount)
@@ -137,6 +138,7 @@ class OfflineQueueManager(private val context: Context) {
             put("paymentMethod", paymentMethod)
             put("isRotation", isRotation)
             if (rotationNote != null) put("rotationNote", rotationNote)
+            if (date != null) put("date", date)
         }
 
         val action = QueuedAction(
@@ -289,7 +291,8 @@ class OfflineQueueManager(private val context: Context) {
                             expenseSetId = if (obj.has("expenseSetId")) obj.getString("expenseSetId") else null,
                             paymentMethod = obj.optString("paymentMethod", "Bank / Card"),
                             isRotation = obj.optBoolean("isRotation", false),
-                            rotationNote = if (obj.has("rotationNote")) obj.getString("rotationNote") else null
+                            rotationNote = if (obj.has("rotationNote")) obj.getString("rotationNote") else null,
+                            date = if (obj.has("date")) obj.getString("date") else null
                         ).isSuccess
                     }
                     "FINANCE_LEND" -> {
