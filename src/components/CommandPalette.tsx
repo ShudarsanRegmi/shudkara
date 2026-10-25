@@ -21,6 +21,7 @@ import {
   ArrowRight,
   Plus,
   Shield,
+  Wallet,
   X
 } from 'lucide-react';
 
@@ -72,6 +73,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Master command registry
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
+    {
+      id: 'app-finance',
+      title: 'Finance & Cashflow',
+      subtitle: 'Expense sets, lends, borrows, rotations, and auto-SMS companion tracking',
+      category: 'Applications',
+      icon: Wallet,
+      colorBg: 'bg-emerald-50',
+      colorText: 'text-emerald-600',
+      badge: 'New',
+      action: () => {
+        setActiveTab('finance');
+        onClose();
+      }
+    },
     {
       id: 'app-notes',
       title: 'Notes & Categories',

@@ -9,6 +9,7 @@ class PreferencesManager(context: Context) {
 
     companion object {
         const val DEFAULT_SERVER_URL = "https://shudkara.shudarsanregmi.com.np"
+        const val AZURE_FALLBACK_URL = "https://mango-stone-072adb410.7.azurestaticapps.net"
     }
 
     var serverUrl: String

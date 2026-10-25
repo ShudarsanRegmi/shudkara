@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
   ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow,
-  Flame, Search
+  Flame, Search, Wallet
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -25,6 +25,7 @@ import { ConcurrencyManager } from './components/ConcurrencyManager';
 import { SavePost } from './components/SavePost';
 import { Streaks } from './components/Streaks';
 import { Notes } from './components/Notes';
+import { Finance } from './components/Finance';
 import { CommandPalette } from './components/CommandPalette';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
@@ -51,6 +52,7 @@ const NAV_GROUPS = [
     icon: Layers,
     items: [
       { key: 'notes', label: 'Notes', description: 'Categorized notes, markdown support & quick organization', icon: FileText, requiresLogin: false },
+      { key: 'finance', label: 'Finance', description: 'Expense sets, lends, borrows & cashflow', icon: Wallet, requiresLogin: true },
       { key: 'streaks', label: 'Streaks', description: 'Daily photo streak challenge with reminders', icon: Flame, requiresLogin: false },
       { key: 'savepost', label: 'SavePost', description: 'Social post & link bookmark vault', icon: Bookmark, requiresLogin: false },
       { key: 'inventory', label: 'Inventory', description: 'Private personal belongings & vault', icon: Package, requiresLogin: true },
@@ -66,6 +68,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  finance: { requiresLogin: true, label: 'Finance', icon: Wallet },
   notes: { requiresLogin: false, label: 'Notes', icon: FileText },
   streaks: { requiresLogin: false, label: 'Streaks', icon: Flame },
   savepost: { requiresLogin: false, label: 'SavePost', icon: Bookmark },
@@ -438,6 +441,8 @@ function App() {
         return <LinkManager authToken={authToken} />;
       case 'notes':
         return <Notes authToken={authToken} />;
+      case 'finance':
+        return <Finance authToken={authToken} />;
       case 'streaks':
         return <Streaks authToken={authToken} />;
       case 'savepost':

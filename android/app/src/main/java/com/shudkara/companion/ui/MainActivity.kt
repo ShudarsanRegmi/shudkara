@@ -1,6 +1,8 @@
 package com.shudkara.companion.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.shudkara.companion.data.*
 import com.shudkara.companion.ui.theme.*
@@ -62,11 +65,19 @@ class MainActivity : ComponentActivity() {
         handleDeepLink(intent)
 
         val initialTab = intent.getIntExtra("extra_tab", 0)
+        val initialFinanceMode = intent.getStringExtra("finance_mode")
+        val initialFinanceAmount = intent.getDoubleExtra("finance_amount", 0.0)
+        val initialFinanceDesc = intent.getStringExtra("finance_desc")
+        val initialFinanceRotation = intent.getBooleanExtra("finance_is_rotation", false)
 
         setContent {
             ShudkaraTheme {
                 MainScreen(
                     initialTab = initialTab,
+                    initialFinanceMode = initialFinanceMode,
+                    initialFinanceAmount = initialFinanceAmount,
+                    initialFinanceDesc = initialFinanceDesc,
+                    initialFinanceRotation = initialFinanceRotation,
                     prefs = prefs,
                     api = api,
                     queueManager = queueManager,
@@ -102,6 +113,10 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainScreen(
     initialTab: Int,
+    initialFinanceMode: String? = null,
+    initialFinanceAmount: Double = 0.0,
+    initialFinanceDesc: String? = null,
+    initialFinanceRotation: Boolean = false,
     prefs: PreferencesManager,
     api: ShudkaraApi,
     queueManager: OfflineQueueManager,
@@ -208,7 +223,7 @@ fun MainScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Whatshot, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 0) Orange600 else Slate400)
                             Spacer(Modifier.width(6.dp))
-                            Text("Streak Proof", fontWeight = FontWeight.Bold, color = if (selectedTab == 0) Orange600 else Slate600)
+                            Text("Streaks", fontWeight = FontWeight.Bold, color = if (selectedTab == 0) Orange600 else Slate600)
                         }
                     }
                 )
@@ -219,7 +234,18 @@ fun MainScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 1) Indigo600 else Slate400)
                             Spacer(Modifier.width(6.dp))
-                            Text("Timeline Moment", fontWeight = FontWeight.Bold, color = if (selectedTab == 1) Indigo600 else Slate600)
+                            Text("Timeline", fontWeight = FontWeight.Bold, color = if (selectedTab == 1) Indigo600 else Slate600)
+                        }
+                    }
+                )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 2) Emerald600 else Slate400)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Finance", fontWeight = FontWeight.Bold, color = if (selectedTab == 2) Emerald600 else Slate600)
                         }
                     }
                 )
@@ -227,8 +253,8 @@ fun MainScreen(
 
             // Tab Content View
             Box(modifier = Modifier.fillMaxSize()) {
-                if (selectedTab == 0) {
-                    StreakCaptureScreen(
+                when (selectedTab) {
+                    0 -> StreakCaptureScreen(
                         api = api,
                         queueManager = queueManager,
                         onCheckInSuccess = {
@@ -236,13 +262,23 @@ fun MainScreen(
                             Toast.makeText(context, "Check-in recorded!", Toast.LENGTH_SHORT).show()
                         }
                     )
-                } else {
-                    TimelineCaptureScreen(
+                    1 -> TimelineCaptureScreen(
                         api = api,
                         queueManager = queueManager,
                         onPostSuccess = {
                             pendingCount = queueManager.getQueue().size
                             Toast.makeText(context, "Timeline moment posted!", Toast.LENGTH_SHORT).show()
+                        }
+                    )
+                    2 -> FinanceCaptureScreen(
+                        api = api,
+                        queueManager = queueManager,
+                        initialMode = initialFinanceMode,
+                        initialAmount = initialFinanceAmount,
+                        initialDesc = initialFinanceDesc,
+                        initialRotation = initialFinanceRotation,
+                        onSuccess = {
+                            pendingCount = queueManager.getQueue().size
                         }
                     )
                 }
@@ -836,6 +872,435 @@ fun TimelineCaptureScreen(
                     Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Post Moment", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                }
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FINANCE QUICK CAPTURE SCREEN
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+fun FinanceCaptureScreen(
+    api: ShudkaraApi,
+    queueManager: OfflineQueueManager,
+    initialMode: String? = null,
+    initialAmount: Double = 0.0,
+    initialDesc: String? = null,
+    initialRotation: Boolean = false,
+    onSuccess: () -> Unit
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    var mode by remember { mutableStateOf(initialMode ?: "expense") } // "expense", "lend", "borrow", "rotation"
+    var amountText by remember { mutableStateOf(if (initialAmount > 0.0) initialAmount.toString() else "") }
+    var description by remember { mutableStateOf(initialDesc ?: "") }
+    var category by remember { mutableStateOf("Food & Dining") }
+    var selectedSetId by remember { mutableStateOf<String?>(null) }
+    var paymentMethod by remember { mutableStateOf("Bank / Card") }
+    var isRotation by remember { mutableStateOf(initialRotation || mode == "rotation") }
+    var rotationNote by remember { mutableStateOf("") }
+
+    // Lend/Borrow fields
+    var personName by remember { mutableStateOf("") }
+    var contact by remember { mutableStateOf("") }
+    var expectedReturnDate by remember { mutableStateOf("") }
+    var notes by remember { mutableStateOf("") }
+
+    var isSubmitting by remember { mutableStateOf(false) }
+    var expenseSets by remember { mutableStateOf<List<FinanceExpenseSet>>(emptyList()) }
+
+    var hasSmsPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val smsPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasSmsPermission = granted
+        if (granted) {
+            Toast.makeText(context, "SMS Auto-Tracking enabled!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Load active expense sets
+    LaunchedEffect(Unit) {
+        val res = api.fetchExpenseSets()
+        if (res.isSuccess) {
+            expenseSets = res.getOrNull() ?: emptyList()
+        }
+    }
+
+    val categories = listOf(
+        "Food & Dining", "Transport & Fuel", "Groceries", "Entertainment & Outing",
+        "Shopping", "Health & Medical", "Bills & Utilities", "Work & Tools", "Miscellaneous"
+    )
+
+    val paymentMethods = listOf("Bank / Card", "Cash", "eSewa", "Khalti", "Other")
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        // SMS Auto-Tracking Permission Card (if not granted)
+        if (!hasSmsPermission) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = Indigo50,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Indigo600.copy(alpha = 0.2f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Auto-SMS Bank Tracking", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Indigo600)
+                            Text("Detects bank debit/credit SMS and prompts instant logging.", fontSize = 10.sp, color = Slate600)
+                        }
+                        Button(
+                            onClick = { smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text("Enable", fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Mode Selector (Segmented Row)
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Slate200, RoundedCornerShape(10.dp))
+                    .padding(3.dp)
+            ) {
+                listOf(
+                    "expense" to "Expense",
+                    "lend" to "Lend",
+                    "borrow" to "Borrow",
+                    "rotation" to "Rotation"
+                ).forEach { (mKey, mLabel) ->
+                    val isSel = mode == mKey
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isSel) Color.White else Color.Transparent)
+                            .clickable {
+                                mode = mKey
+                                isRotation = (mKey == "rotation")
+                            }
+                            .padding(vertical = 8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = mLabel,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSel) Emerald600 else Slate600
+                        )
+                    }
+                }
+            }
+        }
+
+        // Big Amount Input
+        item {
+            OutlinedTextField(
+                value = amountText,
+                onValueChange = { amountText = it },
+                label = { Text("Amount (Rs. / NPR)", fontSize = 12.sp) },
+                placeholder = { Text("0.00", fontSize = 14.sp) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            )
+        }
+
+        // Mode-Specific Fields
+        when (mode) {
+            "expense", "rotation" -> {
+                item {
+                    OutlinedTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        label = { Text("Description / Merchant", fontSize = 11.sp) },
+                        placeholder = { Text("e.g. Lunch at Cafe, Fuel, Groceries", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                item {
+                    Text("Category:", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Slate700)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        items(categories) { cat ->
+                            val isSel = category == cat
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) Emerald50 else Slate100,
+                                border = if (isSel) androidx.compose.foundation.BorderStroke(1.dp, Emerald600) else null,
+                                modifier = Modifier.clickable { category = cat }
+                            ) {
+                                Text(
+                                    text = cat,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSel) Emerald600 else Slate700,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (expenseSets.isNotEmpty()) {
+                    item {
+                        Text("Link to Expense Set / Trip Bucket:", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Slate700)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                            item {
+                                val isNone = selectedSetId == null
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isNone) Indigo50 else Slate100,
+                                    border = if (isNone) androidx.compose.foundation.BorderStroke(1.dp, Indigo600) else null,
+                                    modifier = Modifier.clickable { selectedSetId = null }
+                                ) {
+                                    Text("None (Standalone)", fontSize = 11.sp, fontWeight = if (isNone) FontWeight.Bold else FontWeight.Normal, color = if (isNone) Indigo600 else Slate700, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                                }
+                            }
+                            items(expenseSets) { s ->
+                                val isSel = selectedSetId == s.id
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isSel) Indigo50 else Slate100,
+                                    border = if (isSel) androidx.compose.foundation.BorderStroke(1.dp, Indigo600) else null,
+                                    modifier = Modifier.clickable { selectedSetId = s.id }
+                                ) {
+                                    Text(s.name, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, color = if (isSel) Indigo600 else Slate700, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Text("Payment Method:", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Slate700)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        items(paymentMethods) { pm ->
+                            val isSel = paymentMethod == pm
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (isSel) Slate900 else Slate100,
+                                modifier = Modifier.clickable { paymentMethod = pm }
+                            ) {
+                                Text(pm, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal, color = if (isSel) Color.White else Slate700, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+                            }
+                        }
+                    }
+                }
+
+                if (mode == "rotation") {
+                    item {
+                        OutlinedTextField(
+                            value = rotationNote,
+                            onValueChange = { rotationNote = it },
+                            label = { Text("Rotation Note (e.g. Took cash, sent bank transfer)", fontSize = 11.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+            "lend", "borrow" -> {
+                item {
+                    OutlinedTextField(
+                        value = personName,
+                        onValueChange = { personName = it },
+                        label = { Text(if (mode == "lend") "Borrower Name (Who took?)" else "Lender Name (Who gave?)", fontSize = 11.sp) },
+                        placeholder = { Text("Person's name", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = contact,
+                        onValueChange = { contact = it },
+                        label = { Text("Contact (Phone / Email)", fontSize = 11.sp) },
+                        placeholder = { Text("Optional phone number", fontSize = 11.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = expectedReturnDate,
+                        onValueChange = { expectedReturnDate = it },
+                        label = { Text("Expected Return Date (YYYY-MM-DD)", fontSize = 11.sp) },
+                        placeholder = { Text("e.g. 2026-10-30", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Slate100,
+                        modifier = Modifier.fillMaxWidth().clickable { isRotation = !isRotation }
+                    ) {
+                        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = isRotation, onCheckedChange = { isRotation = it })
+                            Spacer(Modifier.width(6.dp))
+                            Text("Temporary rotation (few hours to 1 day)", fontSize = 11.sp, color = Slate800)
+                        }
+                    }
+                }
+
+                item {
+                    OutlinedTextField(
+                        value = notes,
+                        onValueChange = { notes = it },
+                        label = { Text("Notes / Purpose", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        // Save Button
+        item {
+            Button(
+                onClick = {
+                    val amt = amountText.toDoubleOrNull() ?: 0.0
+                    if (amt <= 0.0) {
+                        Toast.makeText(context, "Enter a valid positive amount", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+
+                    isSubmitting = true
+                    coroutineScope.launch {
+                        when (mode) {
+                            "expense", "rotation" -> {
+                                val res = api.submitExpense(
+                                    amount = amt,
+                                    description = description.ifBlank { if (mode == "rotation") "Cash Exchange" else "Expense" },
+                                    category = category,
+                                    expenseSetId = selectedSetId,
+                                    paymentMethod = paymentMethod,
+                                    isRotation = isRotation,
+                                    rotationNote = rotationNote.ifBlank { null }
+                                )
+                                isSubmitting = false
+                                if (res.isSuccess) {
+                                    Toast.makeText(context, "Expense saved!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    description = ""
+                                    onSuccess()
+                                } else {
+                                    // Fallback to offline queue
+                                    queueManager.enqueueExpense(
+                                        amount = amt,
+                                        description = description.ifBlank { "Expense" },
+                                        category = category,
+                                        expenseSetId = selectedSetId,
+                                        paymentMethod = paymentMethod,
+                                        isRotation = isRotation,
+                                        rotationNote = rotationNote.ifBlank { null }
+                                    )
+                                    Toast.makeText(context, "Saved to offline outbox!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    description = ""
+                                    onSuccess()
+                                }
+                            }
+                            "lend" -> {
+                                if (personName.isBlank()) {
+                                    isSubmitting = false
+                                    Toast.makeText(context, "Please enter borrower name", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val res = api.submitLend(
+                                    personName = personName,
+                                    contact = contact,
+                                    amount = amt,
+                                    expectedReturnDate = expectedReturnDate,
+                                    isRotation = isRotation,
+                                    notes = notes
+                                )
+                                isSubmitting = false
+                                if (res.isSuccess) {
+                                    Toast.makeText(context, "Lend recorded!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    personName = ""
+                                    onSuccess()
+                                } else {
+                                    queueManager.enqueueLend(personName, contact, amt, expectedReturnDate, isRotation, notes)
+                                    Toast.makeText(context, "Saved to offline outbox!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    personName = ""
+                                    onSuccess()
+                                }
+                            }
+                            "borrow" -> {
+                                if (personName.isBlank()) {
+                                    isSubmitting = false
+                                    Toast.makeText(context, "Please enter lender name", Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val res = api.submitBorrow(
+                                    personName = personName,
+                                    contact = contact,
+                                    amount = amt,
+                                    expectedReturnDate = expectedReturnDate,
+                                    isRotation = isRotation,
+                                    notes = notes
+                                )
+                                isSubmitting = false
+                                if (res.isSuccess) {
+                                    Toast.makeText(context, "Borrow recorded!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    personName = ""
+                                    onSuccess()
+                                } else {
+                                    queueManager.enqueueBorrow(personName, contact, amt, expectedReturnDate, isRotation, notes)
+                                    Toast.makeText(context, "Saved to offline outbox!", Toast.LENGTH_SHORT).show()
+                                    amountText = ""
+                                    personName = ""
+                                    onSuccess()
+                                }
+                            }
+                        }
+                    }
+                },
+                enabled = !isSubmitting,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Emerald600),
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp))
+                } else {
+                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Save & Log Entry", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                 }
             }
         }

@@ -120,6 +120,98 @@ class OfflineQueueManager(private val context: Context) {
         saveQueue(current)
     }
 
+    fun enqueueExpense(
+        amount: Double,
+        description: String,
+        category: String,
+        expenseSetId: String?,
+        paymentMethod: String,
+        isRotation: Boolean,
+        rotationNote: String?
+    ) {
+        val json = JSONObject().apply {
+            put("amount", amount)
+            put("description", description)
+            put("category", category)
+            if (expenseSetId != null) put("expenseSetId", expenseSetId)
+            put("paymentMethod", paymentMethod)
+            put("isRotation", isRotation)
+            if (rotationNote != null) put("rotationNote", rotationNote)
+        }
+
+        val action = QueuedAction(
+            id = "act_${System.currentTimeMillis()}_${(100..999).random()}",
+            type = "FINANCE_EXPENSE",
+            payloadJson = json.toString(),
+            description = "Expense: Rs. $amount ($description)",
+            timestamp = System.currentTimeMillis()
+        )
+
+        val current = getQueue().toMutableList()
+        current.add(action)
+        saveQueue(current)
+    }
+
+    fun enqueueLend(
+        personName: String,
+        contact: String,
+        amount: Double,
+        expectedReturnDate: String,
+        isRotation: Boolean,
+        notes: String
+    ) {
+        val json = JSONObject().apply {
+            put("personName", personName)
+            put("contact", contact)
+            put("amount", amount)
+            put("expectedReturnDate", expectedReturnDate)
+            put("isRotation", isRotation)
+            put("notes", notes)
+        }
+
+        val action = QueuedAction(
+            id = "act_${System.currentTimeMillis()}_${(100..999).random()}",
+            type = "FINANCE_LEND",
+            payloadJson = json.toString(),
+            description = "Lend: Rs. $amount to $personName",
+            timestamp = System.currentTimeMillis()
+        )
+
+        val current = getQueue().toMutableList()
+        current.add(action)
+        saveQueue(current)
+    }
+
+    fun enqueueBorrow(
+        personName: String,
+        contact: String,
+        amount: Double,
+        expectedReturnDate: String,
+        isRotation: Boolean,
+        notes: String
+    ) {
+        val json = JSONObject().apply {
+            put("personName", personName)
+            put("contact", contact)
+            put("amount", amount)
+            put("expectedReturnDate", expectedReturnDate)
+            put("isRotation", isRotation)
+            put("notes", notes)
+        }
+
+        val action = QueuedAction(
+            id = "act_${System.currentTimeMillis()}_${(100..999).random()}",
+            type = "FINANCE_BORROW",
+            payloadJson = json.toString(),
+            description = "Borrow: Rs. $amount from $personName",
+            timestamp = System.currentTimeMillis()
+        )
+
+        val current = getQueue().toMutableList()
+        current.add(action)
+        saveQueue(current)
+    }
+
     fun removeAction(id: String) {
         val current = getQueue().filter { it.id != id }
         saveQueue(current)
@@ -187,6 +279,40 @@ class OfflineQueueManager(private val context: Context) {
                             mediaFiles = mediaList
                         )
                         api.submitTimelineMoment(p).isSuccess
+                    }
+                    "FINANCE_EXPENSE" -> {
+                        val obj = JSONObject(action.payloadJson)
+                        api.submitExpense(
+                            amount = obj.getDouble("amount"),
+                            description = obj.getString("description"),
+                            category = obj.getString("category"),
+                            expenseSetId = if (obj.has("expenseSetId")) obj.getString("expenseSetId") else null,
+                            paymentMethod = obj.optString("paymentMethod", "Bank / Card"),
+                            isRotation = obj.optBoolean("isRotation", false),
+                            rotationNote = if (obj.has("rotationNote")) obj.getString("rotationNote") else null
+                        ).isSuccess
+                    }
+                    "FINANCE_LEND" -> {
+                        val obj = JSONObject(action.payloadJson)
+                        api.submitLend(
+                            personName = obj.getString("personName"),
+                            contact = obj.optString("contact", ""),
+                            amount = obj.getDouble("amount"),
+                            expectedReturnDate = obj.optString("expectedReturnDate", ""),
+                            isRotation = obj.optBoolean("isRotation", false),
+                            notes = obj.optString("notes", "")
+                        ).isSuccess
+                    }
+                    "FINANCE_BORROW" -> {
+                        val obj = JSONObject(action.payloadJson)
+                        api.submitBorrow(
+                            personName = obj.getString("personName"),
+                            contact = obj.optString("contact", ""),
+                            amount = obj.getDouble("amount"),
+                            expectedReturnDate = obj.optString("expectedReturnDate", ""),
+                            isRotation = obj.optBoolean("isRotation", false),
+                            notes = obj.optString("notes", "")
+                        ).isSuccess
                     }
                     else -> false
                 }

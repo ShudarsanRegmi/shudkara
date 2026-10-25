@@ -13,6 +13,7 @@ class ShudkaraApp : Application() {
     companion object {
         const val CHANNEL_CAPTURE = "shudkara_capture_channel"
         const val CHANNEL_SYNC = "shudkara_sync_channel"
+        const val CHANNEL_FINANCE_SMS = "shudkara_finance_sms"
         lateinit var instance: ShudkaraApp
             private set
     }
@@ -44,8 +45,18 @@ class ShudkaraApp : Application() {
                 description = "Background sync status notifications"
             }
 
+            val financeChannel = NotificationChannel(
+                CHANNEL_FINANCE_SMS,
+                "Finance Transaction Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Immediate transaction prompts and classification from bank SMS"
+                enableVibration(true)
+            }
+
             notificationManager.createNotificationChannel(captureChannel)
             notificationManager.createNotificationChannel(syncChannel)
+            notificationManager.createNotificationChannel(financeChannel)
         }
     }
 

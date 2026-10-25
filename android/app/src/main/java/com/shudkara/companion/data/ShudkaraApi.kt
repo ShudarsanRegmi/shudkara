@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,6 +49,13 @@ data class TimelineMomentPayload(
     val mediaFiles: List<TimelineMediaItem>
 )
 
+data class FinanceExpenseSet(
+    val id: String,
+    val name: String,
+    val category: String,
+    val budget: Double?
+)
+
 class ShudkaraApi(private val context: Context) {
 
     private val prefs = PreferencesManager(context)
@@ -59,10 +67,10 @@ class ShudkaraApi(private val context: Context) {
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
-    private fun buildRequest(path: String): Request.Builder {
-        val baseUrl = prefs.serverUrl.removeSuffix("/")
+    private fun buildRequestForBase(baseUrl: String, path: String): Request.Builder {
+        val cleanBase = baseUrl.removeSuffix("/")
         val builder = Request.Builder()
-            .url("$baseUrl$path")
+            .url("$cleanBase$path")
             .addHeader("Content-Type", "application/json")
 
         if (prefs.sessionToken.isNotBlank()) {
@@ -72,14 +80,55 @@ class ShudkaraApi(private val context: Context) {
         return builder
     }
 
+    /**
+     * Executes an HTTP request against the user's primary server URL.
+     * If the primary connection throws a network reset, SSL handshake failure, or connect exception
+     * (e.g. Cloudflare Edge SSL / network reset), it automatically fails over to the Azure backend
+     * without crashing or throwing to the UI.
+     */
+    private fun executeWithFallback(path: String, buildCall: (Request.Builder) -> Request.Builder): okhttp3.Response {
+        val primaryBase = prefs.serverUrl.removeSuffix("/")
+        val fallbackBase = PreferencesManager.AZURE_FALLBACK_URL.removeSuffix("/")
+
+        val primaryReq = buildCall(buildRequestForBase(primaryBase, path)).build()
+        try {
+            val response = client.newCall(primaryReq).execute()
+            if (response.isSuccessful || response.code in 400..499) {
+                return response
+            }
+            // If server returned a gateway / proxy 502/503/504 error and primary is not fallback, try fallback
+            if (primaryBase != fallbackBase) {
+                response.close()
+                val fallbackReq = buildCall(buildRequestForBase(fallbackBase, path)).build()
+                val fbResponse = client.newCall(fallbackReq).execute()
+                if (fbResponse.isSuccessful) {
+                    prefs.serverUrl = fallbackBase
+                }
+                return fbResponse
+            }
+            return response
+        } catch (e: Exception) {
+            // Connection reset by peer, SSL failure, or connect error
+            if (primaryBase != fallbackBase) {
+                try {
+                    val fallbackReq = buildCall(buildRequestForBase(fallbackBase, path)).build()
+                    val fbResponse = client.newCall(fallbackReq).execute()
+                    if (fbResponse.isSuccessful) {
+                        prefs.serverUrl = fallbackBase
+                    }
+                    return fbResponse
+                } catch (_: Exception) {
+                    throw e
+                }
+            } else {
+                throw e
+            }
+        }
+    }
+
     suspend fun sendEmailOtp(): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val baseUrl = prefs.serverUrl.removeSuffix("/")
-            val request = Request.Builder()
-                .url("$baseUrl/api/auth/send-otp")
-                .post("{}".toRequestBody(jsonMediaType))
-                .build()
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/auth/send-otp") { it.post("{}".toRequestBody(jsonMediaType)) }.use { response ->
                 val bodyStr = response.body?.string() ?: ""
                 val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
                 if (response.isSuccessful && json.optBoolean("success", true)) {
@@ -95,13 +144,8 @@ class ShudkaraApi(private val context: Context) {
 
     suspend fun verifyEmailOtp(code: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val baseUrl = prefs.serverUrl.removeSuffix("/")
             val payload = JSONObject().put("code", code.trim()).toString()
-            val request = Request.Builder()
-                .url("$baseUrl/api/auth/verify-otp")
-                .post(payload.toRequestBody(jsonMediaType))
-                .build()
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/auth/verify-otp") { it.post(payload.toRequestBody(jsonMediaType)) }.use { response ->
                 val bodyStr = response.body?.string() ?: ""
                 val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
                 if (response.isSuccessful && json.optBoolean("success", false)) {
@@ -123,13 +167,8 @@ class ShudkaraApi(private val context: Context) {
 
     suspend fun verifyTotp(code: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val baseUrl = prefs.serverUrl.removeSuffix("/")
             val payload = JSONObject().put("code", code.trim()).toString()
-            val request = Request.Builder()
-                .url("$baseUrl/api/auth/verify-totp")
-                .post(payload.toRequestBody(jsonMediaType))
-                .build()
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/auth/verify-totp") { it.post(payload.toRequestBody(jsonMediaType)) }.use { response ->
                 val bodyStr = response.body?.string() ?: ""
                 val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
                 if (response.isSuccessful && json.optBoolean("success", false)) {
@@ -151,10 +190,9 @@ class ShudkaraApi(private val context: Context) {
 
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val request = buildRequest("/api/streaks").get().build()
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/streaks") { it.get() }.use { response ->
                 if (response.isSuccessful) {
-                    Result.success("Connected successfully (HTTP ${response.code})")
+                    Result.success("Connected successfully (HTTP ${response.code}) via ${prefs.serverUrl}")
                 } else if (response.code == 401) {
                     Result.failure(Exception("Unauthorized: Invalid Session Token"))
                 } else {
@@ -168,8 +206,7 @@ class ShudkaraApi(private val context: Context) {
 
     suspend fun fetchStreaks(): Result<List<StreakItem>> = withContext(Dispatchers.IO) {
         try {
-            val request = buildRequest("/api/streaks").get().build()
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/streaks") { it.get() }.use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
                 }
@@ -205,7 +242,6 @@ class ShudkaraApi(private val context: Context) {
                         }
                     }
 
-                    // Simple consecutive streak calculation
                     val currentStreak = calculateCurrentStreak(checkInDates, todayStr)
                     val longestStreak = maxOf(currentStreak, checkInDates.size)
 
@@ -245,11 +281,9 @@ class ShudkaraApi(private val context: Context) {
                 }
             }
 
-            val request = buildRequest("/api/streaks/$streakId/checkin")
-                .post(json.toString().toRequestBody(jsonMediaType))
-                .build()
-
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/streaks/$streakId/checkin") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
                 if (response.isSuccessful) {
                     Result.success(true)
                 } else {
@@ -285,15 +319,150 @@ class ShudkaraApi(private val context: Context) {
                 put("mediaFiles", mediaArr)
             }
 
-            val request = buildRequest("/api/timeline")
-                .post(json.toString().toRequestBody(jsonMediaType))
-                .build()
-
-            client.newCall(request).execute().use { response ->
+            executeWithFallback("/api/timeline") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
                 if (response.isSuccessful) {
                     Result.success(true)
                 } else {
                     Result.failure(Exception("Moment creation failed: HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FINANCE APIS
+    // ─────────────────────────────────────────────────────────────────────────
+
+    suspend fun fetchExpenseSets(): Result<List<FinanceExpenseSet>> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/finance/expense-sets") { it.get() }.use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP ${response.code}"))
+                }
+                val bodyStr = response.body?.string() ?: "[]"
+                val arr = JSONArray(bodyStr)
+                val list = mutableListOf<FinanceExpenseSet>()
+                for (i in 0 until arr.length()) {
+                    val s = arr.getJSONObject(i)
+                    list.add(
+                        FinanceExpenseSet(
+                            id = s.optString("id", ""),
+                            name = s.optString("name", "Set"),
+                            category = s.optString("category", "General"),
+                            budget = if (s.has("budget") && !s.isNull("budget")) s.optDouble("budget") else null
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitExpense(
+        amount: Double,
+        description: String,
+        category: String,
+        expenseSetId: String?,
+        paymentMethod: String,
+        isRotation: Boolean,
+        rotationNote: String?
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            val json = JSONObject().apply {
+                put("amount", amount)
+                put("description", description)
+                put("category", category)
+                put("expenseSetId", expenseSetId ?: JSONObject.NULL)
+                put("paymentMethod", paymentMethod)
+                put("isRotation", isRotation)
+                if (rotationNote != null) put("rotationNote", rotationNote)
+                put("date", now)
+                put("time", time)
+            }
+
+            executeWithFallback("/api/finance/expenses") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Expense logged successfully")
+                } else {
+                    Result.failure(Exception("Failed to log expense (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitLend(
+        personName: String,
+        contact: String,
+        amount: Double,
+        expectedReturnDate: String,
+        isRotation: Boolean,
+        notes: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val json = JSONObject().apply {
+                put("personName", personName)
+                put("contact", contact)
+                put("amount", amount)
+                put("lentDate", now)
+                put("expectedReturnDate", expectedReturnDate)
+                put("isRotation", isRotation)
+                put("notes", notes)
+            }
+
+            executeWithFallback("/api/finance/lends") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Lend recorded successfully")
+                } else {
+                    Result.failure(Exception("Failed to log lend (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun submitBorrow(
+        personName: String,
+        contact: String,
+        amount: Double,
+        expectedReturnDate: String,
+        isRotation: Boolean,
+        notes: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+            val json = JSONObject().apply {
+                put("personName", personName)
+                put("contact", contact)
+                put("amount", amount)
+                put("borrowedDate", now)
+                put("expectedReturnDate", expectedReturnDate)
+                put("isRotation", isRotation)
+                put("notes", notes)
+            }
+
+            executeWithFallback("/api/finance/borrows") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Borrow recorded successfully")
+                } else {
+                    Result.failure(Exception("Failed to log borrow (HTTP ${response.code})"))
                 }
             }
         } catch (e: Exception) {
@@ -307,12 +476,10 @@ class ShudkaraApi(private val context: Context) {
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         var currentCal = java.util.Calendar.getInstance()
 
-        // Check if checked today
         if (dates.contains(todayStr)) {
             streak++
             currentCal.add(java.util.Calendar.DAY_OF_YEAR, -1)
         } else {
-            // Check if checked yesterday
             currentCal.add(java.util.Calendar.DAY_OF_YEAR, -1)
             val yesterdayStr = sdf.format(currentCal.time)
             if (!dates.contains(yesterdayStr)) {

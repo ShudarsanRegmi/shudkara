@@ -29,7 +29,8 @@ import {
   Pencil,
   Cloud,
   RefreshCw,
-  Flame
+  Flame,
+  Wallet
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -45,6 +46,17 @@ export interface AppDefinition {
 }
 
 export const ALL_APPS: AppDefinition[] = [
+  {
+    id: 'finance',
+    label: 'Finance',
+    description: 'Expense sets, lends, borrows, rotations & cashflow',
+    icon: Wallet,
+    category: 'Knowledge & Vaults',
+    requiresLogin: true,
+    colorBg: 'bg-emerald-50',
+    colorText: 'text-emerald-700',
+    colorBorder: 'border-emerald-200'
+  },
   {
     id: 'notes',
     label: 'Notes',
