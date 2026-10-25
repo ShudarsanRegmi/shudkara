@@ -204,75 +204,17 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
 
   // Streak Calculation Engine
   const calculateStreakStats = (streak: StreakItem) => {
+    const checkIns = Array.isArray(streak.checkIns) ? streak.checkIns : [];
+    const restDays = Array.isArray(streak.restDays) ? streak.restDays : [];
     const checkInMap = new Map<string, StreakCheckIn>();
-    streak.checkIns.forEach(c => checkInMap.set(c.date, c));
+    checkIns.forEach(c => checkInMap.set(c.date, c));
 
     const todayStr = toLocalDateString(new Date());
     const todayChecked = checkInMap.has(todayStr);
     const todayCheckIn = checkInMap.get(todayStr);
 
-    // Calculate current streak count
-    let count = 0;
-    let curr = new Date();
-
-    // If today is checked in or today is a rest day, start from today.
-    // If not, start from yesterday to see if streak is active and pending for today.
-    const todayDayOfWeek = curr.getDay();
-    const isTodayRestDay = streak.restDays.includes(todayDayOfWeek);
-
-    if (todayChecked || isTodayRestDay) {
-      // Include today or start counting backwards
-      if (todayChecked) count++;
-      curr.setDate(curr.getDate() - 1);
-    } else {
-      // Check yesterday
-      curr.setDate(curr.getDate() - 1);
-    }
-
-    // Loop backwards consecutively
-    while (true) {
-      const dateStr = toLocalDateString(curr);
-      const dayOfWeek = curr.getDay();
-      const hasCheckIn = checkInMap.has(dateStr);
-      const isRestDay = streak.restDays.includes(dayOfWeek);
-
-      if (hasCheckIn) {
-        count++;
-        curr.setDate(curr.getDate() - 1);
-      } else if (isRestDay) {
-        // Rest day doesn't break streak
-        curr.setDate(curr.getDate() - 1);
-      } else {
-        break;
-      }
-    }
-
-    // Longest streak calculation
-    let maxStreak = 0;
-    const sortedDates = Array.from(checkInMap.keys()).sort();
-    if (sortedDates.length > 0) {
-      let temp = 0;
-      let prevDate: Date | null = null;
-      for (const dStr of sortedDates) {
-        const d = new Date(dStr + 'T00:00:00');
-        if (!prevDate) {
-          temp = 1;
-        } else {
-          const diffDays = Math.round((d.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24));
-          if (diffDays === 1) {
-            temp++;
-          } else {
-            temp = 1;
-          }
-        }
-        if (temp > maxStreak) maxStreak = temp;
-        prevDate = d;
-      }
-    }
-    maxStreak = Math.max(maxStreak, count);
-
     // Target Time calculation
-    const [targetHour, targetMinute] = streak.targetTime.split(':').map(Number);
+    const [targetHour = 17, targetMinute = 0] = (streak.targetTime || '17:00').split(':').map(Number);
     const targetDate = new Date();
     targetDate.setHours(targetHour, targetMinute, 0, 0);
 
@@ -281,6 +223,78 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     const isOverdue = diffMs < 0 && !todayChecked;
     const minutesLeft = Math.round(diffMs / 60000);
 
+    // If there are zero check-ins in the streak, current and longest streak are 0!
+    if (checkIns.length === 0) {
+      return {
+        currentStreak: 0,
+        longestStreak: 0,
+        todayChecked: false,
+        todayCheckIn: undefined,
+        isOverdue,
+        minutesLeft,
+        totalCheckIns: 0,
+        leaveDaysCount: 0
+      };
+    }
+
+    const sortedDates = Array.from(checkInMap.keys()).sort();
+    const earliestDate = new Date(sortedDates[0] + 'T00:00:00');
+
+    // Calculate current streak count
+    let count = 0;
+    let curr = new Date();
+    curr.setHours(0, 0, 0, 0);
+
+    const todayDayOfWeek = curr.getDay();
+    const isTodayRestDay = restDays.includes(todayDayOfWeek);
+
+    if (todayChecked || isTodayRestDay) {
+      if (todayChecked) count++;
+      curr.setDate(curr.getDate() - 1);
+    } else {
+      curr.setDate(curr.getDate() - 1);
+    }
+
+    // Loop backwards bounded by earliest check-in and hard safety iterations
+    let safety = 0;
+    while (curr >= earliestDate && safety < 3000) {
+      safety++;
+      const dateStr = toLocalDateString(curr);
+      const dayOfWeek = curr.getDay();
+      const hasCheckIn = checkInMap.has(dateStr);
+      const isRestDay = restDays.includes(dayOfWeek);
+
+      if (hasCheckIn) {
+        count++;
+        curr.setDate(curr.getDate() - 1);
+      } else if (isRestDay) {
+        curr.setDate(curr.getDate() - 1);
+      } else {
+        break;
+      }
+    }
+
+    // Longest streak calculation
+    let maxStreak = 0;
+    let temp = 0;
+    let prevDate: Date | null = null;
+    for (const dStr of sortedDates) {
+      const d = new Date(dStr + 'T00:00:00');
+      if (!prevDate) {
+        temp = 1;
+      } else {
+        const diffDays = Math.round((d.getTime() - prevDate.getTime()) / (1000 * 60 * 60 * 24));
+        if (diffDays === 1) {
+          temp++;
+        } else {
+          temp = 1;
+        }
+      }
+      if (temp > maxStreak) maxStreak = temp;
+      prevDate = d;
+    }
+    maxStreak = Math.max(maxStreak, count);
+
     return {
       currentStreak: count,
       longestStreak: maxStreak,
@@ -288,8 +302,8 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       todayCheckIn,
       isOverdue,
       minutesLeft,
-      totalCheckIns: streak.checkIns.filter(c => !c.isLeaveDay).length,
-      leaveDaysCount: streak.checkIns.filter(c => c.isLeaveDay).length
+      totalCheckIns: checkIns.filter(c => !c.isLeaveDay).length,
+      leaveDaysCount: checkIns.filter(c => c.isLeaveDay).length
     };
   };
 
