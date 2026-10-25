@@ -46,6 +46,17 @@ export interface AppDefinition {
 
 export const ALL_APPS: AppDefinition[] = [
   {
+    id: 'notes',
+    label: 'Notes',
+    description: 'Categorized markdown notebook, tags, cards & organization',
+    icon: FileText,
+    category: 'Knowledge & Vaults',
+    requiresLogin: false,
+    colorBg: 'bg-indigo-50',
+    colorText: 'text-indigo-700',
+    colorBorder: 'border-indigo-200'
+  },
+  {
     id: 'streaks',
     label: 'Streaks',
     description: 'Daily photo streak challenge with aggressive Duolingo reminders',

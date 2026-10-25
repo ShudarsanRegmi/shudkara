@@ -132,32 +132,32 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
 
       const transporter = createEmailTransporter();
 
-      let subject = `🚨 URGENT: Complete your ${streakTitle} streak!`;
+      let subject = `URGENT: Complete your ${streakTitle} streak!`;
       let headline = `Don't let your ${streakCount}-day streak die!`;
-      let duolingoRant = "Looks like you haven't checked in yet today. Is whatever you're doing right now really worth breaking your streak? The owl is watching. 🦉";
+      let duolingoRant = "Looks like you haven't checked in yet today. Is whatever you're doing right now really worth breaking your streak? Discipline requires daily consistency.";
       let headerBg = '#dc2626'; // red
 
       if (urgency === 'test') {
-        subject = `✅ Streaks Alert Test: Shudkara Reminders Configured!`;
+        subject = `Streaks Alert Test: Shudkara Reminders Configured`;
         headline = `Test Alert for ${streakTitle}`;
-        duolingoRant = `Great job! Your email notification system is operational. When your streak is in danger, you will receive aggressive reminders right here! 🦉`;
+        duolingoRant = `Great job! Your email notification system is operational. When your streak is in danger, you will receive reminders right here.`;
         headerBg = '#2563eb'; // blue
       } else if (urgency === 'warning') {
-        subject = `⏰ Reminder: ${streakTitle} due today by ${targetTime}`;
+        subject = `Reminder: ${streakTitle} due today by ${targetTime}`;
         headline = `Keep your ${streakCount}-day momentum alive!`;
         duolingoRant = `You still have time before ${targetTime}, but don't leave it to the last second! Grab your photo proof now!`;
         headerBg = '#ea580c'; // orange
       } else if (urgency === 'critical') {
-        subject = `🔥 CRITICAL EMERGENCY: ${streakTitle} streak expires TONIGHT!`;
+        subject = `CRITICAL ALERT: ${streakTitle} streak expires TONIGHT!`;
         headline = `CRITICAL ALERT: Your ${streakCount}-day streak is about to be ERASED!`;
-        duolingoRant = `You are past your target time! Upload your photo proof immediately before midnight or say goodbye to all your hard-earned streak days! 🦉🔥`;
+        duolingoRant = `You are past your target time! Upload your photo proof immediately before midnight or say goodbye to all your hard-earned streak days!`;
         headerBg = '#b91c1c'; // dark red
       }
 
       const emailHtml = `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 520px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 24px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
           <div style="background: ${headerBg}; padding: 32px 24px; text-align: center; color: #ffffff;">
-            <div style="font-size: 48px; margin-bottom: 8px;">🦉🔥</div>
+            <div style="font-size: 16px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 8px; opacity: 0.9;">STREAK GUARDIAN</div>
             <h1 style="margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">${headline}</h1>
             <p style="margin: 8px 0 0 0; opacity: 0.9; font-size: 14px; font-weight: 600;">Target Time: ${targetTime}</p>
           </div>
@@ -165,7 +165,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
           <div style="padding: 32px 24px; color: #1e293b;">
             <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 20px; text-align: center; margin-bottom: 24px;">
               <span style="display: block; font-size: 12px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 1px;">Current Streak</span>
-              <span style="display: block; font-size: 44px; font-weight: 900; color: #ea580c; line-height: 1.2;">🔥 ${streakCount} DAYS</span>
+              <span style="display: block; font-size: 44px; font-weight: 900; color: #ea580c; line-height: 1.2;">${streakCount} DAYS</span>
               <span style="display: block; font-size: 13px; font-weight: 600; color: #334155; margin-top: 4px;">Challenge: ${streakTitle}</span>
             </div>
 
@@ -177,12 +177,12 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
 
             <div style="text-align: center; margin: 32px 0 16px 0;">
               <a href="https://shudkara.com/?tab=streaks" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 14px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);">
-                📸 Check In & Upload Photo Proof
+                Check In & Upload Photo Proof
               </a>
             </div>
 
             <p style="text-align: center; font-size: 11px; color: #94a3b8; margin-top: 24px;">
-              Sent by Shudkara Streaks Aggressive Reminders • You asked for this discipline!
+              Sent by Shudkara Streaks Reminders • Discipline and Consistency System
             </p>
           </div>
         </div>
@@ -190,7 +190,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
 
       try {
         await transporter.sendMail({
-          from: `"Shudkara Streaks 🦉" <${OWNER_EMAIL}>`,
+          from: `"Shudkara Streaks" <${OWNER_EMAIL}>`,
           to: recipient,
           subject,
           html: emailHtml

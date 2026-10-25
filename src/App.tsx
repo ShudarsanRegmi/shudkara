@@ -24,6 +24,7 @@ import { Pastebin } from './components/Pastebin';
 import { ConcurrencyManager } from './components/ConcurrencyManager';
 import { SavePost } from './components/SavePost';
 import { Streaks } from './components/Streaks';
+import { Notes } from './components/Notes';
 import { CommandPalette } from './components/CommandPalette';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
@@ -48,6 +49,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'notes', label: 'Notes', description: 'Categorized notes, markdown support & quick organization', icon: FileText, requiresLogin: false },
       { key: 'streaks', label: 'Streaks', description: 'Daily photo streak challenge with reminders', icon: Flame, requiresLogin: false },
       { key: 'savepost', label: 'SavePost', description: 'Social post & link bookmark vault', icon: Bookmark, requiresLogin: false },
       { key: 'inventory', label: 'Inventory', description: 'Private personal belongings & vault', icon: Package, requiresLogin: true },
@@ -63,6 +65,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  notes: { requiresLogin: false, label: 'Notes', icon: FileText },
   streaks: { requiresLogin: false, label: 'Streaks', icon: Flame },
   savepost: { requiresLogin: false, label: 'SavePost', icon: Bookmark },
   concurrency: { requiresLogin: false, label: 'Concurrency', icon: Workflow },
@@ -418,6 +421,8 @@ function App() {
         return <LifetimeLine authToken={authToken} />;
       case 'links':
         return <LinkManager authToken={authToken} />;
+      case 'notes':
+        return <Notes authToken={authToken} />;
       case 'streaks':
         return <Streaks authToken={authToken} />;
       case 'savepost':

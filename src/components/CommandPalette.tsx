@@ -73,6 +73,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
     {
+      id: 'app-notes',
+      title: 'Notes & Categories',
+      subtitle: 'Categorized markdown notebook, tags, cards & organization',
+      category: 'Applications',
+      icon: FileText,
+      colorBg: 'bg-indigo-50',
+      colorText: 'text-indigo-600',
+      badge: 'New',
+      action: () => {
+        setActiveTab('notes');
+        onClose();
+      }
+    },
+    {
       id: 'app-streaks',
       title: 'Streaks Challenge',
       subtitle: 'Daily photo proof habit tracker with aggressive Duolingo-style reminders',
