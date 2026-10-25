@@ -3,7 +3,8 @@ import {
   Wallet, Plus, Calendar, ArrowUpRight, ArrowDownLeft,
   RefreshCw, Clock, AlertTriangle, Filter,
   Trash2, X, DollarSign, Layers, ChevronRight,
-  TrendingDown, TrendingUp, User, Phone, Check, CreditCard
+  TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
+  Users, CheckCircle2, Edit2
 } from 'lucide-react';
 
 export interface ExpenseSet {
@@ -34,6 +35,9 @@ export interface ExpenseItem {
   paymentMethod: string;
   isRotation: boolean;
   rotationNote?: string | null;
+  splitPersonName?: string | null;
+  splitAmount?: number | null;
+  paidByPersonName?: string | null;
   tags?: string[];
   receiptUrl?: string | null;
   createdAt: string;
@@ -77,6 +81,40 @@ export interface BorrowItem {
   updatedAt: string;
 }
 
+export interface Person {
+  id: string;
+  name: string;
+  contact?: string;
+  isDefault?: boolean;
+  notes?: string;
+  netReceivable?: number;
+  netPayable?: number;
+  netBalance?: number;
+  activeLendsCount?: number;
+  activeBorrowsCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BankBacklogItem {
+  id: string;
+  rawSms: string;
+  sender: string;
+  bank: string;
+  type: 'DEBIT' | 'CREDIT';
+  amount: number;
+  date: string;
+  account?: string;
+  counterpartyAccount?: string;
+  upiRef?: string;
+  status: 'pending' | 'reconciled' | 'rotated_ignored';
+  reconciledExpenseId?: string | null;
+  reconciledLendId?: string | null;
+  splitPersonName?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface FinanceProps {
   authToken: string | null;
 }
@@ -90,7 +128,7 @@ const EXPENSE_CATEGORIES = [
 const PAYMENT_METHODS = ['Bank / Card', 'Cash', 'eSewa', 'Khalti', 'Other'];
 
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'rotations'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people'>('overview');
   const [loading, setLoading] = useState(true);
 
   // Data states
@@ -99,6 +137,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
   const [lends, setLends] = useState<LendItem[]>([]);
   const [borrows, setBorrows] = useState<BorrowItem[]>([]);
+  const [people, setPeople] = useState<Person[]>([]);
+  const [backlog, setBacklog] = useState<BankBacklogItem[]>([]);
 
   // Filter states for expenses
   const [filterSetId, setFilterSetId] = useState<string>('all');
@@ -110,6 +150,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [isSetModalOpen, setIsSetModalOpen] = useState(false);
   const [isLendModalOpen, setIsLendModalOpen] = useState(false);
   const [isBorrowModalOpen, setIsBorrowModalOpen] = useState(false);
+  const [isPersonModalOpen, setIsPersonModalOpen] = useState(false);
+  const [reconcileTarget, setReconcileTarget] = useState<BankBacklogItem | null>(null);
   const [repayTarget, setRepayTarget] = useState<{ type: 'lend' | 'borrow'; item: LendItem | BorrowItem } | null>(null);
 
   // Form states
@@ -123,7 +165,14 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     isRotation: false,
     rotationNote: '',
     date: new Date().toISOString().slice(0, 10),
-    time: new Date().toTimeString().slice(0, 5)
+    time: new Date().toTimeString().slice(0, 5),
+    splitOption: 'none' as 'none' | 'split' | 'paid_by_other',
+    splitPersonName: '',
+    splitMode: '50_50' as '50_50' | '100_them' | 'custom',
+    customMyShare: '',
+    customTheirShare: '',
+    paidByPersonName: '',
+    expectedReturnDate: ''
   });
 
   const [setForm, setSetForm] = useState({
@@ -156,6 +205,25 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     notes: ''
   });
 
+  const [personForm, setPersonForm] = useState({
+    id: '',
+    name: '',
+    contact: '',
+    isDefault: false,
+    notes: ''
+  });
+
+  const [reconcileForm, setReconcileForm] = useState({
+    description: '',
+    category: EXPENSE_CATEGORIES[0],
+    expenseSetId: '',
+    splitMode: 'none' as 'none' | '50_50' | '100_them' | 'custom',
+    splitPersonName: '',
+    customMyAmount: '',
+    customTheirAmount: '',
+    expectedReturnDate: ''
+  });
+
   const [repayAmount, setRepayAmount] = useState('');
   const [repayNotes, setRepayNotes] = useState('');
 
@@ -168,12 +236,14 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     if (!authToken) return;
     setLoading(true);
     try {
-      const [ovRes, setsRes, expRes, lendsRes, borrowsRes] = await Promise.all([
+      const [ovRes, setsRes, expRes, lendsRes, borrowsRes, peopleRes, backlogRes] = await Promise.all([
         fetch('/api/finance/overview', { headers: authHeaders }),
         fetch('/api/finance/expense-sets', { headers: authHeaders }),
         fetch('/api/finance/expenses', { headers: authHeaders }),
         fetch('/api/finance/lends', { headers: authHeaders }),
-        fetch('/api/finance/borrows', { headers: authHeaders })
+        fetch('/api/finance/borrows', { headers: authHeaders }),
+        fetch('/api/finance/people', { headers: authHeaders }),
+        fetch('/api/finance/backlog?status=pending', { headers: authHeaders })
       ]);
 
       if (ovRes.ok) setOverview(await ovRes.json());
@@ -181,6 +251,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       if (expRes.ok) setExpenses(await expRes.json());
       if (lendsRes.ok) setLends(await lendsRes.json());
       if (borrowsRes.ok) setBorrows(await borrowsRes.json());
+      if (peopleRes.ok) setPeople(await peopleRes.json());
+      if (backlogRes.ok) setBacklog(await backlogRes.json());
     } catch (err) {
       console.error('Error fetching finance data:', err);
     } finally {
@@ -192,14 +264,36 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     fetchAllData();
   }, [authToken]);
 
-  // Handle Save Expense
+  // Handle Save Expense (with Split and Paid-by support)
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const amountNum = parseFloat(expenseForm.amount);
     if (isNaN(amountNum) || amountNum <= 0) return;
 
-    const payload = {
-      amount: amountNum,
+    let finalAmount = amountNum;
+    let splitPersonName: string | null = null;
+    let splitAmount: number | null = null;
+    let paidByPersonName: string | null = null;
+
+    if (expenseForm.splitOption === 'split' && expenseForm.splitPersonName.trim()) {
+      splitPersonName = expenseForm.splitPersonName.trim();
+      if (expenseForm.splitMode === '50_50') {
+        splitAmount = parseFloat((amountNum / 2).toFixed(2));
+        finalAmount = parseFloat((amountNum - splitAmount).toFixed(2));
+      } else if (expenseForm.splitMode === '100_them') {
+        splitAmount = amountNum;
+        finalAmount = 0;
+      } else if (expenseForm.splitMode === 'custom') {
+        const theirShare = parseFloat(expenseForm.customTheirShare) || 0;
+        splitAmount = theirShare;
+        finalAmount = Math.max(0, parseFloat((amountNum - theirShare).toFixed(2)));
+      }
+    } else if (expenseForm.splitOption === 'paid_by_other' && expenseForm.paidByPersonName.trim()) {
+      paidByPersonName = expenseForm.paidByPersonName.trim();
+    }
+
+    const payload: any = {
+      amount: finalAmount,
       description: expenseForm.description.trim() || 'Expense',
       category: expenseForm.category,
       expenseSetId: expenseForm.expenseSetId ? expenseForm.expenseSetId : null,
@@ -207,7 +301,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       isRotation: expenseForm.isRotation,
       rotationNote: expenseForm.rotationNote.trim() || null,
       date: expenseForm.date,
-      time: expenseForm.time
+      time: expenseForm.time,
+      splitPersonName,
+      splitAmount,
+      paidByPersonName,
+      expectedReturnDate: expenseForm.expectedReturnDate || undefined
     };
 
     try {
@@ -231,12 +329,164 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           isRotation: false,
           rotationNote: '',
           date: new Date().toISOString().slice(0, 10),
-          time: new Date().toTimeString().slice(0, 5)
+          time: new Date().toTimeString().slice(0, 5),
+          splitOption: 'none',
+          splitPersonName: '',
+          splitMode: '50_50',
+          customMyShare: '',
+          customTheirShare: '',
+          paidByPersonName: '',
+          expectedReturnDate: ''
         });
         fetchAllData();
       }
     } catch (err) {
       console.error('Save expense error:', err);
+    }
+  };
+
+  // Handle Save Person
+  const handleSavePerson = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!personForm.name.trim()) return;
+
+    try {
+      const res = await fetch(
+        personForm.id ? `/api/finance/people/${personForm.id}` : '/api/finance/people',
+        {
+          method: personForm.id ? 'PUT' : 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            name: personForm.name.trim(),
+            contact: personForm.contact.trim(),
+            isDefault: personForm.isDefault,
+            notes: personForm.notes.trim()
+          })
+        }
+      );
+      if (res.ok) {
+        setIsPersonModalOpen(false);
+        setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+        fetchAllData();
+      }
+    } catch (err) {
+      console.error('Save person error:', err);
+    }
+  };
+
+  // Handle Delete Person
+  const handleDeletePerson = async (id: string, name: string) => {
+    if (!confirm(`Delete ${name} from your people & ledgers directory?`)) return;
+    try {
+      const res = await fetch(`/api/finance/people/${id}`, { method: 'DELETE', headers: authHeaders });
+      if (res.ok) fetchAllData();
+    } catch (err) {
+      console.error('Delete person error:', err);
+    }
+  };
+
+  // Handle Settle Person Balance
+  const handleSettlePerson = async (person: Person) => {
+    const balance = person.netBalance || 0;
+    const msg = balance > 0
+      ? `Mark ${person.name}'s balance of Rs. ${balance.toLocaleString()} as fully settled / received?`
+      : balance < 0
+      ? `Mark your debt of Rs. ${Math.abs(balance).toLocaleString()} to ${person.name} as fully paid / settled?`
+      : `Mark all open records for ${person.name} as settled?`;
+
+    if (!confirm(msg)) return;
+
+    try {
+      const res = await fetch(`/api/finance/people/${person.id}/settle`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          date: new Date().toISOString().slice(0, 10),
+          notes: 'Settled via Web App'
+        })
+      });
+      if (res.ok) fetchAllData();
+    } catch (err) {
+      console.error('Settle person error:', err);
+    }
+  };
+
+  // Handle Reconcile Backlog Item (Log / Split)
+  const handleReconcileBacklog = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reconcileTarget) return;
+
+    let myAmount = reconcileTarget.amount;
+    let theirAmount = 0;
+    let splitPersonName = reconcileForm.splitPersonName.trim() || undefined;
+
+    if (reconcileForm.splitMode === '50_50') {
+      theirAmount = parseFloat((reconcileTarget.amount / 2).toFixed(2));
+      myAmount = parseFloat((reconcileTarget.amount - theirAmount).toFixed(2));
+    } else if (reconcileForm.splitMode === '100_them') {
+      theirAmount = reconcileTarget.amount;
+      myAmount = 0;
+    } else if (reconcileForm.splitMode === 'custom') {
+      theirAmount = parseFloat(reconcileForm.customTheirAmount) || 0;
+      myAmount = Math.max(0, parseFloat((reconcileTarget.amount - theirAmount).toFixed(2)));
+    }
+
+    try {
+      const res = await fetch(`/api/finance/backlog/${reconcileTarget.id}/reconcile`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          myAmount,
+          theirAmount,
+          splitPersonName,
+          category: reconcileForm.category,
+          description: reconcileForm.description.trim() || `${reconcileTarget.bank} Transaction`,
+          expenseSetId: reconcileForm.expenseSetId ? reconcileForm.expenseSetId : null,
+          expectedReturnDate: reconcileForm.expectedReturnDate || undefined
+        })
+      });
+      if (res.ok) {
+        setReconcileTarget(null);
+        fetchAllData();
+      }
+    } catch (err) {
+      console.error('Reconcile backlog error:', err);
+    }
+  };
+
+  // Handle Ignore Backlog Item (Mark Rotated)
+  const handleIgnoreBacklog = async (id: string) => {
+    // Optimistic UI update
+    setBacklog(prev => prev.filter(b => b.id !== id));
+    try {
+      const res = await fetch(`/api/finance/backlog/${id}/ignore`, {
+        method: 'POST',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        if (reconcileTarget?.id === id) setReconcileTarget(null);
+        fetchAllData();
+      }
+    } catch (err) {
+      console.error('Ignore backlog error:', err);
+    }
+  };
+
+  // Handle Delete Backlog Item
+  const handleDeleteBacklog = async (id: string) => {
+    if (!confirm('Remove this SMS transaction from your backlog?')) return;
+    setBacklog(prev => prev.filter(b => b.id !== id));
+    try {
+      const res = await fetch(`/api/finance/backlog/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        if (reconcileTarget?.id === id) setReconcileTarget(null);
+        fetchAllData();
+      }
+    } catch (err) {
+      console.error('Delete backlog error:', err);
     }
   };
 
@@ -394,7 +644,6 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   // Filtered expenses
   const filteredExpenses = expenses.filter(e => {
     if (hideRotations && e.isRotation) return false;
-    if (activeSubTab === 'rotations' && !e.isRotation) return false;
     if (filterSetId === 'standalone' && e.expenseSetId) return false;
     if (filterSetId !== 'all' && filterSetId !== 'standalone' && e.expenseSetId !== filterSetId) return false;
     if (filterCategory !== 'all' && e.category !== filterCategory) return false;
@@ -453,6 +702,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => {
+              const defP = people.find(p => p.isDefault)?.name || (people[0]?.name || '');
               setExpenseForm({
                 id: '',
                 amount: '',
@@ -463,7 +713,14 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 isRotation: false,
                 rotationNote: '',
                 date: new Date().toISOString().slice(0, 10),
-                time: new Date().toTimeString().slice(0, 5)
+                time: new Date().toTimeString().slice(0, 5),
+                splitOption: 'none',
+                splitPersonName: defP,
+                splitMode: '50_50',
+                customMyShare: '',
+                customTheirShare: '',
+                paidByPersonName: '',
+                expectedReturnDate: ''
               });
               setIsExpenseModalOpen(true);
             }}
@@ -471,6 +728,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           >
             <Plus className="w-4 h-4" />
             Add Expense
+          </button>
+
+          <button
+            onClick={() => {
+              setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+              setIsPersonModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+          >
+            <User className="w-4 h-4" />
+            + Person
           </button>
 
           <button
@@ -502,7 +770,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
           { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
           { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
-          { key: 'rotations', label: 'Rotations & Exchanges', icon: RefreshCw, count: expenses.filter(e => e.isRotation).length }
+          { key: 'people', label: 'People & Ledgers', icon: Users, count: people.length }
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.key;
@@ -585,22 +853,131 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
               </div>
             </div>
 
-            {/* Rotations / Dummy Exchanges */}
+            {/* People & Companions */}
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-2">
               <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
-                <span>Rotations & Exchanges</span>
+                <span>People & Ledgers</span>
                 <span className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
-                  <RefreshCw className="w-4 h-4" />
+                  <Users className="w-4 h-4" />
                 </span>
               </div>
-              <div className="text-2xl font-black text-slate-800">
-                Rs. {(overview?.totalRotationsThisMonth || 0).toLocaleString()}
+              <div className="text-2xl font-black text-slate-900">
+                {people.length} <span className="text-xs font-normal text-slate-500">contacts</span>
               </div>
-              <div className="text-[11px] text-slate-500">
-                Pass-through / cash exchanges
+              <div className="text-[11px] text-slate-500 flex justify-between items-center">
+                <span>Net: Rs. {people.reduce((s, p) => s + (p.netBalance || 0), 0).toLocaleString()}</span>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab('people')}
+                  className="text-indigo-600 font-bold hover:underline"
+                >
+                  View Ledgers
+                </button>
               </div>
             </div>
           </div>
+
+          {/* Pending Bank SMS Backlog Card */}
+          {backlog.length > 0 && (
+            <div className="bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-emerald-500/10 border-2 border-indigo-200 rounded-2xl p-5 shadow-md space-y-3 animate-fade-in">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-indigo-600"></span>
+                  </span>
+                  <div>
+                    <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      Pending Bank SMS Inbox ({backlog.length})
+                    </h2>
+                    <p className="text-[11px] text-slate-600">
+                      Auto-detected from Bank SMS (City Union Bank) on your companion phone. Log, split with a friend, or mark as rotated.
+                    </p>
+                  </div>
+                </div>
+                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                  Real-time bi-directional sync
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                {backlog.map(item => (
+                  <div
+                    key={item.id}
+                    className="bg-white border border-slate-200 hover:border-indigo-300 rounded-xl p-3.5 shadow-sm space-y-2.5 transition"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          item.type === 'CREDIT' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                        }`}>
+                          {item.type}
+                        </span>
+                        <span className="text-xs font-bold text-slate-800">
+                          {item.bank || 'CUB'} {item.account ? `(${item.account})` : ''}
+                        </span>
+                      </div>
+                      <div className="text-sm font-black text-slate-900">
+                        Rs. {item.amount.toLocaleString()}
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-500 space-y-0.5">
+                      <div className="flex items-center justify-between">
+                        <span>Date: <span className="font-semibold text-slate-700">{item.date}</span></span>
+                        {item.upiRef && <span className="font-mono text-[10px]">UPI: {item.upiRef}</span>}
+                      </div>
+                      {item.counterpartyAccount && (
+                        <div className="truncate text-slate-400 text-[10px]">To: {item.counterpartyAccount}</div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const defPerson = people.find(p => p.isDefault)?.name || (people.length > 0 ? people[0].name : '');
+                            setReconcileTarget(item);
+                            setReconcileForm({
+                              description: `${item.bank} ${item.upiRef ? `UPI ${item.upiRef}` : 'Transaction'}`,
+                              category: item.type === 'CREDIT' ? 'Miscellaneous' : 'Food & Dining',
+                              expenseSetId: '',
+                              splitMode: 'none',
+                              splitPersonName: defPerson,
+                              customMyAmount: item.amount.toString(),
+                              customTheirAmount: '0',
+                              expectedReturnDate: ''
+                            });
+                          }}
+                          className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs shadow-sm transition"
+                        >
+                          Log / Split
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleIgnoreBacklog(item.id)}
+                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition"
+                          title="Mark as Rotated (Not an expense)"
+                        >
+                          Rotated (Pass)
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteBacklog(item.id)}
+                        className="text-slate-400 hover:text-red-500 p-1 transition"
+                        title="Delete from backlog"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Active Expense Sets Row */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
@@ -1182,47 +1559,179 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 6. ROTATIONS & CASH EXCHANGES TAB */}
+      {/* 6. PEOPLE & LEDGERS TAB */}
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {activeSubTab === 'rotations' && (
-        <div className="space-y-4">
-          <div className="bg-indigo-50/70 border border-indigo-100 rounded-2xl p-5 space-y-1.5">
-            <h2 className="font-bold text-indigo-900 text-sm flex items-center gap-2">
-              <RefreshCw className="w-4 h-4 text-indigo-600" />
-              About Rotations & Dummy Transactions
-            </h2>
-            <p className="text-xs text-indigo-800/80 leading-relaxed">
-              Rotations track pass-through transactions, cash exchanges (e.g. gave cash, received bank transfer), and short-term temporary lends/borrows (under 24 hours).
-              They are explicitly segregated from your true spending analytics so your monthly expense calculations remain 100% accurate.
-            </p>
+      {activeSubTab === 'people' && (
+        <div className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-600" />
+                People & Companions Directory
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Track shared outings, who paid for whom, and running balances with friends & companions
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+                setIsPersonModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+            >
+              <Plus className="w-4 h-4" /> Add Person / Identifier
+            </button>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-            {expenses.filter(e => e.isRotation).length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-10">No rotation transactions recorded yet.</p>
+          {/* Directory Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+              <span className="text-[11px] font-semibold text-slate-500">Total Receivables (Others Owe You)</span>
+              <div className="text-xl font-black text-emerald-600">
+                Rs. {people.reduce((sum, p) => sum + (p.netReceivable || 0), 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+              <span className="text-[11px] font-semibold text-slate-500">Total Payables (You Owe Others)</span>
+              <div className="text-xl font-black text-amber-600">
+                Rs. {people.reduce((sum, p) => sum + (p.netPayable || 0), 0).toLocaleString()}
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+              <span className="text-[11px] font-semibold text-slate-500">Net Ledger Position</span>
+              {(() => {
+                const net = people.reduce((sum, p) => sum + (p.netBalance || 0), 0);
+                return (
+                  <div className={`text-xl font-black ${net >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                    {net >= 0 ? `+ Rs. ${net.toLocaleString()}` : `- Rs. ${Math.abs(net).toLocaleString()}`}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* People Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {people.length === 0 ? (
+              <div className="col-span-full bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 space-y-2">
+                <p>No companions or people added yet.</p>
+                <p className="text-[11px] text-slate-400">
+                  When you split an expense (e.g. outing with Ram) or someone pays for you, people are auto-created or can be added manually.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsPersonModalOpen(true)}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition"
+                >
+                  Add First Companion
+                </button>
+              </div>
             ) : (
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wider text-[10px] font-bold">
-                  <tr>
-                    <th className="py-3 px-4">Date</th>
-                    <th className="py-3 px-4">Description</th>
-                    <th className="py-3 px-4">Payment Method</th>
-                    <th className="py-3 px-4">Rotation Notes</th>
-                    <th className="py-3 px-4 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {expenses.filter(e => e.isRotation).map(e => (
-                    <tr key={e.id}>
-                      <td className="py-3 px-4 font-mono text-slate-600">{e.date}</td>
-                      <td className="py-3 px-4 font-bold text-slate-900">{e.description}</td>
-                      <td className="py-3 px-4 text-slate-600">{e.paymentMethod}</td>
-                      <td className="py-3 px-4 text-slate-500 italic">{e.rotationNote || 'Cash exchange / pass-through'}</td>
-                      <td className="py-3 px-4 text-right font-black text-indigo-600">Rs. {e.amount.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              people.map(p => {
+                const balance = p.netBalance || 0;
+                return (
+                  <div
+                    key={p.id}
+                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="font-bold text-slate-900 text-base flex items-center gap-2">
+                            {p.name}
+                            {p.isDefault && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700 border border-indigo-200">
+                                Default
+                              </span>
+                            )}
+                          </div>
+                          {p.contact && (
+                            <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                              <Phone className="w-3 h-3" /> {p.contact}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPersonForm({
+                                id: p.id,
+                                name: p.name,
+                                contact: p.contact || '',
+                                isDefault: Boolean(p.isDefault),
+                                notes: p.notes || ''
+                              });
+                              setIsPersonModalOpen(true);
+                            }}
+                            className="p-1 text-slate-400 hover:text-indigo-600 rounded transition"
+                            title="Edit Person"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeletePerson(p.id, p.name)}
+                            className="p-1 text-slate-400 hover:text-red-500 rounded transition"
+                            title="Delete Person"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Running Balance Box */}
+                      <div className={`p-3 rounded-xl border ${
+                        balance > 0
+                          ? 'bg-emerald-50/70 border-emerald-200'
+                          : balance < 0
+                          ? 'bg-amber-50/70 border-amber-200'
+                          : 'bg-slate-50 border-slate-200'
+                      }`}>
+                        <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">
+                          {balance > 0 ? 'Owes You (Receivable)' : balance < 0 ? 'You Owe (Payable)' : 'Current Balance'}
+                        </div>
+                        <div className={`text-lg font-black ${
+                          balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-amber-700' : 'text-slate-700'
+                        }`}>
+                          {balance > 0
+                            ? `Rs. ${balance.toLocaleString()}`
+                            : balance < 0
+                            ? `Rs. ${Math.abs(balance).toLocaleString()}`
+                            : 'Rs. 0 (All Settled)'}
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {p.activeLendsCount || 0} active lend(s) • {p.activeBorrowsCount || 0} active borrow(s)
+                        </div>
+                      </div>
+
+                      {p.notes && (
+                        <p className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
+                          {p.notes}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleSettlePerson(p)}
+                        className={`w-full py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                          balance !== 0
+                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
+                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        }`}
+                        disabled={balance === 0}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Settle Balance
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -1341,6 +1850,208 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
+              </div>
+
+              {/* Split & Paid By Section */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                <div className="font-bold text-slate-800 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-indigo-600" />
+                    Split / Paid by Others
+                  </span>
+                  <div className="flex rounded-lg p-0.5 bg-slate-200/70 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setExpenseForm(prev => ({ ...prev, splitOption: 'none' }))}
+                      className={`px-2 py-0.5 rounded font-bold transition ${
+                        expenseForm.splitOption === 'none' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      Only Me
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const defP = people.find(p => p.isDefault)?.name || (people[0]?.name || '');
+                        setExpenseForm(prev => ({ ...prev, splitOption: 'split', splitPersonName: prev.splitPersonName || defP }));
+                      }}
+                      className={`px-2 py-0.5 rounded font-bold transition ${
+                        expenseForm.splitOption === 'split' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      Split with Friend
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const defP = people.find(p => p.isDefault)?.name || (people[0]?.name || '');
+                        setExpenseForm(prev => ({ ...prev, splitOption: 'paid_by_other', paidByPersonName: prev.paidByPersonName || defP }));
+                      }}
+                      className={`px-2 py-0.5 rounded font-bold transition ${
+                        expenseForm.splitOption === 'paid_by_other' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-600'
+                      }`}
+                    >
+                      Paid for Me
+                    </button>
+                  </div>
+                </div>
+
+                {/* Split Details */}
+                {expenseForm.splitOption === 'split' && (
+                  <div className="space-y-2.5 pt-1 border-t border-slate-200/60">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Companion (Who to split with?)</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={expenseForm.splitPersonName}
+                          onChange={e => setExpenseForm(prev => ({ ...prev, splitPersonName: e.target.value }))}
+                          className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
+                        >
+                          <option value="">Select companion...</option>
+                          {people.map(p => (
+                            <option key={p.id} value={p.name}>
+                              {p.name} {p.isDefault ? '(Default)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Or type new name"
+                          value={expenseForm.splitPersonName}
+                          onChange={e => setExpenseForm(prev => ({ ...prev, splitPersonName: e.target.value }))}
+                          className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Split Ratio</label>
+                      <div className="grid grid-cols-3 gap-1.5 text-center">
+                        {[
+                          { key: '50_50', label: '50 / 50 Equal' },
+                          { key: '100_them', label: '100% For Them' },
+                          { key: 'custom', label: 'Custom Amount' }
+                        ].map(m => (
+                          <button
+                            key={m.key}
+                            type="button"
+                            onClick={() => setExpenseForm(prev => ({ ...prev, splitMode: m.key as any }))}
+                            className={`py-1.5 px-2 rounded-lg font-bold border transition text-[11px] ${
+                              expenseForm.splitMode === m.key
+                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {expenseForm.splitMode === 'custom' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-500 mb-1">Your Share (Rs.)</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            value={expenseForm.customMyShare}
+                            onChange={e => {
+                              const myVal = parseFloat(e.target.value) || 0;
+                              const total = parseFloat(expenseForm.amount) || 0;
+                              setExpenseForm(prev => ({
+                                ...prev,
+                                customMyShare: e.target.value,
+                                customTheirShare: Math.max(0, total - myVal).toFixed(2)
+                              }));
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-500 mb-1">Their Share (Rs.)</label>
+                          <input
+                            type="number"
+                            placeholder="0.00"
+                            value={expenseForm.customTheirShare}
+                            onChange={e => {
+                              const theirVal = parseFloat(e.target.value) || 0;
+                              const total = parseFloat(expenseForm.amount) || 0;
+                              setExpenseForm(prev => ({
+                                ...prev,
+                                customTheirShare: e.target.value,
+                                customMyShare: Math.max(0, total - theirVal).toFixed(2)
+                              }));
+                            }}
+                            className="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg font-bold"
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Calculated live breakdown summary */}
+                    {parseFloat(expenseForm.amount) > 0 && expenseForm.splitPersonName && (
+                      <div className="p-2 bg-indigo-50 border border-indigo-100 rounded-lg text-[11px] text-indigo-900 space-y-0.5">
+                        <div className="font-bold">Ledger Impact:</div>
+                        <div className="flex justify-between">
+                          <span>Your personal expense:</span>
+                          <span className="font-black">
+                            Rs. {expenseForm.splitMode === '100_them'
+                              ? '0'
+                              : expenseForm.splitMode === '50_50'
+                              ? (parseFloat(expenseForm.amount) / 2).toLocaleString()
+                              : (parseFloat(expenseForm.customMyShare) || 0).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-emerald-800">
+                          <span>Auto-lent to {expenseForm.splitPersonName}:</span>
+                          <span className="font-black">
+                            Rs. {expenseForm.splitMode === '100_them'
+                              ? parseFloat(expenseForm.amount).toLocaleString()
+                              : expenseForm.splitMode === '50_50'
+                              ? (parseFloat(expenseForm.amount) / 2).toLocaleString()
+                              : (parseFloat(expenseForm.customTheirShare) || 0).toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Paid By Someone Else Details */}
+                {expenseForm.splitOption === 'paid_by_other' && (
+                  <div className="space-y-2 pt-1 border-t border-slate-200/60">
+                    <div>
+                      <label className="block font-semibold text-slate-600 mb-1">Who paid for you?</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={expenseForm.paidByPersonName}
+                          onChange={e => setExpenseForm(prev => ({ ...prev, paidByPersonName: e.target.value }))}
+                          className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
+                        >
+                          <option value="">Select person...</option>
+                          {people.map(p => (
+                            <option key={p.id} value={p.name}>
+                              {p.name} {p.isDefault ? '(Default)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          placeholder="Or type name"
+                          value={expenseForm.paidByPersonName}
+                          onChange={e => setExpenseForm(prev => ({ ...prev, paidByPersonName: e.target.value }))}
+                          className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-lg bg-white"
+                        />
+                      </div>
+                    </div>
+                    {parseFloat(expenseForm.amount) > 0 && expenseForm.paidByPersonName && (
+                      <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-900">
+                        Logs Rs. {parseFloat(expenseForm.amount).toLocaleString()} as your expense, and adds Rs. {parseFloat(expenseForm.amount).toLocaleString()} to your debt to {expenseForm.paidByPersonName}.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Rotation check */}
@@ -1781,6 +2492,320 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 >
                   Confirm Repayment
                 </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MODAL: ADD / EDIT PERSON */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {isPersonModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+                <User className="w-4 h-4 text-indigo-600" />
+                {personForm.id ? 'Edit Companion' : 'Add Person / Companion'}
+              </h3>
+              <button onClick={() => setIsPersonModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSavePerson} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Ram, Alex, Roommate"
+                  value={personForm.name}
+                  onChange={e => setPersonForm(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Contact (Phone / UPI ID)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 9800000000 or ram@upi"
+                  value={personForm.contact}
+                  onChange={e => setPersonForm(prev => ({ ...prev, contact: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 cursor-pointer p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                <input
+                  type="checkbox"
+                  checked={personForm.isDefault}
+                  onChange={e => setPersonForm(prev => ({ ...prev, isDefault: e.target.checked }))}
+                  className="rounded text-indigo-600 focus:ring-0"
+                />
+                <div>
+                  <span className="font-bold text-slate-800">Set as default companion</span>
+                  <p className="text-[10px] text-slate-500">Auto-selects this person when splitting new expenses or bank SMS.</p>
+                </div>
+              </label>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Notes / Relation</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Roommate, Colleague at Work, Trip buddy"
+                  value={personForm.notes}
+                  onChange={e => setPersonForm(prev => ({ ...prev, notes: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPersonModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                >
+                  Save Person
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MODAL: RECONCILE / SPLIT BANK SMS BACKLOG */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {reconcileTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg">
+                  <CreditCard className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">Reconcile Bank SMS</h3>
+                  <p className="text-[10px] text-slate-500">Log this bank transaction or split with a friend</p>
+                </div>
+              </div>
+              <button onClick={() => setReconcileTarget(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* SMS Details Card */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                    reconcileTarget.type === 'CREDIT' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                  }`}>
+                    {reconcileTarget.type}
+                  </span>
+                  <span className="font-bold text-slate-800">{reconcileTarget.bank || 'City Union Bank'}</span>
+                </div>
+                <div className="text-base font-black text-slate-900">
+                  Rs. {reconcileTarget.amount.toLocaleString()}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>Date: <span className="font-semibold text-slate-700">{reconcileTarget.date}</span></span>
+                {reconcileTarget.account && <span>A/C: <span className="font-semibold text-slate-700">{reconcileTarget.account}</span></span>}
+                {reconcileTarget.upiRef && <span className="font-mono text-[10px]">UPI Ref: {reconcileTarget.upiRef}</span>}
+              </div>
+            </div>
+
+            <form onSubmit={handleReconcileBacklog} className="space-y-3 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Expense Description</label>
+                <input
+                  type="text"
+                  required
+                  value={reconcileForm.description}
+                  onChange={e => setReconcileForm(prev => ({ ...prev, description: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Category</label>
+                  <select
+                    value={reconcileForm.category}
+                    onChange={e => setReconcileForm(prev => ({ ...prev, category: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white"
+                  >
+                    {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Expense Set / Trip</label>
+                  <select
+                    value={reconcileForm.expenseSetId}
+                    onChange={e => setReconcileForm(prev => ({ ...prev, expenseSetId: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white"
+                  >
+                    <option value="">None (Standalone)</option>
+                    {expenseSets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {/* Split Mode Selector */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Who was this expense for?</label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-center">
+                  {[
+                    { key: 'none', label: '100% Mine' },
+                    { key: '50_50', label: '50/50 Split' },
+                    { key: '100_them', label: '100% Friend' },
+                    { key: 'custom', label: 'Custom' }
+                  ].map(m => (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => setReconcileForm(prev => ({ ...prev, splitMode: m.key as any }))}
+                      className={`py-1.5 px-2 rounded-xl font-bold border transition text-[11px] ${
+                        reconcileForm.splitMode === m.key
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Split companion and fields */}
+              {reconcileForm.splitMode !== 'none' && (
+                <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl space-y-2.5">
+                  <div>
+                    <label className="block font-bold text-indigo-950 mb-1">Companion / Friend</label>
+                    <div className="flex gap-2">
+                      <select
+                        value={reconcileForm.splitPersonName}
+                        onChange={e => setReconcileForm(prev => ({ ...prev, splitPersonName: e.target.value }))}
+                        className="flex-1 px-2.5 py-1.5 border border-indigo-200 rounded-lg bg-white"
+                      >
+                        <option value="">Select companion...</option>
+                        {people.map(p => (
+                          <option key={p.id} value={p.name}>
+                            {p.name} {p.isDefault ? '(Default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        placeholder="Or new name"
+                        value={reconcileForm.splitPersonName}
+                        onChange={e => setReconcileForm(prev => ({ ...prev, splitPersonName: e.target.value }))}
+                        className="flex-1 px-2.5 py-1.5 border border-indigo-200 rounded-lg bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  {reconcileForm.splitMode === 'custom' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your Share (Rs.)</label>
+                        <input
+                          type="number"
+                          placeholder="0.00"
+                          value={reconcileForm.customMyAmount}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setReconcileForm(prev => ({
+                              ...prev,
+                              customMyAmount: e.target.value,
+                              customTheirAmount: Math.max(0, reconcileTarget.amount - val).toFixed(2)
+                            }));
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg bg-white font-bold"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Friend's Share (Rs.)</label>
+                        <input
+                          type="number"
+                          placeholder="0.00"
+                          value={reconcileForm.customTheirAmount}
+                          onChange={e => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setReconcileForm(prev => ({
+                              ...prev,
+                              customTheirAmount: e.target.value,
+                              customMyAmount: Math.max(0, reconcileTarget.amount - val).toFixed(2)
+                            }));
+                          }}
+                          className="w-full px-2.5 py-1.5 border border-indigo-200 rounded-lg bg-white font-bold"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Live impact breakdown */}
+                  <div className="p-2 bg-white border border-indigo-200 rounded-lg text-[11px] space-y-0.5">
+                    <div className="flex justify-between text-slate-700">
+                      <span>Your personal expense:</span>
+                      <span className="font-black">
+                        Rs. {reconcileForm.splitMode === '100_them'
+                          ? '0'
+                          : reconcileForm.splitMode === '50_50'
+                          ? (reconcileTarget.amount / 2).toLocaleString()
+                          : (parseFloat(reconcileForm.customMyAmount) || 0).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-emerald-700">
+                      <span>Added to {reconcileForm.splitPersonName || 'Friend'}'s ledger (Lend):</span>
+                      <span className="font-black">
+                        Rs. {reconcileForm.splitMode === '100_them'
+                          ? reconcileTarget.amount.toLocaleString()
+                          : reconcileForm.splitMode === '50_50'
+                          ? (reconcileTarget.amount / 2).toLocaleString()
+                          : (parseFloat(reconcileForm.customTheirAmount) || 0).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleIgnoreBacklog(reconcileTarget.id)}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition flex items-center gap-1.5"
+                  title="Mark as cash rotation / pass-through and ignore"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Rotated Money (Pass)
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setReconcileTarget(null)}
+                    className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                  >
+                    Save & Reconcile
+                  </button>
+                </div>
               </div>
             </form>
           </div>

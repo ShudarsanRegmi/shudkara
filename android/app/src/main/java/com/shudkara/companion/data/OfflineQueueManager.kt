@@ -128,7 +128,10 @@ class OfflineQueueManager(private val context: Context) {
         paymentMethod: String,
         isRotation: Boolean,
         rotationNote: String?,
-        date: String? = null
+        date: String? = null,
+        splitPersonName: String? = null,
+        splitAmount: Double? = null,
+        paidByPersonName: String? = null
     ) {
         val json = JSONObject().apply {
             put("amount", amount)
@@ -139,6 +142,9 @@ class OfflineQueueManager(private val context: Context) {
             put("isRotation", isRotation)
             if (rotationNote != null) put("rotationNote", rotationNote)
             if (date != null) put("date", date)
+            if (splitPersonName != null) put("splitPersonName", splitPersonName)
+            if (splitAmount != null) put("splitAmount", splitAmount)
+            if (paidByPersonName != null) put("paidByPersonName", paidByPersonName)
         }
 
         val action = QueuedAction(
@@ -292,7 +298,10 @@ class OfflineQueueManager(private val context: Context) {
                             paymentMethod = obj.optString("paymentMethod", "Bank / Card"),
                             isRotation = obj.optBoolean("isRotation", false),
                             rotationNote = if (obj.has("rotationNote")) obj.getString("rotationNote") else null,
-                            date = if (obj.has("date")) obj.getString("date") else null
+                            date = if (obj.has("date")) obj.getString("date") else null,
+                            splitPersonName = if (obj.has("splitPersonName")) obj.getString("splitPersonName") else null,
+                            splitAmount = if (obj.has("splitAmount")) obj.getDouble("splitAmount") else null,
+                            paidByPersonName = if (obj.has("paidByPersonName")) obj.getString("paidByPersonName") else null
                         ).isSuccess
                     }
                     "FINANCE_LEND" -> {

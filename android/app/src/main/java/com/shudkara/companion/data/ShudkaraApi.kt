@@ -56,6 +56,30 @@ data class FinanceExpenseSet(
     val budget: Double?
 )
 
+data class FinancePerson(
+    val id: String,
+    val name: String,
+    val contact: String = "",
+    val isDefault: Boolean = false,
+    val netBalance: Double = 0.0,
+    val netReceivable: Double = 0.0,
+    val netPayable: Double = 0.0
+)
+
+data class BankBacklogItem(
+    val id: String,
+    val rawSms: String,
+    val sender: String,
+    val bank: String,
+    val type: String, // "DEBIT" or "CREDIT"
+    val amount: Double,
+    val date: String,
+    val account: String = "",
+    val counterpartyAccount: String = "",
+    val upiRef: String = "",
+    val status: String = "pending" // "pending", "reconciled", "rotated_ignored"
+)
+
 class ShudkaraApi(private val context: Context) {
 
     private val prefs = PreferencesManager(context)
@@ -372,7 +396,10 @@ class ShudkaraApi(private val context: Context) {
         paymentMethod: String,
         isRotation: Boolean,
         rotationNote: String?,
-        date: String? = null
+        date: String? = null,
+        splitPersonName: String? = null,
+        splitAmount: Double? = null,
+        paidByPersonName: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             val now = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
@@ -387,6 +414,17 @@ class ShudkaraApi(private val context: Context) {
                 if (rotationNote != null) put("rotationNote", rotationNote)
                 put("date", if (!date.isNullOrBlank()) date else now)
                 put("time", time)
+                if (!splitPersonName.isNullOrBlank() && splitAmount != null && splitAmount > 0) {
+                    put("splitWith", JSONObject().apply {
+                        put("personName", splitPersonName)
+                        put("amount", splitAmount)
+                    })
+                }
+                if (!paidByPersonName.isNullOrBlank()) {
+                    put("paidBy", JSONObject().apply {
+                        put("personName", paidByPersonName)
+                    })
+                }
             }
 
             executeWithFallback("/api/finance/expenses") {
@@ -396,6 +434,179 @@ class ShudkaraApi(private val context: Context) {
                     Result.success("Expense logged successfully")
                 } else {
                     Result.failure(Exception("Failed to log expense (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchPeople(): Result<List<FinancePerson>> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/finance/people") { it.get() }.use { response ->
+                if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP ${response.code}"))
+                val arr = JSONArray(response.body?.string() ?: "[]")
+                val list = mutableListOf<FinancePerson>()
+                for (i in 0 until arr.length()) {
+                    val p = arr.getJSONObject(i)
+                    list.add(
+                        FinancePerson(
+                            id = p.optString("id", ""),
+                            name = p.optString("name", ""),
+                            contact = p.optString("contact", ""),
+                            isDefault = p.optBoolean("isDefault", false),
+                            netBalance = p.optDouble("netBalance", 0.0),
+                            netReceivable = p.optDouble("netReceivable", 0.0),
+                            netPayable = p.optDouble("netPayable", 0.0)
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createPerson(name: String, contact: String = "", isDefault: Boolean = false): Result<FinancePerson> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("name", name)
+                put("contact", contact)
+                put("isDefault", isDefault)
+            }
+            executeWithFallback("/api/finance/people") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP ${response.code}"))
+                val obj = JSONObject(response.body?.string() ?: "{}")
+                Result.success(
+                    FinancePerson(
+                        id = obj.optString("id", ""),
+                        name = obj.optString("name", name),
+                        contact = obj.optString("contact", contact),
+                        isDefault = obj.optBoolean("isDefault", isDefault)
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun fetchBacklog(): Result<List<BankBacklogItem>> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/finance/backlog?status=pending") { it.get() }.use { response ->
+                if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP ${response.code}"))
+                val arr = JSONArray(response.body?.string() ?: "[]")
+                val list = mutableListOf<BankBacklogItem>()
+                for (i in 0 until arr.length()) {
+                    val b = arr.getJSONObject(i)
+                    list.add(
+                        BankBacklogItem(
+                            id = b.optString("id", ""),
+                            rawSms = b.optString("rawSms", ""),
+                            sender = b.optString("sender", "BANK"),
+                            bank = b.optString("bank", "CUB"),
+                            type = b.optString("type", "DEBIT"),
+                            amount = b.optDouble("amount", 0.0),
+                            date = b.optString("date", ""),
+                            account = b.optString("account", ""),
+                            counterpartyAccount = b.optString("counterpartyAccount", ""),
+                            upiRef = b.optString("upiRef", ""),
+                            status = b.optString("status", "pending")
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun postToBacklog(
+        rawSms: String,
+        sender: String,
+        bank: String,
+        type: String,
+        amount: Double,
+        date: String,
+        account: String,
+        counterpartyAccount: String,
+        upiRef: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("rawSms", rawSms)
+                put("sender", sender)
+                put("bank", bank)
+                put("type", type)
+                put("amount", amount)
+                put("date", date)
+                put("account", account)
+                put("counterpartyAccount", counterpartyAccount)
+                put("upiRef", upiRef)
+            }
+            executeWithFallback("/api/finance/backlog") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Backlog saved")
+                } else {
+                    Result.failure(Exception("Failed to save backlog (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun reconcileBacklog(backlogId: String, payload: JSONObject): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/finance/backlog/$backlogId/reconcile") {
+                it.post(payload.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Reconciled successfully")
+                } else {
+                    Result.failure(Exception("Reconcile failed (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun ignoreBacklog(backlogId: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/finance/backlog/$backlogId/ignore") {
+                it.post("{}".toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Marked as rotated/ignored")
+                } else {
+                    Result.failure(Exception("Failed to ignore (HTTP ${response.code})"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun settlePerson(personId: String, date: String = "", notes: String = ""): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                if (date.isNotBlank()) put("date", date)
+                if (notes.isNotBlank()) put("notes", notes)
+            }
+            executeWithFallback("/api/finance/people/$personId/settle") {
+                it.post(json.toString().toRequestBody(jsonMediaType))
+            }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Settled successfully")
+                } else {
+                    Result.failure(Exception("Settle failed (HTTP ${response.code})"))
                 }
             }
         } catch (e: Exception) {

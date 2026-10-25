@@ -969,22 +969,29 @@ fun FinanceCaptureScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var mode by remember { mutableStateOf(initialMode ?: "expense") } // "expense", "lend", "borrow", "rotation"
+    var mode by remember { mutableStateOf(initialMode ?: "expense") } // "expense", "lend", "borrow"
     var amountText by remember { mutableStateOf(if (initialAmount > 0.0) initialAmount.toString() else "") }
     var description by remember { mutableStateOf(initialDesc ?: "") }
     var category by remember { mutableStateOf("Food & Dining") }
     var selectedSetId by remember { mutableStateOf<String?>(null) }
     var paymentMethod by remember { mutableStateOf("Bank / Card") }
-    var isRotation by remember { mutableStateOf(initialRotation || mode == "rotation") }
-    var rotationNote by remember { mutableStateOf("") }
 
     val todayDateStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
     var expenseDate by remember { mutableStateOf(todayDateStr) }
+
+    // Split & People states
+    var isSplit by remember { mutableStateOf(false) }
+    var splitType by remember { mutableStateOf("equal") } // "equal", "full_them", "custom"
+    var selectedPersonName by remember { mutableStateOf<String?>(null) }
+    var customTheirShare by remember { mutableStateOf("") }
+    var people by remember { mutableStateOf<List<FinancePerson>>(emptyList()) }
+    var backlogItems by remember { mutableStateOf<List<BankBacklogItem>>(emptyList()) }
 
     // Lend/Borrow fields
     var personName by remember { mutableStateOf("") }
     var contact by remember { mutableStateOf("") }
     var expectedReturnDate by remember { mutableStateOf("") }
+    var isRotation by remember { mutableStateOf(false) }
     var notes by remember { mutableStateOf("") }
 
     var isSubmitting by remember { mutableStateOf(false) }
@@ -1003,13 +1010,36 @@ fun FinanceCaptureScreen(
         }
     }
 
-    // Load active expense sets
+    // Load active expense sets, people, and pending bank backlog
     LaunchedEffect(Unit) {
-        val res = api.fetchExpenseSets()
-        if (res.isSuccess) {
-            expenseSets = res.getOrNull() ?: emptyList()
+        val sRes = api.fetchExpenseSets()
+        if (sRes.isSuccess) expenseSets = sRes.getOrDefault(emptyList())
+
+        val pRes = api.fetchPeople()
+        if (pRes.isSuccess) {
+            val list = pRes.getOrDefault(emptyList())
+            people = list
+            if (selectedPersonName == null) {
+                selectedPersonName = list.find { it.isDefault }?.name ?: list.firstOrNull()?.name
+            }
+        }
+
+        val bRes = api.fetchBacklog()
+        if (bRes.isSuccess) {
+            backlogItems = bRes.getOrDefault(emptyList())
         }
     }
+
+    val totalAmt = amountText.toDoubleOrNull() ?: 0.0
+    val theirShare = if (isSplit) {
+        when (splitType) {
+            "equal" -> if (totalAmt > 0) totalAmt / 2.0 else 0.0
+            "full_them" -> totalAmt
+            "custom" -> customTheirShare.toDoubleOrNull() ?: 0.0
+            else -> 0.0
+        }
+    } else 0.0
+    val myShare = if (isSplit) maxOf(0.0, totalAmt - theirShare) else totalAmt
 
     val categories = listOf(
         "Food & Dining", "Transport & Fuel", "Groceries", "Entertainment & Outing",
@@ -1024,6 +1054,116 @@ fun FinanceCaptureScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Pending Bank SMS Backlog Section (if any pending)
+        if (backlogItems.isNotEmpty()) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Amber50,
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Amber600.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Pending Bank SMS Inbox (${backlogItems.size})",
+                                fontWeight = FontWeight.Black,
+                                fontSize = 13.sp,
+                                color = Slate900
+                            )
+                            Text(
+                                text = "Synced",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Amber600
+                            )
+                        }
+                        Text(
+                            text = "Deferred transactions waiting to be accounted or split. Select action:",
+                            fontSize = 11.sp,
+                            color = Slate600
+                        )
+
+                        backlogItems.forEach { item ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = Color.White,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${item.bank} • ${item.date}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Slate800
+                                        )
+                                        Text(
+                                            text = "Rs. ${item.amount}",
+                                            fontWeight = FontWeight.Black,
+                                            fontSize = 13.sp,
+                                            color = if (item.type == "DEBIT") Color(0xFFDC2626) else Emerald600
+                                        )
+                                    }
+                                    if (item.upiRef.isNotBlank()) {
+                                        Text("UPI Ref: ${item.upiRef}", fontSize = 10.sp, color = Slate400)
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                                        Button(
+                                            onClick = {
+                                                val intent = Intent(context, TransactionPromptActivity::class.java).apply {
+                                                    putExtra("tx_amount", item.amount)
+                                                    putExtra("tx_type", item.type)
+                                                    putExtra("tx_date", item.date)
+                                                    putExtra("tx_account", item.account)
+                                                    putExtra("tx_counterparty", item.counterpartyAccount)
+                                                    putExtra("tx_upi_ref", item.upiRef)
+                                                    putExtra("tx_bank", item.bank)
+                                                    putExtra("tx_sender", item.sender)
+                                                    putExtra("tx_raw", item.rawSms)
+                                                }
+                                                context.startActivity(intent)
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Log / Split", fontSize = 11.sp)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                coroutineScope.launch {
+                                                    api.ignoreBacklog(item.upiRef)
+                                                    backlogItems = backlogItems.filter { it.id != item.id }
+                                                    Toast.makeText(context, "Marked as rotated/ignored", Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(8.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Text("Rotated (Pass)", fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // SMS Auto-Tracking Permission Card (if not granted)
         if (!hasSmsPermission) {
             item {
@@ -1064,10 +1204,9 @@ fun FinanceCaptureScreen(
                     .padding(3.dp)
             ) {
                 listOf(
-                    "expense" to "Expense",
+                    "expense" to "Expense / Split",
                     "lend" to "Lend",
-                    "borrow" to "Borrow",
-                    "rotation" to "Rotation"
+                    "borrow" to "Borrow"
                 ).forEach { (mKey, mLabel) ->
                     val isSel = mode == mKey
                     Box(
@@ -1077,7 +1216,6 @@ fun FinanceCaptureScreen(
                             .background(if (isSel) Color.White else Color.Transparent)
                             .clickable {
                                 mode = mKey
-                                isRotation = (mKey == "rotation")
                             }
                             .padding(vertical = 8.dp),
                         contentAlignment = Alignment.Center
@@ -1248,15 +1386,89 @@ fun FinanceCaptureScreen(
                     }
                 }
 
-                if (mode == "rotation") {
-                    item {
-                        OutlinedTextField(
-                            value = rotationNote,
-                            onValueChange = { rotationNote = it },
-                            label = { Text("Rotation Note (e.g. Took cash, sent bank transfer)", fontSize = 11.sp) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                // Split with Friend / Companion
+                item {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Slate50,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Split with Friend / Shared", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Slate900)
+                                Switch(checked = isSplit, onCheckedChange = { isSplit = it }, modifier = Modifier.scale(0.8f))
+                            }
+
+                            if (isSplit) {
+                                Text("Select Person:", fontSize = 11.sp, color = Slate600)
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    items(people) { p ->
+                                        val isSel = selectedPersonName == p.name
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (isSel) Indigo50 else Color.White,
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSel) Indigo600 else Slate300),
+                                            modifier = Modifier.clickable { selectedPersonName = p.name }
+                                        ) {
+                                            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Text(p.name, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium, color = if (isSel) Indigo600 else Slate700)
+                                                if (p.isDefault) {
+                                                    Spacer(Modifier.width(3.dp))
+                                                    Text("(default)", fontSize = 9.sp, color = Indigo600)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Row(modifier = Modifier.fillMaxWidth().background(Slate200, RoundedCornerShape(8.dp)).padding(2.dp)) {
+                                    listOf(
+                                        "equal" to "Equal 50/50",
+                                        "full_them" to "100% for Them",
+                                        "custom" to "Custom"
+                                    ).forEach { (k, label) ->
+                                        val sel = splitType == k
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .background(if (sel) Color.White else Color.Transparent, RoundedCornerShape(6.dp))
+                                                .clickable { splitType = k }
+                                                .padding(vertical = 5.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(label, fontSize = 10.sp, fontWeight = if (sel) FontWeight.Bold else FontWeight.Medium, color = if (sel) Indigo600 else Slate600)
+                                        }
+                                    }
+                                }
+
+                                if (splitType == "custom") {
+                                    OutlinedTextField(
+                                        value = customTheirShare,
+                                        onValueChange = { customTheirShare = it },
+                                        label = { Text("${selectedPersonName ?: "Their"} share amount", fontSize = 10.sp) },
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Indigo50,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text("My Personal Expense: Rs. %.2f".format(myShare), fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Slate900)
+                                        Text("${selectedPersonName ?: "Companion"} owes you: Rs. %.2f (recorded in ledger)".format(theirShare), fontSize = 10.sp, color = Indigo600)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1334,16 +1546,21 @@ fun FinanceCaptureScreen(
                     isSubmitting = true
                     coroutineScope.launch {
                         when (mode) {
-                            "expense", "rotation" -> {
+                            "expense" -> {
+                                val splitPerson = if (isSplit) selectedPersonName else null
+                                val splitAmt = if (isSplit) theirShare else null
+
                                 val res = api.submitExpense(
-                                    amount = amt,
-                                    description = description.ifBlank { if (mode == "rotation") "Cash Exchange" else "Expense" },
+                                    amount = myShare,
+                                    description = description.ifBlank { "Expense" },
                                     category = category,
                                     expenseSetId = selectedSetId,
                                     paymentMethod = paymentMethod,
-                                    isRotation = isRotation,
-                                    rotationNote = rotationNote.ifBlank { null },
-                                    date = expenseDate.ifBlank { todayDateStr }
+                                    isRotation = false,
+                                    rotationNote = null,
+                                    date = expenseDate.ifBlank { todayDateStr },
+                                    splitPersonName = splitPerson,
+                                    splitAmount = splitAmt
                                 )
                                 isSubmitting = false
                                 if (res.isSuccess) {
@@ -1351,23 +1568,27 @@ fun FinanceCaptureScreen(
                                     amountText = ""
                                     description = ""
                                     expenseDate = todayDateStr
+                                    isSplit = false
                                     onSuccess()
                                 } else {
                                     // Fallback to offline queue
                                     queueManager.enqueueExpense(
-                                        amount = amt,
+                                        amount = myShare,
                                         description = description.ifBlank { "Expense" },
                                         category = category,
                                         expenseSetId = selectedSetId,
                                         paymentMethod = paymentMethod,
-                                        isRotation = isRotation,
-                                        rotationNote = rotationNote.ifBlank { null },
-                                        date = expenseDate.ifBlank { todayDateStr }
+                                        isRotation = false,
+                                        rotationNote = null,
+                                        date = expenseDate.ifBlank { todayDateStr },
+                                        splitPersonName = splitPerson,
+                                        splitAmount = splitAmt
                                     )
                                     Toast.makeText(context, "Saved to offline outbox!", Toast.LENGTH_SHORT).show()
                                     amountText = ""
                                     description = ""
                                     expenseDate = todayDateStr
+                                    isSplit = false
                                     onSuccess()
                                 }
                             }
