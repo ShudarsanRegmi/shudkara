@@ -8,7 +8,7 @@ class PreferencesManager(context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("shudkara_prefs", Context.MODE_PRIVATE)
 
     var serverUrl: String
-        get() = prefs.getString("server_url", "https://shudkara.com") ?: "https://shudkara.com"
+        get() = prefs.getString("server_url", "https://shudkara.shudarsanregmi.com.np") ?: "https://shudkara.shudarsanregmi.com.np"
         set(value) = prefs.edit().putString("server_url", value.trim().removeSuffix("/")).apply()
 
     var sessionToken: String

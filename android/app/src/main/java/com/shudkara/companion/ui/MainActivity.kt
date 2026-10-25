@@ -1,5 +1,6 @@
 package com.shudkara.companion.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
@@ -31,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
@@ -56,6 +59,8 @@ class MainActivity : ComponentActivity() {
         api = ShudkaraApi(this)
         queueManager = OfflineQueueManager(this)
 
+        handleDeepLink(intent)
+
         val initialTab = intent.getIntExtra("extra_tab", 0)
 
         setContent {
@@ -67,6 +72,27 @@ class MainActivity : ComponentActivity() {
                     queueManager = queueManager,
                     onOpenSettings = { }
                 )
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "shudkara") {
+            val token = uri.getQueryParameter("token")
+            val server = uri.getQueryParameter("server")
+            if (!token.isNullOrBlank()) {
+                prefs.sessionToken = token
+                if (!server.isNullOrBlank()) {
+                    prefs.serverUrl = server
+                }
+                Toast.makeText(this, "Companion App Paired! (1-Year Session Active)", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -817,7 +843,7 @@ fun TimelineCaptureScreen(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SETTINGS & PAIRING DIALOG
+// SETTINGS & AUTHENTICATION DIALOG (1-Year Sessions, Email OTP, TOTP & 1-Tap)
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun SettingsDialog(
@@ -832,88 +858,310 @@ fun SettingsDialog(
 
     var serverUrl by remember { mutableStateOf(prefs.serverUrl) }
     var sessionToken by remember { mutableStateOf(prefs.sessionToken) }
-    var testResult by remember { mutableStateOf<String?>(null) }
+    var authMode by remember { mutableStateOf(0) } // 0: Email OTP, 1: Authenticator (TOTP), 2: Manual Token
+    var otpCode by remember { mutableStateOf("") }
+    var totpCode by remember { mutableStateOf("") }
+    var manualToken by remember { mutableStateOf(prefs.sessionToken) }
+
+    var isSendingOtp by remember { mutableStateOf(false) }
+    var isVerifying by remember { mutableStateOf(false) }
     var isTesting by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var isError by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Text("Connection Settings", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Security, contentDescription = null, tint = Indigo600, modifier = Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Account & Connection", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Pair with your Shudkara Web Hub:", fontSize = 11.sp, color = Slate600)
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    // Server URL Field
+                    OutlinedTextField(
+                        value = serverUrl,
+                        onValueChange = {
+                            serverUrl = it
+                            prefs.serverUrl = it
+                        },
+                        label = { Text("Server Hub URL", fontSize = 11.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
-                    label = { Text("Server URL", fontSize = 11.sp) },
-                    placeholder = { Text("https://shudkara.com", fontSize = 11.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                item {
+                    // Current Session Status Card
+                    if (sessionToken.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Emerald50,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Emerald500.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Emerald600, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Authenticated (1-Year Session Active)", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Emerald600)
+                                }
+                                Text("Sliding renewal automatically extends validity when you log moments or check streaks.", fontSize = 10.sp, color = Slate600)
 
-                OutlinedTextField(
-                    value = sessionToken,
-                    onValueChange = { sessionToken = it },
-                    label = { Text("Session Token (X-Session-Token)", fontSize = 11.sp) },
-                    placeholder = { Text("Paste token from Web App", fontSize = 11.sp) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                                    Button(
+                                        onClick = {
+                                            isTesting = true
+                                            statusMessage = null
+                                            coroutineScope.launch {
+                                                val res = api.testConnection()
+                                                isTesting = false
+                                                isError = res.isFailure
+                                                statusMessage = if (res.isSuccess) res.getOrNull() else "Error: ${res.exceptionOrNull()?.message}"
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = Slate800),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        if (isTesting) {
+                                            CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp))
+                                        } else {
+                                            Text("Test", fontSize = 11.sp)
+                                        }
+                                    }
 
-                Button(
-                    onClick = {
-                        prefs.serverUrl = serverUrl
-                        prefs.sessionToken = sessionToken
-                        isTesting = true
-                        testResult = null
-                        coroutineScope.launch {
-                            val res = api.testConnection()
-                            isTesting = false
-                            testResult = if (res.isSuccess) {
-                                res.getOrNull()
-                            } else {
-                                "Error: ${res.exceptionOrNull()?.message}"
+                                    OutlinedButton(
+                                        onClick = {
+                                            prefs.sessionToken = ""
+                                            sessionToken = ""
+                                            statusMessage = "Logged out successfully"
+                                            isError = false
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text("Log Out", fontSize = 11.sp, color = Color.Red)
+                                    }
+                                }
                             }
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Slate800)
-                ) {
-                    if (isTesting) {
-                        CircularProgressIndicator(color = Color.White, modifier = Modifier.size(16.dp))
                     } else {
-                        Text("Save & Test Connection", fontSize = 12.sp)
+                        // Not Authenticated -> Show 1-step Login options
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Slate50,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Slate200),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text("Log in once for 1-year access:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Slate900)
+
+                                // Tab Selector
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .background(Slate200, RoundedCornerShape(8.dp))
+                                        .padding(2.dp)
+                                ) {
+                                    val tabs = listOf("Email OTP", "Authenticator", "Token")
+                                    tabs.forEachIndexed { idx, label ->
+                                        val isSel = authMode == idx
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(if (isSel) Color.White else Color.Transparent)
+                                                .clickable { authMode = idx; statusMessage = null }
+                                                .padding(vertical = 6.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = label,
+                                                fontSize = 11.sp,
+                                                fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSel) Indigo600 else Slate600
+                                            )
+                                        }
+                                    }
+                                }
+
+                                when (authMode) {
+                                    0 -> { // Email OTP
+                                        Text("Sends a 6-digit one-time code to owner email:", fontSize = 11.sp, color = Slate600)
+                                        Button(
+                                            onClick = {
+                                                isSendingOtp = true
+                                                statusMessage = null
+                                                coroutineScope.launch {
+                                                    val res = api.sendEmailOtp()
+                                                    isSendingOtp = false
+                                                    isError = res.isFailure
+                                                    statusMessage = if (res.isSuccess) res.getOrNull() else "Error: ${res.exceptionOrNull()?.message}"
+                                                }
+                                            },
+                                            enabled = !isSendingOtp,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600)
+                                        ) {
+                                            if (isSendingOtp) {
+                                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp))
+                                            } else {
+                                                Text("Send Code to Email", fontSize = 12.sp)
+                                            }
+                                        }
+
+                                        OutlinedTextField(
+                                            value = otpCode,
+                                            onValueChange = { if (it.length <= 6) otpCode = it },
+                                            label = { Text("Enter 6-digit Code", fontSize = 11.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        Button(
+                                            onClick = {
+                                                if (otpCode.length == 6) {
+                                                    isVerifying = true
+                                                    statusMessage = null
+                                                    coroutineScope.launch {
+                                                        val res = api.verifyEmailOtp(otpCode)
+                                                        isVerifying = false
+                                                        if (res.isSuccess) {
+                                                            sessionToken = res.getOrNull() ?: ""
+                                                            statusMessage = "Authenticated successfully for 1 Year!"
+                                                            isError = false
+                                                        } else {
+                                                            isError = true
+                                                            statusMessage = "Error: ${res.exceptionOrNull()?.message}"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isVerifying && otpCode.length == 6,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Emerald600)
+                                        ) {
+                                            if (isVerifying) {
+                                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp))
+                                            } else {
+                                                Text("Verify & Sign In (1-Year Session)", fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                    1 -> { // Authenticator TOTP
+                                        Text("Enter code from Google Authenticator:", fontSize = 11.sp, color = Slate600)
+                                        OutlinedTextField(
+                                            value = totpCode,
+                                            onValueChange = { if (it.length <= 6) totpCode = it },
+                                            label = { Text("6-digit TOTP Code", fontSize = 11.sp) },
+                                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+
+                                        Button(
+                                            onClick = {
+                                                if (totpCode.length == 6) {
+                                                    isVerifying = true
+                                                    statusMessage = null
+                                                    coroutineScope.launch {
+                                                        val res = api.verifyTotp(totpCode)
+                                                        isVerifying = false
+                                                        if (res.isSuccess) {
+                                                            sessionToken = res.getOrNull() ?: ""
+                                                            statusMessage = "Authenticated successfully for 1 Year!"
+                                                            isError = false
+                                                        } else {
+                                                            isError = true
+                                                            statusMessage = "Error: ${res.exceptionOrNull()?.message}"
+                                                        }
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isVerifying && totpCode.length == 6,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp),
+                                            colors = ButtonDefaults.buttonColors(containerColor = Indigo600)
+                                        ) {
+                                            if (isVerifying) {
+                                                CircularProgressIndicator(color = Color.White, modifier = Modifier.size(14.dp))
+                                            } else {
+                                                Text("Verify TOTP Code", fontSize = 12.sp)
+                                            }
+                                        }
+                                    }
+                                    2 -> { // Manual Token
+                                        OutlinedTextField(
+                                            value = manualToken,
+                                            onValueChange = { manualToken = it },
+                                            label = { Text("Session Token", fontSize = 11.sp) },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Button(
+                                            onClick = {
+                                                prefs.sessionToken = manualToken
+                                                sessionToken = manualToken
+                                                statusMessage = "Token saved."
+                                                isError = false
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Save Token", fontSize = 12.sp)
+                                        }
+                                    }
+                                }
+
+                                Text(
+                                    text = "1-Tap Tip: If you're logged into Shudkara in your mobile browser, tap 'Pair Mobile App' on the Dashboard to link in 1 tap.",
+                                    fontSize = 10.sp,
+                                    color = Slate500
+                                )
+                            }
+                        }
                     }
                 }
 
-                if (testResult != null) {
-                    Text(
-                        text = testResult!!,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (testResult!!.startsWith("Connected")) Emerald600 else Color.Red
-                    )
+                if (statusMessage != null) {
+                    item {
+                        Text(
+                            text = statusMessage!!,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isError) Color.Red else Emerald600
+                        )
+                    }
                 }
 
                 val queued = queueManager.getQueue().size
                 if (queued > 0) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    Text("Offline Outbox: $queued items pending", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Button(
-                        onClick = {
-                            coroutineScope.launch {
-                                val (synced, failed) = queueManager.syncAll()
-                                onSync()
-                                Toast.makeText(context, "Synced $synced items ($failed failed)", Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Sync Outbox Now ($queued)", fontSize = 12.sp)
+                    item {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Text("Offline Outbox: $queued items pending", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    val (synced, failed) = queueManager.syncAll()
+                                    onSync()
+                                    Toast.makeText(context, "Synced $synced items ($failed failed)", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text("Sync Outbox Now ($queued)", fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -922,7 +1170,9 @@ fun SettingsDialog(
             Button(
                 onClick = {
                     prefs.serverUrl = serverUrl
-                    prefs.sessionToken = sessionToken
+                    if (sessionToken.isNotBlank()) {
+                        prefs.sessionToken = sessionToken
+                    }
                     onDismiss()
                 }
             ) {

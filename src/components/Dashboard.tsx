@@ -276,6 +276,60 @@ export const Dashboard: React.FC<DashboardProps> = ({ setActiveTab, progress, au
         </div>
       )}
 
+      {/* Android Companion Quick Pairing Card */}
+      {authToken && (
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm space-y-6 animate-fade-in">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div className="space-y-1">
+              <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                <Smartphone className="w-5 h-5 text-indigo-600" />
+                Android Companion App Pairing
+              </h2>
+              <p className="text-xs text-slate-500">
+                Pair your Android companion app for 1-tap quick logging, photo proof streaks, and home screen widgets. Valid for 1 year with sliding auto-renewal.
+              </p>
+            </div>
+            
+            <a
+              href={`shudkara://pair?server=${encodeURIComponent(window.location.origin)}&token=${encodeURIComponent(authToken)}`}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-500/20 transition flex items-center gap-2 justify-center shrink-0"
+            >
+              <Smartphone className="w-4 h-4" />
+              Pair Android App (1-Tap)
+            </a>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+            <div className="flex flex-col items-center space-y-2">
+              <div className="bg-white p-3 border border-slate-200 rounded-2xl w-40 h-40 shadow-sm flex items-center justify-center">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(`shudkara://pair?server=${window.location.origin}&token=${authToken}`)}`}
+                  alt="Scan Companion Pairing QR"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider flex items-center gap-1">
+                Scan with Phone Camera
+              </span>
+            </div>
+
+            <div className="md:col-span-2 space-y-3 text-xs text-slate-600">
+              <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl space-y-1">
+                <div className="font-bold text-indigo-900">1-Year Persistent Mobile Session</div>
+                <div>No frequent logins required. Logging moments or checking in streaks automatically resets your session validity to 365 days.</div>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <span className="font-semibold text-slate-700">Hub Server:</span>
+                <code className="bg-slate-100 px-2 py-1 rounded text-[11px] font-mono text-slate-800">{window.location.origin}</code>
+              </div>
+              <div className="text-[11px] text-slate-450">
+                Opening this page on your phone? Tap <strong>Pair Android App (1-Tap)</strong> above to pair immediately without scanning or typing.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Sections Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Leetcode Progress Card */}

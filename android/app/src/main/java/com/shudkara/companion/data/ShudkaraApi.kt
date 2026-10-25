@@ -72,6 +72,83 @@ class ShudkaraApi(private val context: Context) {
         return builder
     }
 
+    suspend fun sendEmailOtp(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val baseUrl = prefs.serverUrl.removeSuffix("/")
+            val request = Request.Builder()
+                .url("$baseUrl/api/auth/send-otp")
+                .post("{}".toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", true)) {
+                    Result.success(json.optString("message", "OTP sent to registered owner email"))
+                } else {
+                    Result.failure(Exception(json.optString("error", "Failed to send OTP (HTTP ${response.code})")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyEmailOtp(code: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val baseUrl = prefs.serverUrl.removeSuffix("/")
+            val payload = JSONObject().put("code", code.trim()).toString()
+            val request = Request.Builder()
+                .url("$baseUrl/api/auth/verify-otp")
+                .post(payload.toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    val token = json.optString("token", "")
+                    if (token.isNotBlank()) {
+                        prefs.sessionToken = token
+                        Result.success(token)
+                    } else {
+                        Result.failure(Exception("Missing token in response"))
+                    }
+                } else {
+                    Result.failure(Exception(json.optString("error", "Invalid or expired OTP")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun verifyTotp(code: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val baseUrl = prefs.serverUrl.removeSuffix("/")
+            val payload = JSONObject().put("code", code.trim()).toString()
+            val request = Request.Builder()
+                .url("$baseUrl/api/auth/verify-totp")
+                .post(payload.toRequestBody(jsonMediaType))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val json = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
+                if (response.isSuccessful && json.optBoolean("success", false)) {
+                    val token = json.optString("token", "")
+                    if (token.isNotBlank()) {
+                        prefs.sessionToken = token
+                        Result.success(token)
+                    } else {
+                        Result.failure(Exception("Missing token in response"))
+                    }
+                } else {
+                    Result.failure(Exception(json.optString("error", "Invalid TOTP code")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         try {
             val request = buildRequest("/api/streaks").get().build()
