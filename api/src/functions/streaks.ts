@@ -176,7 +176,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
             </div>
 
             <div style="text-align: center; margin: 32px 0 16px 0;">
-              <a href="https://shudkara.com/?tab=streaks" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 14px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);">
+              <a href="https://shudkara.shudarsanregmi.com.np/?tab=streaks" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; font-weight: 700; font-size: 15px; padding: 14px 32px; border-radius: 14px; box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);">
                 Check In & Upload Photo Proof
               </a>
             </div>
