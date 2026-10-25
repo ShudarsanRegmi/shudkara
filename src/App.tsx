@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow,
+  Flame, Search
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -22,6 +23,8 @@ import { Timers } from './components/Timers';
 import { Pastebin } from './components/Pastebin';
 import { ConcurrencyManager } from './components/ConcurrencyManager';
 import { SavePost } from './components/SavePost';
+import { Streaks } from './components/Streaks';
+import { CommandPalette } from './components/CommandPalette';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 
@@ -45,6 +48,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'streaks', label: 'Streaks', description: 'Daily photo streak challenge with reminders', icon: Flame, requiresLogin: false },
       { key: 'savepost', label: 'SavePost', description: 'Social post & link bookmark vault', icon: Bookmark, requiresLogin: false },
       { key: 'inventory', label: 'Inventory', description: 'Private personal belongings & vault', icon: Package, requiresLogin: true },
       { key: 'lists', label: 'Lists', description: 'Static reference collections & notes', icon: ListOrdered, requiresLogin: false },
@@ -59,6 +63,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  streaks: { requiresLogin: false, label: 'Streaks', icon: Flame },
   savepost: { requiresLogin: false, label: 'SavePost', icon: Bookmark },
   concurrency: { requiresLogin: false, label: 'Concurrency', icon: Workflow },
   pastebin: { requiresLogin: false, label: 'Pastebin', icon: FileCode },
@@ -126,6 +131,37 @@ function App() {
   // Active Dropdown state for Desktop Navbar
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Global Command Palette state
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  // Global Keyboard Shortcuts (Press / anywhere or Cmd+K)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If user presses '/'
+      if (e.key === '/') {
+        const target = e.target as HTMLElement;
+        const tagName = target?.tagName?.toLowerCase();
+        const isEditable =
+          target?.isContentEditable ||
+          tagName === 'input' ||
+          tagName === 'textarea' ||
+          tagName === 'select';
+        if (!isEditable) {
+          e.preventDefault();
+          setCommandPaletteOpen(true);
+        }
+      }
+      // Also Cmd+K / Ctrl+K
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen(prev => !prev);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Check URL parameters on mount and listen to browser navigation (back/forward)
   useEffect(() => {
@@ -382,6 +418,8 @@ function App() {
         return <LifetimeLine authToken={authToken} />;
       case 'links':
         return <LinkManager authToken={authToken} />;
+      case 'streaks':
+        return <Streaks authToken={authToken} />;
       case 'savepost':
         return <SavePost authToken={authToken} />;
       case 'keyval':
@@ -491,8 +529,21 @@ function App() {
             })}
           </nav>
 
-          {/* Authentication Action & Mobile Menu Toggle */}
-          <div className="flex items-center gap-3 sm:gap-4 pl-2">
+          {/* Authentication Action, Command Palette & Mobile Menu Toggle */}
+          <div className="flex items-center gap-2 sm:gap-3 pl-2">
+            {/* Quick Command Palette Button */}
+            <button
+              onClick={() => setCommandPaletteOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/70 rounded-xl transition border border-slate-200/80 shadow-2xs"
+              title="Search & Jump to any app (or press /)"
+            >
+              <Search className="w-3.5 h-3.5 text-slate-400" />
+              <span className="hidden lg:inline text-[11px] font-semibold">Jump</span>
+              <kbd className="px-1.5 py-0.2 bg-white border border-slate-200 rounded text-[10px] font-mono font-bold text-slate-500 shadow-2xs">
+                /
+              </kbd>
+            </button>
+
             {authToken ? (
               <button
                 onClick={handleLogout}
@@ -586,6 +637,14 @@ function App() {
           </div>
         </div>
       </footer>
+
+      {/* Global Command Palette */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        setActiveTab={setActiveTab}
+        authToken={authToken}
+      />
 
     </div>
   );

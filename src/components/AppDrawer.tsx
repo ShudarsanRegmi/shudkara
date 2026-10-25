@@ -28,7 +28,8 @@ import {
   LayoutGrid,
   Pencil,
   Cloud,
-  RefreshCw
+  RefreshCw,
+  Flame
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -44,6 +45,17 @@ export interface AppDefinition {
 }
 
 export const ALL_APPS: AppDefinition[] = [
+  {
+    id: 'streaks',
+    label: 'Streaks',
+    description: 'Daily photo streak challenge with aggressive Duolingo reminders',
+    icon: Flame,
+    category: 'Knowledge & Vaults',
+    requiresLogin: false,
+    colorBg: 'bg-orange-50',
+    colorText: 'text-orange-700',
+    colorBorder: 'border-orange-200'
+  },
   {
     id: 'savepost',
     label: 'SavePost',
