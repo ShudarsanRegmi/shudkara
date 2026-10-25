@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Search, Calendar, FolderOpen, Tag, Layers, List, 
-  RotateCcw, Clock, Loader2, X, SlidersHorizontal, HardDrive
+  RotateCcw, Clock, Loader2, X, SlidersHorizontal, HardDrive, Flame
 } from 'lucide-react';
 import { BS_MONTHS, getAvailableBsYears, toNepaliDigits } from '../utils/bikramSambat';
 
@@ -25,6 +25,10 @@ interface TimelineSidebarProps {
   // Deck View Setting
   globalDeckMode: boolean;
   onToggleGlobalDeckMode: () => void;
+
+  // Streaks Integration Toggle
+  showStreaksMoments: boolean;
+  onToggleShowStreaksMoments: () => void;
 
   // GDrive Sync
   onSyncDrive: () => void;
@@ -55,6 +59,8 @@ export const TimelineSidebar: React.FC<TimelineSidebarProps> = ({
   onBsMonthChange,
   globalDeckMode,
   onToggleGlobalDeckMode,
+  showStreaksMoments,
+  onToggleShowStreaksMoments,
   onSyncDrive,
   syncing,
   totalMoments,
@@ -178,6 +184,29 @@ export const TimelineSidebar: React.FC<TimelineSidebarProps> = ({
             </div>
             <p className="text-[10px] text-slate-400 leading-tight">
               Stacked mode organizes same-day snaps horizontally so you can turn them like pages.
+            </p>
+          </div>
+
+          {/* Streaks Timeline Photo Feed Toggle */}
+          <div className="space-y-1.5 p-3 rounded-2xl bg-orange-50/70 border border-orange-200/80">
+            <div className="flex items-center justify-between">
+              <label
+                className="text-xs font-bold text-orange-950 flex items-center gap-1.5 cursor-pointer"
+                htmlFor="toggle-streaks-timeline"
+              >
+                <Flame className="w-3.5 h-3.5 text-orange-600" />
+                <span>View Streaks Timeline</span>
+              </label>
+              <input
+                id="toggle-streaks-timeline"
+                type="checkbox"
+                checked={showStreaksMoments}
+                onChange={onToggleShowStreaksMoments}
+                className="w-4 h-4 accent-orange-600 rounded cursor-pointer"
+              />
+            </div>
+            <p className="text-[10px] text-orange-800/80 leading-tight">
+              Include daily photo challenge proofs as moments in your timeline.
             </p>
           </div>
 

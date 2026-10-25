@@ -107,6 +107,73 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   // Global deck mode toggle (Stored in state and easily configured via Sidebar)
   const [globalDeckMode, setGlobalDeckMode] = useState<boolean>(true);
 
+  // Streaks Integration State (Persisted in localStorage)
+  const [showStreaksMoments, setShowStreaksMoments] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('shudkara_timeline_show_streaks') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [streaksPosts, setStreaksPosts] = useState<Post[]>([]);
+
+  const handleToggleShowStreaksMoments = () => {
+    setShowStreaksMoments(prev => {
+      const next = !prev;
+      try {
+        localStorage.setItem('shudkara_timeline_show_streaks', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  // Fetch Streaks Moments when enabled
+  useEffect(() => {
+    if (showStreaksMoments) {
+      fetch('/api/streaks')
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (data && Array.isArray(data.streaks)) {
+            const converted: Post[] = [];
+            data.streaks.forEach((streak: any) => {
+              if (Array.isArray(streak.checkIns)) {
+                streak.checkIns.forEach((checkIn: any) => {
+                  const photos = Array.isArray(checkIn.photos) && checkIn.photos.length > 0
+                    ? checkIn.photos
+                    : checkIn.photoUrl
+                    ? [checkIn.photoUrl]
+                    : [];
+
+                  if (photos.length > 0) {
+                    converted.push({
+                      _id: `streak_${streak.id}_${checkIn.date}`,
+                      title: `🔥 ${streak.title}${checkIn.title ? `: ${checkIn.title}` : ''}`,
+                      content: checkIn.notes || `Daily photo proof check-in for ${streak.title}`,
+                      timestamp: checkIn.timestamp || `${checkIn.date}T12:00:00Z`,
+                      createdAt: checkIn.timestamp || `${checkIn.date}T12:00:00Z`,
+                      category: 'Streaks',
+                      tags: ['Streak', streak.category || 'Habit'],
+                      media: photos.map((url: string, idx: number) => ({
+                        googleDriveId: `streak_${checkIn.id}_${idx}`,
+                        fileName: `streak_${checkIn.date}_${idx}.jpg`,
+                        mimeType: 'image/jpeg',
+                        viewUrl: url,
+                        thumbnailUrl: url
+                      }))
+                    });
+                  }
+                });
+              }
+            });
+            setStreaksPosts(converted);
+          }
+        })
+        .catch(err => console.error('Failed to load streaks moments for timeline:', err));
+    } else {
+      setStreaksPosts([]);
+    }
+  }, [showStreaksMoments]);
+
   // Infinite Scroll / Lazy Load Sentinel Ref
   const observerTargetRef = useRef<HTMLDivElement>(null);
 
@@ -382,16 +449,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     setShowLightbox(true);
   };
 
+  // Combine Timeline Posts with Streaks Moments when enabled
+  const allTimelinePosts = useMemo(() => {
+    if (!showStreaksMoments || streaksPosts.length === 0) return posts;
+    const combined = [...posts, ...streaksPosts];
+    return combined.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [posts, streaksPosts, showStreaksMoments]);
+
   // Bikram Sambat filtering
   const filteredPosts = useMemo(() => {
-    return posts.filter(post => {
+    return allTimelinePosts.filter(post => {
       if (!selectedBsYear && !selectedBsMonth) return true;
       const bs = adToBs(post.timestamp);
       if (selectedBsYear && bs.year !== parseInt(selectedBsYear, 10)) return false;
       if (selectedBsMonth && bs.month !== parseInt(selectedBsMonth, 10)) return false;
       return true;
     });
-  }, [posts, selectedBsYear, selectedBsMonth]);
+  }, [allTimelinePosts, selectedBsYear, selectedBsMonth]);
 
   // Robust Grouping of Filtered Posts by Local Calendar Day
   const dayGroups: DayGroup[] = useMemo(() => {
@@ -883,6 +957,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             onBsMonthChange={setSelectedBsMonth}
             globalDeckMode={globalDeckMode}
             onToggleGlobalDeckMode={() => setGlobalDeckMode(prev => !prev)}
+            showStreaksMoments={showStreaksMoments}
+            onToggleShowStreaksMoments={handleToggleShowStreaksMoments}
             onSyncDrive={handleSyncDrive}
             syncing={syncing}
             totalMoments={total}
@@ -912,6 +988,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           onBsMonthChange={setSelectedBsMonth}
           globalDeckMode={globalDeckMode}
           onToggleGlobalDeckMode={() => setGlobalDeckMode(prev => !prev)}
+          showStreaksMoments={showStreaksMoments}
+          onToggleShowStreaksMoments={handleToggleShowStreaksMoments}
           onSyncDrive={handleSyncDrive}
           syncing={syncing}
           totalMoments={total}

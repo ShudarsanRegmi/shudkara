@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Plus,
   Calendar as CalendarIcon,
@@ -15,16 +15,18 @@ import {
   Edit2,
   ChevronLeft,
   ChevronRight,
-  RotateCw,
   Send,
-  CheckCircle2
+  CheckCircle2,
+  LayoutGrid
 } from 'lucide-react';
+import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
 
 export interface StreakCheckIn {
   id: string;
   date: string; // YYYY-MM-DD
   timestamp: string;
   photoUrl?: string;
+  photos?: string[];
   title?: string;
   notes?: string;
   isLeaveDay?: boolean;
@@ -74,15 +76,27 @@ const CATEGORIES = [
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 interface StreaksProps {
-  authToken: string | null;
+  authToken?: string | null;
 }
 
 // Format Date YYYY-MM-DD local
-function toLocalDateString(d: Date): string {
+export function toLocalDateString(d: Date): string {
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+// Get array of photos from check-in (supports both multi-photo array and legacy single photoUrl)
+export function getCheckInPhotos(checkIn?: StreakCheckIn): string[] {
+  if (!checkIn) return [];
+  if (Array.isArray(checkIn.photos) && checkIn.photos.length > 0) {
+    return checkIn.photos;
+  }
+  if (checkIn.photoUrl) {
+    return [checkIn.photoUrl];
+  }
+  return [];
 }
 
 // Sound Synthesizer via Web Audio API (Zero external audio file dependencies)
@@ -95,7 +109,6 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
     gain.connect(ctx.destination);
 
     if (type === 'success') {
-      // Pleasant victory fanfare (C5 -> E5 -> G5)
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(523.25, ctx.currentTime);
       osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1);
@@ -105,7 +118,6 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
       osc.start();
       osc.stop(ctx.currentTime + 0.5);
     } else if (type === 'alert') {
-      // Duolingo warning chirp
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(800, ctx.currentTime);
       osc.frequency.setValueAtTime(400, ctx.currentTime + 0.15);
@@ -114,7 +126,6 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
       osc.start();
       osc.stop(ctx.currentTime + 0.35);
     } else if (type === 'urgent') {
-      // Aggressive alarm tone
       osc.type = 'square';
       osc.frequency.setValueAtTime(880, ctx.currentTime);
       osc.frequency.setValueAtTime(660, ctx.currentTime + 0.12);
@@ -125,7 +136,7 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
       osc.stop(ctx.currentTime + 0.45);
     }
   } catch {
-    // AudioContext blocked or not supported
+    // AudioContext blocked
   }
 }
 
@@ -140,8 +151,13 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
   const [editingStreak, setEditingStreak] = useState<StreakItem | null>(null);
   const [checkInStreak, setCheckInStreak] = useState<StreakItem | null>(null);
   const [calendarStreak, setCalendarStreak] = useState<StreakItem | null>(null);
+  const [calendarViewMode, setCalendarViewMode] = useState<'grid' | 'calendar'>('grid');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [proofModalData, setProofModalData] = useState<{ checkIn: StreakCheckIn; streakTitle: string } | null>(null);
+  const [proofModalData, setProofModalData] = useState<{ checkIn: StreakCheckIn; streak: StreakItem } | null>(null);
+  const [proofActivePhotoIndex, setProofActivePhotoIndex] = useState(0);
+
+  // Full-screen native-like Camera Modal state (like Timeline)
+  const [showCameraModal, setShowCameraModal] = useState(false);
 
   // Form states for creating / editing streak
   const [formTitle, setFormTitle] = useState('');
@@ -151,16 +167,12 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
   const [formRestDays, setFormRestDays] = useState<number[]>([]);
   const [formColor, setFormColor] = useState('#ea580c');
 
-  // Check-In Wizard state
-  const [checkInPhoto, setCheckInPhoto] = useState<string | null>(null);
+  // Check-In Wizard state (supports multiple photos and photo editing/replacement)
+  const [checkInPhotos, setCheckInPhotos] = useState<string[]>([]);
   const [checkInTitle, setCheckInTitle] = useState('');
   const [checkInNotes, setCheckInNotes] = useState('');
   const [checkInDate, setCheckInDate] = useState(() => toLocalDateString(new Date()));
   const [isLeaveDayCheck, setIsLeaveDayCheck] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('environment');
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const [submittingCheckIn, setSubmittingCheckIn] = useState(false);
 
   // Calendar view state
@@ -202,7 +214,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     }
   }, [notificationSettings.browserNotificationsEnabled]);
 
-  // Streak Calculation Engine
+  // Streak Calculation Engine (robust & loop-safe)
   const calculateStreakStats = (streak: StreakItem) => {
     const checkIns = Array.isArray(streak.checkIns) ? streak.checkIns : [];
     const restDays = Array.isArray(streak.restDays) ? streak.restDays : [];
@@ -223,7 +235,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     const isOverdue = diffMs < 0 && !todayChecked;
     const minutesLeft = Math.round(diffMs / 60000);
 
-    // If there are zero check-ins in the streak, current and longest streak are 0!
     if (checkIns.length === 0) {
       return {
         currentStreak: 0,
@@ -240,7 +251,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     const sortedDates = Array.from(checkInMap.keys()).sort();
     const earliestDate = new Date(sortedDates[0] + 'T00:00:00');
 
-    // Calculate current streak count
     let count = 0;
     let curr = new Date();
     curr.setHours(0, 0, 0, 0);
@@ -255,7 +265,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       curr.setDate(curr.getDate() - 1);
     }
 
-    // Loop backwards bounded by earliest check-in and hard safety iterations
     let safety = 0;
     while (curr >= earliestDate && safety < 3000) {
       safety++;
@@ -274,7 +283,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       }
     }
 
-    // Longest streak calculation
     let maxStreak = 0;
     let temp = 0;
     let prevDate: Date | null = null;
@@ -360,14 +368,13 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     };
   }, [streaks]);
 
-  // Periodic Reminder Checker (checks every 60s for sound / browser notification alerts)
+  // Periodic Reminder Checker
   useEffect(() => {
     const timer = setInterval(() => {
       const now = new Date();
       streaks.forEach(s => {
         const stats = calculateStreakStats(s);
         if (!stats.todayChecked) {
-          // If within 15 minutes of deadline or overdue, buzz sound & system notification
           if ((stats.minutesLeft === 60 || stats.minutesLeft === 30 || stats.minutesLeft === 10 || stats.isOverdue) && soundEnabled) {
             playTone(stats.isOverdue ? 'urgent' : 'alert');
             if (navigator.vibrate) {
@@ -390,101 +397,73 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     return () => clearInterval(timer);
   }, [streaks, soundEnabled, notificationSettings]);
 
-  // Camera Management
-  const startCamera = async () => {
-    try {
-      setCameraActive(true);
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: cameraFacing,
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
-      }
-    } catch (err) {
-      console.error('Camera access denied:', err);
-      alert('Camera access denied or unavailable. You can use the file upload option instead.');
-      setCameraActive(false);
-    }
+  // Handle capture snaps from full-screen camera modal
+  const handleCaptureSnaps = (snaps: SnappedPhoto[]) => {
+    const newPhotos = snaps.map(s => s.base64);
+    setCheckInPhotos(prev => [...prev, ...newPhotos]);
+    setShowCameraModal(false);
+    if (soundEnabled) playTone('success');
   };
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    setCameraActive(false);
-  };
-
-  const flipCamera = () => {
-    stopCamera();
-    setCameraFacing(prev => (prev === 'user' ? 'environment' : 'user'));
-    setTimeout(startCamera, 200);
-  };
-
-  const capturePhoto = () => {
-    if (!videoRef.current) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setCheckInPhoto(dataUrl);
-      stopCamera();
-      if (soundEnabled) playTone('success');
-    }
-  };
-
+  // Handle file uploads (supports multiple files)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      // Compress with canvas to prevent massive base64 payloads
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        const maxDim = 1200;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) {
-            height = Math.round((height * maxDim) / width);
-            width = maxDim;
-          } else {
-            width = Math.round((width * maxDim) / height);
-            height = maxDim;
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 1200;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
           }
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL('image/jpeg', 0.8);
-        setCheckInPhoto(compressed);
-        if (soundEnabled) playTone('success');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx?.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.82);
+          setCheckInPhotos(prev => [...prev, compressed]);
+        };
+        img.src = reader.result as string;
       };
-      img.src = reader.result as string;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    });
+    if (soundEnabled) playTone('success');
   };
 
-  // Submit Check-in
+  const handleRemovePhoto = (index: number) => {
+    setCheckInPhotos(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Open existing check-in for editing / replacing bad photos
+  const openEditCheckIn = (streak: StreakItem, checkIn: StreakCheckIn) => {
+    setCheckInStreak(streak);
+    setCheckInDate(checkIn.date);
+    setCheckInPhotos(getCheckInPhotos(checkIn));
+    setCheckInTitle(checkIn.title || '');
+    setCheckInNotes(checkIn.notes || '');
+    setIsLeaveDayCheck(!!checkIn.isLeaveDay);
+    setProofModalData(null);
+  };
+
+  // Submit Check-in or Check-in Edit
   const handleSubmitCheckIn = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!checkInStreak) return;
 
-    if (!isLeaveDayCheck && !checkInPhoto) {
-      alert('Please take or upload a photo proof to complete your daily challenge!');
+    if (!isLeaveDayCheck && checkInPhotos.length === 0) {
+      alert('Please take or upload at least one photo proof to complete your daily challenge!');
       return;
     }
 
@@ -495,7 +474,8 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           date: checkInDate,
-          photoUrl: isLeaveDayCheck ? undefined : checkInPhoto,
+          photos: isLeaveDayCheck ? [] : checkInPhotos,
+          photoUrl: isLeaveDayCheck ? undefined : checkInPhotos[0],
           title: checkInTitle.trim() || undefined,
           notes: checkInNotes.trim() || undefined,
           isLeaveDay: isLeaveDayCheck
@@ -505,11 +485,10 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       if (res.ok) {
         if (soundEnabled) playTone('success');
         setCheckInStreak(null);
-        setCheckInPhoto(null);
+        setCheckInPhotos([]);
         setCheckInTitle('');
         setCheckInNotes('');
         setIsLeaveDayCheck(false);
-        stopCamera();
         await fetchStreaks();
       } else {
         const data = await res.json();
@@ -520,6 +499,29 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       alert('Network error submitting check-in.');
     } finally {
       setSubmittingCheckIn(false);
+    }
+  };
+
+  // Delete a specific check-in
+  const handleDeleteCheckIn = async (streakId: string, date: string) => {
+    if (!window.confirm(`Delete check-in for date ${date}?`)) return;
+    try {
+      const res = await fetch(`/api/streaks/${streakId}/checkin/${date}`, { method: 'DELETE' });
+      if (res.ok) {
+        await fetchStreaks();
+        setCalendarStreak(prev => {
+          if (!prev || prev.id !== streakId) return prev;
+          return {
+            ...prev,
+            checkIns: prev.checkIns.filter(c => c.date !== date)
+          };
+        });
+        if (proofModalData?.checkIn.date === date) {
+          setProofModalData(null);
+        }
+      }
+    } catch {
+      alert('Failed to delete check-in.');
     }
   };
 
@@ -668,7 +670,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       isToday: boolean;
     }> = [];
 
-    // Empty slots for start of month
     for (let i = 0; i < firstDayIndex; i++) {
       cells.push({
         dateStr: '',
@@ -701,8 +702,24 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     return cells;
   }, [calendarStreak, currentCalendarMonth]);
 
+  // Date-Annotated Grid Items (sorted descending: newest first)
+  const annotatedGridItems = useMemo(() => {
+    if (!calendarStreak) return [];
+    const items = [...calendarStreak.checkIns];
+    items.sort((a, b) => b.date.localeCompare(a.date));
+    return items;
+  }, [calendarStreak]);
+
   return (
     <div className="space-y-8 animate-fade-in pb-12">
+      {/* ── FULL-SCREEN CAMERA MODAL (Same as Timeline feature) ── */}
+      {showCameraModal && (
+        <TimelineCameraModal
+          onCaptureSnaps={handleCaptureSnaps}
+          onClose={() => setShowCameraModal(false)}
+        />
+      )}
+
       {/* ── TOP SASSY DUOLINGO BANNER ── */}
       <div
         className={`border rounded-3xl p-6 shadow-sm transition-all duration-300 ${
@@ -746,7 +763,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
             </div>
           </div>
 
-          {/* Action buttons */}
           <div className="flex items-center gap-2 self-end md:self-center shrink-0">
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
@@ -819,7 +835,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 key={streak.id}
                 className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm hover:shadow-md transition-all flex flex-col justify-between space-y-6 relative overflow-hidden group"
               >
-                {/* Top Row: Category + Flame Counter + Options */}
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-slate-100 text-slate-700">
@@ -830,7 +845,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                       <button
                         onClick={() => openEditModal(streak)}
                         className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition"
-                        title="Edit streak"
+                        title="Edit streak settings"
                       >
                         <Edit2 className="w-3.5 h-3.5" />
                       </button>
@@ -844,7 +859,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                     </div>
                   </div>
 
-                  {/* Title & Target Time */}
                   <h3 className="text-xl font-extrabold text-slate-900 mb-1 group-hover:text-orange-600 transition truncate">
                     {streak.title}
                   </h3>
@@ -854,7 +868,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                     </p>
                   )}
 
-                  {/* Target Time & Countdown Pill */}
                   <div className="flex items-center gap-2 text-xs font-semibold mb-6">
                     <Clock className="w-4 h-4 text-slate-400" />
                     <span className="text-slate-600">Target: {streak.targetTime}</span>
@@ -874,7 +887,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                     )}
                   </div>
 
-                  {/* Big Flame Streak Display */}
                   <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
                       <div className="w-12 h-12 rounded-2xl bg-orange-100 text-orange-600 flex items-center justify-center text-2xl shadow-inner">
@@ -911,19 +923,30 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                           {stats.todayCheckIn?.isLeaveDay ? 'Frozen (Rest Day)' : 'Streak Secured Today!'}
                         </span>
                       </div>
-                      {stats.todayCheckIn?.photoUrl && (
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={() =>
-                            setProofModalData({
-                              checkIn: stats.todayCheckIn!,
-                              streakTitle: streak.title
-                            })
-                          }
-                          className="text-[11px] font-bold text-emerald-700 hover:underline flex items-center gap-1"
+                          onClick={() => openEditCheckIn(streak, stats.todayCheckIn!)}
+                          className="text-[11px] font-bold text-slate-600 hover:text-slate-900 border border-emerald-300 bg-white px-2 py-1 rounded-lg hover:bg-emerald-100/50 flex items-center gap-1 transition"
+                          title="Replace or edit photos taken today"
                         >
-                          View Proof
+                          <Edit2 className="w-3 h-3" />
+                          <span>Edit / Replace</span>
                         </button>
-                      )}
+                        {getCheckInPhotos(stats.todayCheckIn).length > 0 && (
+                          <button
+                            onClick={() => {
+                              setProofActivePhotoIndex(0);
+                              setProofModalData({
+                                checkIn: stats.todayCheckIn!,
+                                streak
+                              });
+                            }}
+                            className="text-[11px] font-bold text-emerald-700 hover:underline"
+                          >
+                            View Proof
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-2">
@@ -932,7 +955,9 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                           setCheckInStreak(streak);
                           setCheckInDate(toLocalDateString(new Date()));
                           setIsLeaveDayCheck(false);
-                          setCheckInPhoto(null);
+                          setCheckInPhotos([]);
+                          setCheckInTitle('');
+                          setCheckInNotes('');
                         }}
                         className="py-2.5 px-3 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
                       >
@@ -945,7 +970,9 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                           setCheckInStreak(streak);
                           setCheckInDate(toLocalDateString(new Date()));
                           setIsLeaveDayCheck(true);
-                          setCheckInPhoto(null);
+                          setCheckInPhotos([]);
+                          setCheckInTitle('');
+                          setCheckInNotes('');
                         }}
                         className="py-2.5 px-3 bg-sky-50 hover:bg-sky-100 text-sky-700 font-bold border border-sky-200 rounded-xl text-xs flex items-center justify-center gap-1.5 transition"
                         title="Mark today as rest or leave day without breaking streak"
@@ -956,16 +983,17 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                     </div>
                   )}
 
-                  {/* Calendar & Proofs Button */}
+                  {/* Calendar & Annotated Grid View Button */}
                   <button
                     onClick={() => {
                       setCalendarStreak(streak);
                       setCurrentCalendarMonth(new Date());
+                      setCalendarViewMode('grid');
                     }}
                     className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition"
                   >
-                    <CalendarIcon className="w-3.5 h-3.5 text-slate-500" />
-                    <span>View Calendar & Photo Proofs</span>
+                    <LayoutGrid className="w-3.5 h-3.5 text-slate-500" />
+                    <span>View Photos & History</span>
                   </button>
                 </div>
               </div>
@@ -1053,7 +1081,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 </div>
               </div>
 
-              {/* Weekly Rest Days */}
               <div className="space-y-1">
                 <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                   Scheduled Rest Days (Streak doesn't break)
@@ -1106,7 +1133,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
         </div>
       )}
 
-      {/* ── MODAL: PHOTO CHECK-IN WIZARD ── */}
+      {/* ── MODAL: PHOTO CHECK-IN & PHOTO EDITING WIZARD ── */}
       {checkInStreak && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
           <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
@@ -1121,8 +1148,8 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
               </div>
               <button
                 onClick={() => {
-                  stopCamera();
                   setCheckInStreak(null);
+                  setCheckInPhotos([]);
                 }}
                 className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
               >
@@ -1131,7 +1158,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
             </div>
 
             <form onSubmit={handleSubmitCheckIn} className="space-y-4">
-              {/* Date selection */}
               <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-200">
                 <span className="text-xs font-bold text-slate-700">Check-In Date</span>
                 <input
@@ -1142,7 +1168,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 />
               </div>
 
-              {/* Mode Toggle: Photo Proof vs Freeze */}
+              {/* Mode Toggle */}
               <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
                 <button
                   type="button"
@@ -1151,14 +1177,11 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                     !isLeaveDayCheck ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
                   }`}
                 >
-                  📸 Upload Photo Proof
+                  📸 Upload / Take Photos
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsLeaveDayCheck(true);
-                    stopCamera();
-                  }}
+                  onClick={() => setIsLeaveDayCheck(true)}
                   className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
                     isLeaveDayCheck ? 'bg-white text-sky-700 shadow-xs' : 'text-slate-600'
                   }`}
@@ -1168,81 +1191,67 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
               </div>
 
               {!isLeaveDayCheck ? (
-                <div className="space-y-3">
-                  {/* Photo View / Viewfinder */}
-                  {cameraActive ? (
-                    <div className="relative rounded-2xl overflow-hidden bg-black aspect-4/3 flex items-center justify-center">
-                      <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover" />
-                      <div className="absolute bottom-4 left-0 right-0 flex items-center justify-center gap-4">
-                        <button
-                          type="button"
-                          onClick={flipCamera}
-                          className="p-3 bg-white/30 backdrop-blur-md rounded-full text-white hover:bg-white/50 transition"
-                          title="Flip camera"
-                        >
-                          <RotateCw className="w-5 h-5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={capturePhoto}
-                          className="w-16 h-16 rounded-full bg-white border-4 border-orange-500 shadow-lg hover:scale-105 transition"
-                          title="Snap Photo"
-                        />
-                        <button
-                          type="button"
-                          onClick={stopCamera}
-                          className="p-3 bg-white/30 backdrop-blur-md rounded-full text-white hover:bg-white/50 transition"
-                          title="Cancel Camera"
-                        >
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : checkInPhoto ? (
-                    <div className="relative rounded-2xl overflow-hidden bg-slate-100 aspect-4/3 border border-slate-200">
-                      <img src={checkInPhoto} alt="Proof" className="w-full h-full object-cover" />
-                      <button
-                        type="button"
-                        onClick={() => setCheckInPhoto(null)}
-                        className="absolute top-3 right-3 p-2 bg-slate-900/60 backdrop-blur-md text-white rounded-xl hover:bg-slate-900 transition"
-                        title="Retake photo"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                      <div className="absolute bottom-3 left-3 bg-slate-900/70 backdrop-blur-md px-3 py-1 rounded-lg text-white text-[11px] font-bold flex items-center gap-1.5">
-                        <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        Proof captured
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center space-y-4 bg-slate-50/50">
-                      <div className="flex items-center justify-center gap-3">
-                        <button
-                          type="button"
-                          onClick={startCamera}
-                          className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition"
-                        >
-                          <Camera className="w-4 h-4" />
-                          <span>Open Camera</span>
-                        </button>
-                        <label className="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-2 cursor-pointer shadow-xs transition">
-                          <Upload className="w-4 h-4" />
-                          <span>Upload File</span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleFileUpload}
-                            className="hidden"
-                          />
+                <div className="space-y-4">
+                  {/* Photo Thumbnails & Management (Allows editing / replacing bad photos) */}
+                  {checkInPhotos.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                          Attached Photos ({checkInPhotos.length})
                         </label>
+                        <span className="text-[10px] text-slate-400">Click ✕ to remove bad photo</span>
                       </div>
-                      <p className="text-[11px] text-slate-400">
-                        Snap a real-time photo proof (gym selfie, laptop code, book page, etc.)
-                      </p>
+                      <div className="grid grid-cols-3 gap-2.5">
+                        {checkInPhotos.map((photo, index) => (
+                          <div key={index} className="relative aspect-square rounded-2xl overflow-hidden border border-slate-200 group bg-slate-100 shadow-xs">
+                            <img src={photo} alt={`proof-${index}`} className="w-full h-full object-cover" />
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePhoto(index)}
+                              className="absolute top-1.5 right-1.5 p-1 bg-black/70 hover:bg-red-600 text-white rounded-lg transition shadow-md"
+                              title="Delete this photo"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded-md bg-black/60 text-white text-[9px] font-bold">
+                              #{index + 1}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  {/* Title / Caption */}
+                  {/* Actions: Open Camera or Upload Files */}
+                  <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center space-y-3 bg-slate-50/50">
+                    <div className="flex items-center justify-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setShowCameraModal(true)}
+                        className="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-sm transition active:scale-95"
+                      >
+                        <Camera className="w-4 h-4" />
+                        <span>Launch Camera</span>
+                      </button>
+
+                      <label className="px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-2 cursor-pointer shadow-xs transition active:scale-95">
+                        <Upload className="w-4 h-4" />
+                        <span>Upload Photos</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          onChange={handleFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Take multiple snaps or upload multiple proofs. You can remove and replace bad photos anytime.
+                    </p>
+                  </div>
+
+                  {/* Caption / Title */}
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                       Optional Caption / Title
@@ -1287,8 +1296,8 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 <button
                   type="button"
                   onClick={() => {
-                    stopCamera();
                     setCheckInStreak(null);
+                    setCheckInPhotos([]);
                   }}
                   className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
                 >
@@ -1296,7 +1305,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  disabled={submittingCheckIn || (!isLeaveDayCheck && !checkInPhoto)}
+                  disabled={submittingCheckIn || (!isLeaveDayCheck && checkInPhotos.length === 0)}
                   className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs shadow-md transition flex items-center gap-2"
                 >
                   {submittingCheckIn ? 'Saving...' : 'Confirm Check-In 🔥'}
@@ -1307,18 +1316,18 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
         </div>
       )}
 
-      {/* ── MODAL: MONTHLY CALENDAR & PHOTO GALLERY ── */}
+      {/* ── MODAL: DATE-ANNOTATED GRID & MONTHLY CALENDAR VISUALIZATION ── */}
       {calendarStreak && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
-          <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+          <div className="w-full max-w-3xl bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
                 <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-                  <CalendarIcon className="w-5 h-5 text-orange-600" />
-                  <span>Streak Calendar</span>
+                  <LayoutGrid className="w-5 h-5 text-orange-600" />
+                  <span>Streak Proofs & History</span>
                 </h3>
                 <p className="text-xs text-slate-500 font-semibold">
-                  {calendarStreak.title} • {calendarStreak.checkIns.length} total check-ins recorded
+                  {calendarStreak.title} • {calendarStreak.checkIns.length} total entries recorded
                 </p>
               </div>
               <button
@@ -1329,200 +1338,359 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
               </button>
             </div>
 
-            {/* Month Navigator */}
-            <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-100">
+            {/* View Mode Toggle: Date-Annotated Grid vs Monthly Calendar */}
+            <div className="flex rounded-xl bg-slate-100 p-1 border border-slate-200">
               <button
-                onClick={() => {
-                  const d = new Date(currentCalendarMonth);
-                  d.setMonth(d.getMonth() - 1);
-                  setCurrentCalendarMonth(d);
-                }}
-                className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600"
+                type="button"
+                onClick={() => setCalendarViewMode('grid')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
+                  calendarViewMode === 'grid' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                }`}
               >
-                <ChevronLeft className="w-4 h-4" />
+                <LayoutGrid className="w-3.5 h-3.5 text-orange-600" />
+                <span>Date-Annotated Grid</span>
               </button>
-
-              <span className="text-sm font-bold text-slate-800">
-                {currentCalendarMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
-              </span>
-
               <button
-                onClick={() => {
-                  const d = new Date(currentCalendarMonth);
-                  d.setMonth(d.getMonth() + 1);
-                  setCurrentCalendarMonth(d);
-                }}
-                className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600"
+                type="button"
+                onClick={() => setCalendarViewMode('calendar')}
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition flex items-center justify-center gap-1.5 ${
+                  calendarViewMode === 'calendar' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                }`}
               >
-                <ChevronRight className="w-4 h-4" />
+                <CalendarIcon className="w-3.5 h-3.5 text-blue-600" />
+                <span>Monthly Calendar</span>
               </button>
             </div>
 
-            {/* Calendar Grid */}
-            <div className="space-y-2">
-              <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                {WEEKDAYS.map(w => (
-                  <div key={w}>{w}</div>
-                ))}
-              </div>
-
-              <div className="grid grid-cols-7 gap-1.5">
-                {calendarGrid.map((cell, idx) => {
-                  if (!cell.isCurrentMonth) {
-                    return <div key={idx} className="aspect-square bg-slate-50/40 rounded-xl" />;
-                  }
-
-                  const hasProof = !!cell.checkIn?.photoUrl;
-                  const isLeave = !!cell.checkIn?.isLeaveDay;
-                  const isChecked = !!cell.checkIn;
-
-                  return (
-                    <button
-                      key={cell.dateStr}
-                      disabled={!cell.checkIn}
-                      onClick={() => {
-                        if (cell.checkIn) {
-                          setProofModalData({
-                            checkIn: cell.checkIn,
-                            streakTitle: calendarStreak.title
-                          });
-                        }
-                      }}
-                      className={`aspect-square rounded-xl p-1 flex flex-col items-center justify-between transition border text-xs font-bold relative group ${
-                        cell.isToday ? 'ring-2 ring-orange-500' : ''
-                      } ${
-                        hasProof
-                          ? 'bg-orange-500 text-white border-orange-600 shadow-xs hover:scale-105'
-                          : isLeave
-                          ? 'bg-sky-100 text-sky-800 border-sky-300'
-                          : isChecked
-                          ? 'bg-emerald-500 text-white border-emerald-600'
-                          : cell.isRestDay
-                          ? 'bg-slate-100 text-slate-400 border-slate-200'
-                          : 'bg-slate-50 text-slate-700 border-slate-100'
-                      }`}
-                    >
-                      <span className="text-[10px] self-start leading-none opacity-80">
-                        {cell.dayNum}
-                      </span>
-
-                      <div className="text-center">
-                        {hasProof ? (
-                          <span className="text-sm">🔥</span>
-                        ) : isLeave ? (
-                          <Snowflake className="w-3.5 h-3.5 text-sky-600" />
-                        ) : isChecked ? (
-                          <Check className="w-3.5 h-3.5" />
-                        ) : cell.isRestDay ? (
-                          <span className="text-[9px] font-bold text-slate-400">REST</span>
-                        ) : null}
-                      </div>
-
-                      <div className="w-1 h-1" />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Calendar Legend */}
-            <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] text-slate-500 font-semibold pt-2 border-t border-slate-100">
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-md bg-orange-500 inline-block" /> Completed with Photo
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-md bg-sky-200 inline-block" /> Streak Freeze / Rest Day
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-md border-2 border-orange-500 inline-block" /> Today
-              </span>
-            </div>
-
-            {/* Past Photo Proofs Mini Gallery */}
-            <div className="space-y-3 pt-2">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Photo Proof History
-              </h4>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 max-h-48 overflow-y-auto p-1">
-                {calendarStreak.checkIns.filter(c => c.photoUrl).length === 0 ? (
-                  <p className="text-xs text-slate-400 col-span-4 text-center py-4">
-                    No photo proofs submitted yet for this streak.
-                  </p>
+            {/* ── VIEW 1: DATE-ANNOTATED GRID ── */}
+            {calendarViewMode === 'grid' ? (
+              <div className="space-y-4">
+                {annotatedGridItems.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 text-xs">
+                    No check-ins or photos recorded for this streak challenge yet.
+                  </div>
                 ) : (
-                  calendarStreak.checkIns
-                    .filter(c => c.photoUrl)
-                    .map(c => (
-                      <div
-                        key={c.id}
-                        onClick={() =>
-                          setProofModalData({
-                            checkIn: c,
-                            streakTitle: calendarStreak.title
-                          })
-                        }
-                        className="group relative aspect-square rounded-xl overflow-hidden border border-slate-200 cursor-pointer hover:shadow-md transition"
-                      >
-                        <img src={c.photoUrl} alt="proof" className="w-full h-full object-cover group-hover:scale-105 transition" />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex flex-col justify-end p-1.5 text-white">
-                          <span className="text-[10px] font-bold">{c.date}</span>
+                  <div className="space-y-4">
+                    {annotatedGridItems.map(checkIn => {
+                      const photos = getCheckInPhotos(checkIn);
+
+                      return (
+                        <div
+                          key={checkIn.id || checkIn.date}
+                          className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3"
+                        >
+                          {/* Date Header Row */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-extrabold text-slate-900">
+                                {new Date(checkIn.date + 'T00:00:00').toLocaleDateString(undefined, {
+                                  weekday: 'short',
+                                  month: 'short',
+                                  day: 'numeric',
+                                  year: 'numeric'
+                                })}
+                              </span>
+
+                              {checkIn.isLeaveDay ? (
+                                <span className="px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 text-[10px] font-bold flex items-center gap-1 border border-sky-200">
+                                  <Snowflake className="w-3 h-3 text-sky-600" /> Rest / Freeze Day
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-orange-50 text-orange-700 text-[10px] font-bold flex items-center gap-1 border border-orange-200">
+                                  🔥 {photos.length} Photo{photos.length !== 1 ? 's' : ''}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Actions on this date: Edit / Replace Photos or Delete */}
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => openEditCheckIn(calendarStreak, checkIn)}
+                                className="px-2.5 py-1 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg flex items-center gap-1 transition"
+                                title="Edit caption, notes, or replace photos"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Edit Photos</span>
+                              </button>
+                              <button
+                                onClick={() => handleDeleteCheckIn(calendarStreak.id, checkIn.date)}
+                                className="p-1 text-slate-400 hover:text-red-600 rounded-lg transition"
+                                title="Delete check-in"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Caption & Notes */}
+                          {(checkIn.title || checkIn.notes) && (
+                            <div className="space-y-0.5">
+                              {checkIn.title && (
+                                <p className="text-xs font-bold text-slate-800">{checkIn.title}</p>
+                              )}
+                              {checkIn.notes && (
+                                <p className="text-[11px] text-slate-500">{checkIn.notes}</p>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Photos Grid for that Day */}
+                          {photos.length > 0 && (
+                            <div className={`grid gap-2 ${
+                              photos.length === 1
+                                ? 'grid-cols-1 sm:grid-cols-2 max-w-sm'
+                                : photos.length === 2
+                                ? 'grid-cols-2'
+                                : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4'
+                            }`}>
+                              {photos.map((photoUrl, pIdx) => (
+                                <div
+                                  key={pIdx}
+                                  onClick={() => {
+                                    setProofActivePhotoIndex(pIdx);
+                                    setProofModalData({
+                                      checkIn,
+                                      streak: calendarStreak
+                                    });
+                                  }}
+                                  className="relative aspect-4/3 rounded-xl overflow-hidden border border-slate-200 cursor-pointer group bg-slate-900/5 hover:shadow-md transition"
+                                >
+                                  <img
+                                    src={photoUrl}
+                                    alt={`proof-${pIdx}`}
+                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                  />
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center">
+                                    <span className="text-[10px] text-white font-bold opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 px-2 py-0.5 rounded-md">
+                                      View Photo
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            </div>
+            ) : (
+              /* ── VIEW 2: MONTHLY CALENDAR (Kept completely intact) ── */
+              <div className="space-y-4">
+                {/* Month Navigator */}
+                <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <button
+                    onClick={() => {
+                      const d = new Date(currentCalendarMonth);
+                      d.setMonth(d.getMonth() - 1);
+                      setCurrentCalendarMonth(d);
+                    }}
+                    className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  <span className="text-sm font-bold text-slate-800">
+                    {currentCalendarMonth.toLocaleString('default', { month: 'long', year: 'numeric' })}
+                  </span>
+
+                  <button
+                    onClick={() => {
+                      const d = new Date(currentCalendarMonth);
+                      d.setMonth(d.getMonth() + 1);
+                      setCurrentCalendarMonth(d);
+                    }}
+                    className="p-1.5 hover:bg-slate-200 rounded-lg text-slate-600"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Calendar Grid */}
+                <div className="space-y-2">
+                  <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    {WEEKDAYS.map(w => (
+                      <div key={w}>{w}</div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-7 gap-1.5">
+                    {calendarGrid.map((cell, idx) => {
+                      if (!cell.isCurrentMonth) {
+                        return <div key={idx} className="aspect-square bg-slate-50/40 rounded-xl" />;
+                      }
+
+                      const photos = getCheckInPhotos(cell.checkIn);
+                      const hasProof = photos.length > 0;
+                      const isLeave = !!cell.checkIn?.isLeaveDay;
+                      const isChecked = !!cell.checkIn;
+
+                      return (
+                        <button
+                          key={cell.dateStr}
+                          disabled={!cell.checkIn}
+                          onClick={() => {
+                            if (cell.checkIn) {
+                              setProofActivePhotoIndex(0);
+                              setProofModalData({
+                                checkIn: cell.checkIn,
+                                streak: calendarStreak
+                              });
+                            }
+                          }}
+                          className={`aspect-square rounded-xl p-1 flex flex-col items-center justify-between transition border text-xs font-bold relative group ${
+                            cell.isToday ? 'ring-2 ring-orange-500' : ''
+                          } ${
+                            hasProof
+                              ? 'bg-orange-500 text-white border-orange-600 shadow-xs hover:scale-105'
+                              : isLeave
+                              ? 'bg-sky-100 text-sky-800 border-sky-300'
+                              : isChecked
+                              ? 'bg-emerald-500 text-white border-emerald-600'
+                              : cell.isRestDay
+                              ? 'bg-slate-100 text-slate-400 border-slate-200'
+                              : 'bg-slate-50 text-slate-700 border-slate-100'
+                          }`}
+                        >
+                          <span className="text-[10px] self-start leading-none opacity-80">
+                            {cell.dayNum}
+                          </span>
+
+                          <div className="text-center">
+                            {hasProof ? (
+                              <div className="flex items-center gap-0.5 justify-center">
+                                <span className="text-sm">🔥</span>
+                                {photos.length > 1 && (
+                                  <span className="text-[9px] bg-black/40 px-1 rounded-full">{photos.length}</span>
+                                )}
+                              </div>
+                            ) : isLeave ? (
+                              <Snowflake className="w-3.5 h-3.5 text-sky-600" />
+                            ) : isChecked ? (
+                              <Check className="w-3.5 h-3.5" />
+                            ) : cell.isRestDay ? (
+                              <span className="text-[9px] font-bold text-slate-400">REST</span>
+                            ) : null}
+                          </div>
+
+                          <div className="w-1 h-1" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-center gap-4 text-[11px] text-slate-500 font-semibold pt-2 border-t border-slate-100">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md bg-orange-500 inline-block" /> Completed with Photo
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md bg-sky-200 inline-block" /> Streak Freeze / Rest Day
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-3 h-3 rounded-md border-2 border-orange-500 inline-block" /> Today
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* ── MODAL: FULL PHOTO PROOF VIEWER ── */}
+      {/* ── MODAL: FULL PHOTO PROOF CAROUSEL & VIEWER ── */}
       {proofModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
-          <div className="w-full max-w-md bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xl space-y-4">
-            {proofModalData.checkIn.photoUrl && (
-              <div className="relative aspect-4/3 bg-slate-950">
-                <img
-                  src={proofModalData.checkIn.photoUrl}
-                  alt="Proof"
-                  className="w-full h-full object-contain"
-                />
-                <button
-                  onClick={() => setProofModalData(null)}
-                  className="absolute top-3 right-3 p-2 bg-black/50 text-white rounded-full hover:bg-black transition"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-fade-in">
+          <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xl space-y-4">
+            {(() => {
+              const photos = getCheckInPhotos(proofModalData.checkIn);
+              const currentPhoto = photos[proofActivePhotoIndex] || photos[0];
 
-            <div className="p-6 pt-2 space-y-3">
-              <div className="flex items-center justify-between">
+              return (
                 <div>
-                  <h4 className="text-base font-bold text-slate-900">
-                    {proofModalData.checkIn.title || proofModalData.streakTitle}
-                  </h4>
-                  <p className="text-xs text-slate-500 font-semibold">
-                    Date: {proofModalData.checkIn.date}
-                  </p>
+                  {currentPhoto ? (
+                    <div className="relative aspect-4/3 bg-slate-950 flex items-center justify-center">
+                      <img
+                        src={currentPhoto}
+                        alt="Proof"
+                        className="w-full h-full object-contain"
+                      />
+
+                      {/* Navigation Carousel Arrows if multiple photos */}
+                      {photos.length > 1 && (
+                        <>
+                          <button
+                            onClick={() =>
+                              setProofActivePhotoIndex(prev => (prev - 1 + photos.length) % photos.length)
+                            }
+                            className="absolute left-3 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full transition"
+                            title="Previous photo"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() =>
+                              setProofActivePhotoIndex(prev => (prev + 1) % photos.length)
+                            }
+                            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full transition"
+                            title="Next photo"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                          <span className="absolute bottom-3 right-3 bg-black/60 px-2.5 py-1 rounded-md text-white text-xs font-bold">
+                            {proofActivePhotoIndex + 1} / {photos.length}
+                          </span>
+                        </>
+                      )}
+
+                      <button
+                        onClick={() => setProofModalData(null)}
+                        className="absolute top-3 right-3 p-2 bg-black/60 text-white rounded-full hover:bg-black transition"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="p-6 pt-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-base font-bold text-slate-900">
+                          {proofModalData.checkIn.title || proofModalData.streak.title}
+                        </h4>
+                        <p className="text-xs text-slate-500 font-semibold">
+                          Date: {proofModalData.checkIn.date}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openEditCheckIn(proofModalData.streak, proofModalData.checkIn)}
+                          className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl text-xs font-bold flex items-center gap-1 transition"
+                          title="Replace bad photos or edit caption"
+                        >
+                          <Edit2 className="w-3 h-3" />
+                          <span>Edit / Replace Photos</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {proofModalData.checkIn.notes && (
+                      <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
+                        {proofModalData.checkIn.notes}
+                      </p>
+                    )}
+
+                    <button
+                      onClick={() => setProofModalData(null)}
+                      className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
-                <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-xs font-bold flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" /> Verified
-                </span>
-              </div>
-
-              {proofModalData.checkIn.notes && (
-                <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                  {proofModalData.checkIn.notes}
-                </p>
-              )}
-
-              <button
-                onClick={() => setProofModalData(null)}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition"
-              >
-                Close
-              </button>
-            </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1550,7 +1718,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
             </div>
 
             <form onSubmit={handleSaveNotificationSettings} className="space-y-5">
-              {/* Phone Browser Push Notification */}
               <div className="flex items-center justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-2xl">
                 <div className="space-y-0.5">
                   <span className="text-xs font-bold text-slate-800 block">
@@ -1573,7 +1740,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 />
               </div>
 
-              {/* Email Notifications */}
               <div className="space-y-3 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl">
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
@@ -1616,7 +1782,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 </div>
               </div>
 
-              {/* Annoyance Level */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
                   Duolingo Annoyance Level
@@ -1644,7 +1809,6 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 </div>
               </div>
 
-              {/* Test Alert Email Button */}
               <div className="pt-1">
                 <button
                   type="button"

@@ -20,6 +20,7 @@ export interface StreakCheckIn {
   date: string; // YYYY-MM-DD
   timestamp: string;
   photoUrl?: string;
+  photos?: string[];
   title?: string;
   notes?: string;
   isLeaveDay?: boolean;
@@ -208,7 +209,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
       }
     }
 
-    // ── 4. Checkin Submission: POST /api/streaks/{id}/checkin ────────────────
+    // ── 4. Checkin Submission / Edit: POST /api/streaks/{id}/checkin ────────
     if (method === 'POST' && subPath1 && subPath2 === 'checkin') {
       const streakId = subPath1;
       let body: any;
@@ -216,7 +217,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
         return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
       }
 
-      const { date, photoUrl, title, notes, isLeaveDay } = body;
+      const { date, photoUrl, photos, title, notes, isLeaveDay } = body;
       if (!date || typeof date !== 'string') {
         return { status: 400, jsonBody: { error: 'Check-in date (YYYY-MM-DD) is required.' } };
       }
@@ -226,18 +227,33 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
         return { status: 404, jsonBody: { error: 'Streak not found.' } };
       }
 
+      const existingCheckIns: StreakCheckIn[] = Array.isArray(streak.checkIns) ? streak.checkIns : [];
+      const existingItem = existingCheckIns.find(c => c.date === date.trim());
+
+      // Normalize photos array (supports both multi-photo array and legacy single photoUrl)
+      let photosArray: string[] = [];
+      if (Array.isArray(photos) && photos.length > 0) {
+        photosArray = photos.filter((p: any) => typeof p === 'string' && p.trim().length > 0);
+      } else if (photoUrl && typeof photoUrl === 'string') {
+        photosArray = [photoUrl];
+      } else if (existingItem?.photos && Array.isArray(existingItem.photos)) {
+        photosArray = existingItem.photos;
+      } else if (existingItem?.photoUrl) {
+        photosArray = [existingItem.photoUrl];
+      }
+
       const checkInItem: StreakCheckIn = {
-        id: crypto.randomBytes(8).toString('hex'),
+        id: existingItem?.id || crypto.randomBytes(8).toString('hex'),
         date: date.trim(),
-        timestamp: new Date().toISOString(),
-        photoUrl: photoUrl || undefined,
-        title: title?.trim() || undefined,
-        notes: notes?.trim() || undefined,
-        isLeaveDay: !!isLeaveDay
+        timestamp: existingItem?.timestamp || new Date().toISOString(),
+        photoUrl: photosArray[0] || undefined,
+        photos: photosArray,
+        title: title !== undefined ? (title?.trim() || undefined) : existingItem?.title,
+        notes: notes !== undefined ? (notes?.trim() || undefined) : existingItem?.notes,
+        isLeaveDay: isLeaveDay !== undefined ? !!isLeaveDay : !!existingItem?.isLeaveDay
       };
 
       // Upsert: replace check-in for the same date if it already exists, or append
-      const existingCheckIns: StreakCheckIn[] = Array.isArray(streak.checkIns) ? streak.checkIns : [];
       const filtered = existingCheckIns.filter(c => c.date !== checkInItem.date);
       filtered.push(checkInItem);
       filtered.sort((a, b) => a.date.localeCompare(b.date));
