@@ -32,6 +32,7 @@ import {
   Heart,
   Briefcase
 } from 'lucide-react';
+import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 
 export interface NoteCategory {
   id: string;
@@ -379,6 +380,14 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
 
   useEffect(() => {
     fetchNotesAndCategories();
+
+    const handleSyncComplete = () => {
+      fetchNotesAndCategories();
+    };
+    window.addEventListener('shudkara:sync-completed', handleSyncComplete);
+    return () => {
+      window.removeEventListener('shudkara:sync-completed', handleSyncComplete);
+    };
   }, []);
 
   // Save Note (Create or Update)
@@ -386,6 +395,40 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
     e.preventDefault();
     if (!formContent.trim() && !formTitle.trim()) {
       alert('Please add some title or content to save note.');
+      return;
+    }
+
+    const offlineNote: NoteItem = {
+      id: editingNote?.id || `note_${Date.now()}`,
+      title: formTitle.trim() || 'Untitled Note',
+      content: formContent,
+      categoryId: formCategory || 'general',
+      tags: formTags,
+      isPinned: formIsPinned,
+      isFavorite: formIsFavorite,
+      color: formColor,
+      createdAt: editingNote?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (!isDeviceOnline()) {
+      setNotes(prev => {
+        const index = prev.findIndex(n => n.id === offlineNote.id);
+        const next = index >= 0
+          ? prev.map(n => (n.id === offlineNote.id ? offlineNote : n))
+          : [offlineNote, ...prev];
+        localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+        return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: offlineNote },
+        description: `Save note "${offlineNote.title}"`,
+        subapp: 'notes'
+      });
+      setIsEditorOpen(false);
+      resetNoteForm();
       return;
     }
 
@@ -426,20 +469,8 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
         alert(err.error || 'Failed to save note.');
       }
     } catch (err) {
-      console.error('Error saving note:', err);
+      console.warn('Network error saving note, enqueuing offline action:', err);
       // Offline fallback
-      const offlineNote: NoteItem = {
-        id: editingNote?.id || `note_${Date.now()}`,
-        title: formTitle.trim() || 'Untitled Note',
-        content: formContent,
-        categoryId: formCategory || 'general',
-        tags: formTags,
-        isPinned: formIsPinned,
-        isFavorite: formIsFavorite,
-        color: formColor,
-        createdAt: editingNote?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
       setNotes(prev => {
         const index = prev.findIndex(n => n.id === offlineNote.id);
         const next = index >= 0
@@ -447,6 +478,13 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
           : [offlineNote, ...prev];
         localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
         return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: offlineNote },
+        description: `Save note "${offlineNote.title}"`,
+        subapp: 'notes'
       });
       setIsEditorOpen(false);
       resetNoteForm();
@@ -459,21 +497,39 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
   const handleDeleteNote = async (noteId: string, noteTitle: string) => {
     if (!window.confirm(`Delete note "${noteTitle || 'Untitled'}"?`)) return;
 
+    // Immediately update local state
+    setNotes(prev => {
+      const next = prev.filter(n => n.id !== noteId);
+      localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+      return next;
+    });
+
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: `/api/notes/${noteId}`,
+        method: 'DELETE',
+        description: `Delete note "${noteTitle || 'Untitled'}"`,
+        subapp: 'notes'
+      });
+      return;
+    }
+
     try {
       const res = await fetch(`/api/notes/${noteId}`, { method: 'DELETE' });
-      if (res.ok) {
-        setNotes(prev => {
-          const next = prev.filter(n => n.id !== noteId);
-          localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
-          return next;
+      if (!res.ok) {
+        enqueueOfflineAction({
+          url: `/api/notes/${noteId}`,
+          method: 'DELETE',
+          description: `Delete note "${noteTitle || 'Untitled'}"`,
+          subapp: 'notes'
         });
       }
     } catch {
-      // Local fallback
-      setNotes(prev => {
-        const next = prev.filter(n => n.id !== noteId);
-        localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
-        return next;
+      enqueueOfflineAction({
+        url: `/api/notes/${noteId}`,
+        method: 'DELETE',
+        description: `Delete note "${noteTitle || 'Untitled'}"`,
+        subapp: 'notes'
       });
     }
   };
@@ -487,14 +543,31 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       return next;
     });
 
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: updated },
+        description: `${updated.isPinned ? 'Pin' : 'Unpin'} note "${note.title}"`,
+        subapp: 'notes'
+      });
+      return;
+    }
+
     try {
       await fetch('/api/notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: updated })
       });
-    } catch (e) {
-      console.warn('Failed to sync pin toggle to backend:', e);
+    } catch {
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: updated },
+        description: `${updated.isPinned ? 'Pin' : 'Unpin'} note "${note.title}"`,
+        subapp: 'notes'
+      });
     }
   };
 
@@ -507,14 +580,31 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       return next;
     });
 
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: updated },
+        description: `${updated.isFavorite ? 'Star' : 'Unstar'} note "${note.title}"`,
+        subapp: 'notes'
+      });
+      return;
+    }
+
     try {
       await fetch('/api/notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ note: updated })
       });
-    } catch (e) {
-      console.warn('Failed to sync favorite toggle to backend:', e);
+    } catch {
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: updated },
+        description: `${updated.isFavorite ? 'Star' : 'Unstar'} note "${note.title}"`,
+        subapp: 'notes'
+      });
     }
   };
 
@@ -550,6 +640,36 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       color: note.color
     };
 
+    const offlineCopy: NoteItem = {
+      ...duplicated,
+      id: `note_${Date.now()}`,
+      title: `${note.title || 'Untitled'} (Copy)`,
+      content: note.content,
+      categoryId: note.categoryId,
+      tags: [...note.tags],
+      isPinned: false,
+      isFavorite: false,
+      color: note.color,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (!isDeviceOnline()) {
+      setNotes(prev => {
+        const next = [offlineCopy, ...prev];
+        localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+        return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: offlineCopy },
+        description: `Duplicate note "${note.title || 'Untitled'}"`,
+        subapp: 'notes'
+      });
+      return;
+    }
+
     try {
       const res = await fetch('/api/notes', {
         method: 'POST',
@@ -558,24 +678,26 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       });
       if (res.ok) {
         const data = await res.json();
-        setNotes(prev => [data.note, ...prev]);
+        setNotes(prev => {
+          const next = [data.note, ...prev];
+          localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+          return next;
+        });
       }
     } catch {
       // Local fallback
-      const offlineCopy: NoteItem = {
-        ...duplicated,
-        id: `note_${Date.now()}`,
-        title: `${note.title || 'Untitled'} (Copy)`,
-        content: note.content,
-        categoryId: note.categoryId,
-        tags: [...note.tags],
-        isPinned: false,
-        isFavorite: false,
-        color: note.color,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      setNotes(prev => [offlineCopy, ...prev]);
+      setNotes(prev => {
+        const next = [offlineCopy, ...prev];
+        localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+        return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes',
+        method: 'POST',
+        body: { note: offlineCopy },
+        description: `Duplicate note "${note.title || 'Untitled'}"`,
+        subapp: 'notes'
+      });
     }
   };
 
@@ -662,6 +784,38 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       icon: catIcon
     };
 
+    const catId = editingCat ? editingCat.id : catName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const offlineCat: NoteCategory = {
+      id: catId,
+      name: catName.trim(),
+      description: catDesc.trim() || undefined,
+      color: catColor,
+      icon: catIcon,
+      isDefault: editingCat ? !!editingCat.isDefault : catId === 'general',
+      createdAt: editingCat?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (!isDeviceOnline()) {
+      setCategories(prev => {
+        const index = prev.findIndex(c => c.id === offlineCat.id);
+        const next = index >= 0
+          ? prev.map(c => (c.id === offlineCat.id ? offlineCat : c))
+          : [...prev, offlineCat];
+        localStorage.setItem('shudkara_categories_cache', JSON.stringify(next));
+        return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes/categories',
+        method: 'POST',
+        body: { category: payload },
+        description: `Save category "${payload.name}"`,
+        subapp: 'notes'
+      });
+      resetCatForm();
+      return;
+    }
+
     try {
       const res = await fetch('/api/notes/categories', {
         method: 'POST',
@@ -684,17 +838,6 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       }
     } catch {
       // Local fallback
-      const catId = editingCat ? editingCat.id : catName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_');
-      const offlineCat: NoteCategory = {
-        id: catId,
-        name: catName.trim(),
-        description: catDesc.trim() || undefined,
-        color: catColor,
-        icon: catIcon,
-        isDefault: editingCat ? !!editingCat.isDefault : catId === 'general',
-        createdAt: editingCat?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
       setCategories(prev => {
         const index = prev.findIndex(c => c.id === offlineCat.id);
         const next = index >= 0
@@ -702,6 +845,13 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
           : [...prev, offlineCat];
         localStorage.setItem('shudkara_categories_cache', JSON.stringify(next));
         return next;
+      });
+      enqueueOfflineAction({
+        url: '/api/notes/categories',
+        method: 'POST',
+        body: { category: payload },
+        description: `Save category "${payload.name}"`,
+        subapp: 'notes'
       });
       resetCatForm();
     }
@@ -718,39 +868,47 @@ export const Notes: React.FC<NotesProps> = ({ authToken: _authToken }) => {
       return;
     }
 
+    setCategories(prev => {
+      const next = prev.filter(c => c.id !== catId);
+      localStorage.setItem('shudkara_categories_cache', JSON.stringify(next));
+      return next;
+    });
+    setNotes(prev => {
+      const next = prev.map(n => (n.categoryId === catId ? { ...n, categoryId: 'general' } : n));
+      localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
+      return next;
+    });
+    if (activeCategory === catId) {
+      setActiveCategory('all');
+    }
+
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: `/api/notes/categories/${catId}`,
+        method: 'DELETE',
+        description: `Delete category "${catName}"`,
+        subapp: 'notes'
+      });
+      return;
+    }
+
     try {
       const res = await fetch(`/api/notes/categories/${catId}`, { method: 'DELETE' });
-      if (res.ok) {
-        setCategories(prev => {
-          const next = prev.filter(c => c.id !== catId);
-          localStorage.setItem('shudkara_categories_cache', JSON.stringify(next));
-          return next;
+      if (!res.ok) {
+        enqueueOfflineAction({
+          url: `/api/notes/categories/${catId}`,
+          method: 'DELETE',
+          description: `Delete category "${catName}"`,
+          subapp: 'notes'
         });
-        // Update local notes category to general
-        setNotes(prev => {
-          const next = prev.map(n => (n.categoryId === catId ? { ...n, categoryId: 'general' } : n));
-          localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
-          return next;
-        });
-        if (activeCategory === catId) {
-          setActiveCategory('all');
-        }
       }
     } catch {
-      // Local fallback
-      setCategories(prev => {
-        const next = prev.filter(c => c.id !== catId);
-        localStorage.setItem('shudkara_categories_cache', JSON.stringify(next));
-        return next;
+      enqueueOfflineAction({
+        url: `/api/notes/categories/${catId}`,
+        method: 'DELETE',
+        description: `Delete category "${catName}"`,
+        subapp: 'notes'
       });
-      setNotes(prev => {
-        const next = prev.map(n => (n.categoryId === catId ? { ...n, categoryId: 'general' } : n));
-        localStorage.setItem('shudkara_notes_cache', JSON.stringify(next));
-        return next;
-      });
-      if (activeCategory === catId) {
-        setActiveCategory('all');
-      }
     }
   };
 

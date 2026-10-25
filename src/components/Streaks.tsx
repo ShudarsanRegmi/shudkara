@@ -25,6 +25,7 @@ import {
   Award
 } from 'lucide-react';
 import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
+import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 
 export interface StreakCheckIn {
   id: string;
@@ -146,8 +147,15 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
 }
 
 export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
-  const [streaks, setStreaks] = useState<StreakItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [streaks, setStreaks] = useState<StreakItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('shudkara_streaks_cache');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [loading, setLoading] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [notificationSettings, setNotificationSettings] = useState<StreakNotificationSettings>(DEFAULT_SETTINGS);
 
@@ -194,13 +202,15 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       const res = await fetch('/api/streaks');
       if (res.ok) {
         const data = await res.json();
-        setStreaks(data.streaks || []);
+        const streakItems = data.streaks || [];
+        setStreaks(streakItems);
+        localStorage.setItem('shudkara_streaks_cache', JSON.stringify(streakItems));
         if (data.notificationSettings) {
           setNotificationSettings(data.notificationSettings);
         }
       }
     } catch (err) {
-      console.error('Failed to load streaks:', err);
+      console.warn('Failed to load streaks from API, using cached data:', err);
     } finally {
       setLoading(false);
     }
@@ -208,6 +218,14 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
 
   useEffect(() => {
     fetchStreaks();
+
+    const handleSyncComplete = () => {
+      fetchStreaks();
+    };
+    window.addEventListener('shudkara:sync-completed', handleSyncComplete);
+    return () => {
+      window.removeEventListener('shudkara:sync-completed', handleSyncComplete);
+    };
   }, []);
 
   // Request browser notification permission if enabled
@@ -472,36 +490,88 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       return;
     }
 
+    const streakId = checkInStreak.id;
+    const streakTitle = checkInStreak.title;
+    const checkInPayload: StreakCheckIn = {
+      id: `checkin_${Date.now()}`,
+      date: checkInDate,
+      timestamp: new Date().toISOString(),
+      photos: isLeaveDayCheck ? [] : checkInPhotos,
+      photoUrl: isLeaveDayCheck ? undefined : checkInPhotos[0],
+      title: checkInTitle.trim() || undefined,
+      notes: checkInNotes.trim() || undefined,
+      isLeaveDay: isLeaveDayCheck
+    };
+
+    // Optimistically update local state & cache immediately
+    setStreaks(prev => {
+      const updated = prev.map(s => {
+        if (s.id !== streakId) return s;
+        const filtered = s.checkIns.filter(c => c.date !== checkInDate);
+        return {
+          ...s,
+          checkIns: [...filtered, checkInPayload].sort((a, b) => a.date.localeCompare(b.date))
+        };
+      });
+      localStorage.setItem('shudkara_streaks_cache', JSON.stringify(updated));
+      return updated;
+    });
+
+    if (calendarStreak?.id === streakId) {
+      setCalendarStreak(prev => {
+        if (!prev) return prev;
+        const filtered = prev.checkIns.filter(c => c.date !== checkInDate);
+        return {
+          ...prev,
+          checkIns: [...filtered, checkInPayload].sort((a, b) => a.date.localeCompare(b.date))
+        };
+      });
+    }
+
+    if (soundEnabled) playTone('success');
+    setCheckInStreak(null);
+    setCheckInPhotos([]);
+    setCheckInTitle('');
+    setCheckInNotes('');
+    setIsLeaveDayCheck(false);
+
+    // If offline, queue action into outbox
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: `/api/streaks/${streakId}/checkin`,
+        method: 'POST',
+        body: checkInPayload,
+        description: `Check-in for "${streakTitle}" (${checkInDate})`,
+        subapp: 'streaks'
+      });
+      return;
+    }
+
     setSubmittingCheckIn(true);
     try {
-      const res = await fetch(`/api/streaks/${checkInStreak.id}/checkin`, {
+      const res = await fetch(`/api/streaks/${streakId}/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: checkInDate,
-          photos: isLeaveDayCheck ? [] : checkInPhotos,
-          photoUrl: isLeaveDayCheck ? undefined : checkInPhotos[0],
-          title: checkInTitle.trim() || undefined,
-          notes: checkInNotes.trim() || undefined,
-          isLeaveDay: isLeaveDayCheck
-        })
+        body: JSON.stringify(checkInPayload)
       });
 
-      if (res.ok) {
-        if (soundEnabled) playTone('success');
-        setCheckInStreak(null);
-        setCheckInPhotos([]);
-        setCheckInTitle('');
-        setCheckInNotes('');
-        setIsLeaveDayCheck(false);
-        await fetchStreaks();
-      } else {
-        const data = await res.json();
-        alert(data.error || 'Failed to submit check-in.');
+      if (!res.ok) {
+        enqueueOfflineAction({
+          url: `/api/streaks/${streakId}/checkin`,
+          method: 'POST',
+          body: checkInPayload,
+          description: `Check-in for "${streakTitle}" (${checkInDate})`,
+          subapp: 'streaks'
+        });
       }
-    } catch (err) {
-      console.error('Error submitting checkin:', err);
-      alert('Network error submitting check-in.');
+    } catch {
+      enqueueOfflineAction({
+        url: `/api/streaks/${streakId}/checkin`,
+        method: 'POST',
+        body: checkInPayload,
+        description: `Check-in for "${streakTitle}" (${checkInDate})`,
+        subapp: 'streaks'
+      });
     } finally {
       setSubmittingCheckIn(false);
     }
@@ -510,23 +580,59 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
   // Delete a specific check-in
   const handleDeleteCheckIn = async (streakId: string, date: string) => {
     if (!window.confirm(`Delete check-in for date ${date}?`)) return;
+
+    // Optimistically update local state immediately
+    setStreaks(prev => {
+      const updated = prev.map(s => {
+        if (s.id !== streakId) return s;
+        return {
+          ...s,
+          checkIns: s.checkIns.filter(c => c.date !== date)
+        };
+      });
+      localStorage.setItem('shudkara_streaks_cache', JSON.stringify(updated));
+      return updated;
+    });
+
+    setCalendarStreak(prev => {
+      if (!prev || prev.id !== streakId) return prev;
+      return {
+        ...prev,
+        checkIns: prev.checkIns.filter(c => c.date !== date)
+      };
+    });
+
+    if (proofModalData?.checkIn.date === date) {
+      setProofModalData(null);
+    }
+
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: `/api/streaks/${streakId}/checkin/${date}`,
+        method: 'DELETE',
+        description: `Delete check-in for date ${date}`,
+        subapp: 'streaks'
+      });
+      return;
+    }
+
     try {
       const res = await fetch(`/api/streaks/${streakId}/checkin/${date}`, { method: 'DELETE' });
-      if (res.ok) {
-        await fetchStreaks();
-        setCalendarStreak(prev => {
-          if (!prev || prev.id !== streakId) return prev;
-          return {
-            ...prev,
-            checkIns: prev.checkIns.filter(c => c.date !== date)
-          };
+      if (!res.ok) {
+        enqueueOfflineAction({
+          url: `/api/streaks/${streakId}/checkin/${date}`,
+          method: 'DELETE',
+          description: `Delete check-in for date ${date}`,
+          subapp: 'streaks'
         });
-        if (proofModalData?.checkIn.date === date) {
-          setProofModalData(null);
-        }
       }
     } catch {
-      alert('Failed to delete check-in.');
+      enqueueOfflineAction({
+        url: `/api/streaks/${streakId}/checkin/${date}`,
+        method: 'DELETE',
+        description: `Delete check-in for date ${date}`,
+        subapp: 'streaks'
+      });
     }
   };
 
@@ -545,6 +651,43 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       icon: 'Flame'
     };
 
+    const newOrUpdatedStreak: StreakItem = editingStreak ? {
+      ...editingStreak,
+      ...payload,
+      updatedAt: new Date().toISOString()
+    } : {
+      id: `streak_${Date.now()}`,
+      ...payload,
+      freezesRemaining: 2,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      checkIns: []
+    };
+
+    setStreaks(prev => {
+      const index = prev.findIndex(s => s.id === newOrUpdatedStreak.id);
+      const next = index >= 0
+        ? prev.map(s => (s.id === newOrUpdatedStreak.id ? newOrUpdatedStreak : s))
+        : [newOrUpdatedStreak, ...prev];
+      localStorage.setItem('shudkara_streaks_cache', JSON.stringify(next));
+      return next;
+    });
+
+    setEditingStreak(null);
+    setIsNewStreakOpen(false);
+    resetForm();
+
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: editingStreak ? `/api/streaks/${editingStreak.id}` : '/api/streaks',
+        method: editingStreak ? 'PUT' : 'POST',
+        body: payload,
+        description: `Save streak "${payload.title}"`,
+        subapp: 'streaks'
+      });
+      return;
+    }
+
     try {
       if (editingStreak) {
         const res = await fetch(`/api/streaks/${editingStreak.id}`, {
@@ -552,9 +695,14 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (res.ok) {
-          setEditingStreak(null);
-          await fetchStreaks();
+        if (!res.ok) {
+          enqueueOfflineAction({
+            url: `/api/streaks/${editingStreak.id}`,
+            method: 'PUT',
+            body: payload,
+            description: `Save streak "${payload.title}"`,
+            subapp: 'streaks'
+          });
         }
       } else {
         const res = await fetch('/api/streaks', {
@@ -562,26 +710,63 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        if (res.ok) {
-          setIsNewStreakOpen(false);
-          await fetchStreaks();
+        if (!res.ok) {
+          enqueueOfflineAction({
+            url: '/api/streaks',
+            method: 'POST',
+            body: payload,
+            description: `Save streak "${payload.title}"`,
+            subapp: 'streaks'
+          });
         }
       }
-      resetForm();
-    } catch (err) {
-      alert('Failed to save streak.');
+    } catch {
+      enqueueOfflineAction({
+        url: editingStreak ? `/api/streaks/${editingStreak.id}` : '/api/streaks',
+        method: editingStreak ? 'PUT' : 'POST',
+        body: payload,
+        description: `Save streak "${payload.title}"`,
+        subapp: 'streaks'
+      });
     }
   };
 
   const handleDeleteStreak = async (id: string, title: string) => {
     if (!window.confirm(`Are you sure you want to delete streak "${title}" and all its history?`)) return;
+
+    setStreaks(prev => {
+      const next = prev.filter(s => s.id !== id);
+      localStorage.setItem('shudkara_streaks_cache', JSON.stringify(next));
+      return next;
+    });
+
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: `/api/streaks/${id}`,
+        method: 'DELETE',
+        description: `Delete streak "${title}"`,
+        subapp: 'streaks'
+      });
+      return;
+    }
+
     try {
       const res = await fetch(`/api/streaks/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setStreaks(prev => prev.filter(s => s.id !== id));
+      if (!res.ok) {
+        enqueueOfflineAction({
+          url: `/api/streaks/${id}`,
+          method: 'DELETE',
+          description: `Delete streak "${title}"`,
+          subapp: 'streaks'
+        });
       }
-    } catch (err) {
-      alert('Failed to delete streak.');
+    } catch {
+      enqueueOfflineAction({
+        url: `/api/streaks/${id}`,
+        method: 'DELETE',
+        description: `Delete streak "${title}"`,
+        subapp: 'streaks'
+      });
     }
   };
 

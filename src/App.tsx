@@ -26,6 +26,7 @@ import { SavePost } from './components/SavePost';
 import { Streaks } from './components/Streaks';
 import { Notes } from './components/Notes';
 import { CommandPalette } from './components/CommandPalette';
+import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
 import { TermsOfService } from './components/TermsOfService';
 
@@ -261,6 +262,20 @@ function App() {
   // Independent Modular REST Data Hydration on Startup
   useEffect(() => {
     loadAllModuleData(authToken);
+  }, [authToken]);
+
+  // Refresh modules when offline queue finishes syncing
+  useEffect(() => {
+    const handleSyncFinished = (e: any) => {
+      const synced = e.detail?.synced || 0;
+      if (synced > 0) {
+        loadAllModuleData(authToken);
+      }
+    };
+    window.addEventListener('shudkara:sync-completed', handleSyncFinished);
+    return () => {
+      window.removeEventListener('shudkara:sync-completed', handleSyncFinished);
+    };
   }, [authToken]);
 
   const loadAllModuleData = async (token: string | null) => {
@@ -650,6 +665,9 @@ function App() {
         setActiveTab={setActiveTab}
         authToken={authToken}
       />
+
+      {/* Offline Status & Background Sync Outbox Indicator */}
+      <OfflineSyncIndicator />
 
     </div>
   );
