@@ -4,7 +4,7 @@ import {
   RefreshCw, Clock, AlertTriangle, Filter,
   Trash2, X, DollarSign, Layers, ChevronRight,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
-  Users, CheckCircle2, Edit2, Tag
+  Users, CheckCircle2, Edit2, Tag, Bell, BellRing, Send
 } from 'lucide-react';
 
 export interface FinanceCategory {
@@ -71,6 +71,8 @@ export interface LendItem {
   expectedReturnDate: string;
   isRotation: boolean;
   status: 'active' | 'partially_returned' | 'returned' | 'forgiven';
+  reminderSent?: boolean;
+  reminderSentAt?: string;
   notes?: string;
   repayments: RepaymentRecord[];
   createdAt: string;
@@ -286,14 +288,108 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
+  // Notification states
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'default';
+  });
+  const [notiBannerMsg, setNotiBannerMsg] = useState<string | null>(null);
+
   useEffect(() => {
     fetchAllData();
   }, [authToken]);
 
+  // Request Notification Permission
+  const requestNotificationPermission = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      alert('System notifications are not supported on this device/browser.');
+      return;
+    }
+    try {
+      const perm = await Notification.requestPermission();
+      setNotificationPermission(perm);
+      if (perm === 'granted') {
+        setNotiBannerMsg('Due date notifications enabled! Checking return alerts...');
+        setTimeout(() => setNotiBannerMsg(null), 3000);
+        checkAndSendDueNotifications(true);
+      } else {
+        alert('Notification permission was not granted. Please allow notifications in your browser settings.');
+      }
+    } catch (err: any) {
+      console.error('Notification permission error:', err);
+    }
+  };
+
+  // Check & Trigger System Notifications for Overdue Return Dates
+  const checkAndSendDueNotifications = (isManualTrigger = false) => {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission !== 'granted') return;
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let count = 0;
+
+    // 1. Money Lent: check if borrower's return time expired or due today
+    lends.forEach(l => {
+      if (l.status === 'returned' || l.status === 'forgiven') return;
+      if (!l.expectedReturnDate) return;
+      if (l.expectedReturnDate <= todayStr) {
+        const key = `finance_noti_lend_${l.id}_${todayStr}`;
+        if (isManualTrigger || !sessionStorage.getItem(key)) {
+          sessionStorage.setItem(key, 'true');
+          const diffDays = Math.round((new Date(l.expectedReturnDate).getTime() - new Date(todayStr).getTime()) / (1000 * 60 * 60 * 24));
+          const dueMsg = diffDays < 0 ? `Overdue by ${Math.abs(diffDays)} day(s)!` : 'Due today!';
+          new Notification(`⚠️ Return Overdue: ${l.personName}`, {
+            body: `${l.personName} was expected to return Rs. ${l.amount.toLocaleString()} on ${l.expectedReturnDate}. ${dueMsg}`,
+            icon: '/favicon.ico'
+          });
+          count++;
+        }
+      }
+    });
+
+    // 2. Money Taken (Borrowed): remind user if expected return date expired or due today
+    borrows.forEach(b => {
+      if (b.status === 'repaid') return;
+      if (!b.expectedReturnDate) return;
+      if (b.expectedReturnDate <= todayStr) {
+        const key = `finance_noti_borrow_${b.id}_${todayStr}`;
+        if (isManualTrigger || !sessionStorage.getItem(key)) {
+          sessionStorage.setItem(key, 'true');
+          const diffDays = Math.round((new Date(b.expectedReturnDate).getTime() - new Date(todayStr).getTime()) / (1000 * 60 * 60 * 24));
+          const dueMsg = diffDays < 0 ? `Expired ${Math.abs(diffDays)} day(s) ago!` : 'Due today!';
+          new Notification(`⏰ Debt Repayment Due: ${b.personName}`, {
+            body: `Reminder: You were expected to return Rs. ${b.amount.toLocaleString()} to ${b.personName} on ${b.expectedReturnDate}. ${dueMsg}`,
+            icon: '/favicon.ico'
+          });
+          count++;
+        }
+      }
+    });
+
+    if (isManualTrigger) {
+      if (count > 0) {
+        setNotiBannerMsg(`Sent ${count} return deadline alert(s) to system notification!`);
+      } else {
+        setNotiBannerMsg('All return deadlines are up to date! No overdue lends or borrows.');
+      }
+      setTimeout(() => setNotiBannerMsg(null), 4000);
+    }
+  };
+
+  // Run notification check on data load
+  useEffect(() => {
+    if (lends.length > 0 || borrows.length > 0) {
+      checkAndSendDueNotifications(false);
+    }
+  }, [lends, borrows]);
+
   // Handle Save Category
   const handleSaveCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!categoryForm.name.trim()) return;
+    const newName = categoryForm.name.trim();
+    if (!newName) return;
 
     try {
       const res = await fetch(
@@ -302,7 +398,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           method: categoryForm.id ? 'PUT' : 'POST',
           headers: authHeaders,
           body: JSON.stringify({
-            name: categoryForm.name.trim(),
+            name: newName,
             color: categoryForm.color || '#6366f1'
           })
         }
@@ -310,6 +406,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       if (res.ok) {
         setIsCategoryModalOpen(false);
         setCategoryForm({ id: '', name: '', color: '#6366f1' });
+        // Make newly created category instantly selected in expense prompt
+        setExpenseForm(prev => ({ ...prev, category: newName }));
         fetchAllData();
       } else {
         const errData = await res.json();
@@ -632,9 +730,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     const amountNum = parseFloat(lendForm.amount);
     if (!lendForm.personName.trim() || isNaN(amountNum) || amountNum <= 0) return;
 
+    // Contact is automatically retrieved from Person / User management
+    const personRecord = people.find(p => p.name.toLowerCase() === lendForm.personName.trim().toLowerCase());
     const payload = {
       personName: lendForm.personName.trim(),
-      contact: lendForm.contact.trim(),
+      contact: personRecord?.contact || '',
       amount: amountNum,
       lentDate: lendForm.lentDate,
       expectedReturnDate: lendForm.expectedReturnDate,
@@ -664,9 +764,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     const amountNum = parseFloat(borrowForm.amount);
     if (!borrowForm.personName.trim() || isNaN(amountNum) || amountNum <= 0) return;
 
+    // Contact is automatically retrieved from Person / User management
+    const personRecord = people.find(p => p.name.toLowerCase() === borrowForm.personName.trim().toLowerCase());
     const payload = {
       personName: borrowForm.personName.trim(),
-      contact: borrowForm.contact.trim(),
+      contact: personRecord?.contact || '',
       amount: amountNum,
       borrowedDate: borrowForm.borrowedDate,
       expectedReturnDate: borrowForm.expectedReturnDate,
@@ -687,6 +789,49 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save borrow error:', err);
+    }
+  };
+
+  // Toggle Reminder Status on Lend Item (with Check Mark)
+  const handleToggleReminder = async (lend: LendItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const newStatus = !lend.reminderSent;
+    setLends(prev => prev.map(l => l.id === lend.id ? { ...l, reminderSent: newStatus, reminderSentAt: newStatus ? new Date().toISOString() : undefined } : l));
+    try {
+      const res = await fetch(`/api/finance/lends/${lend.id}/remind`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ reminderSent: newStatus })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setLends(prev => prev.map(l => l.id === lend.id ? updated : l));
+      }
+    } catch (err) {
+      console.error('Toggle reminder error:', err);
+    }
+  };
+
+  // Send Reminder Prompt (WhatsApp / SMS / Clipboard + Auto-check mark)
+  const handleSendReminderPrompt = async (lend: LendItem) => {
+    const person = people.find(p => p.name.toLowerCase() === lend.personName.toLowerCase());
+    const phone = person?.contact || lend.contact || '';
+    const cleanPhone = phone.replace(/[^\d+]/g, '');
+    const reminderText = `Hi ${lend.personName}, friendly reminder regarding the Rs. ${lend.amount.toLocaleString()} return expected on ${lend.expectedReturnDate || 'soon'}.`;
+
+    // Automatically mark reminder as sent
+    await handleToggleReminder({ ...lend, reminderSent: false });
+
+    if (cleanPhone) {
+      const waUrl = `https://wa.me/${cleanPhone.replace('+', '')}?text=${encodeURIComponent(reminderText)}`;
+      window.open(waUrl, '_blank');
+    } else {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(reminderText);
+        alert(`Copied polite reminder message to clipboard for ${lend.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
+      } else {
+        alert(`Reminder message for ${lend.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
+      }
     }
   };
 
@@ -847,6 +992,26 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             New Expense Set
           </button>
 
+          {/* Notification Alerts Status / Trigger */}
+          {notificationPermission !== 'granted' ? (
+            <button
+              onClick={requestNotificationPermission}
+              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+              title="Enable notifications for overdue returns and borrow deadlines"
+            >
+              <Bell className="w-4 h-4" />
+              Enable Due Alerts
+            </button>
+          ) : (
+            <button
+              onClick={() => checkAndSendDueNotifications(true)}
+              className="p-2 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition"
+              title="System Notifications Active: Click to check & send overdue alerts now"
+            >
+              <BellRing className="w-4 h-4" />
+            </button>
+          )}
+
           <button
             onClick={fetchAllData}
             title="Refresh Data"
@@ -856,6 +1021,19 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           </button>
         </div>
       </div>
+
+      {/* Toast / Notification Banner */}
+      {notiBannerMsg && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl text-xs font-semibold text-indigo-900 flex items-center justify-between shadow-xs">
+          <span className="flex items-center gap-2">
+            <BellRing className="w-4 h-4 text-indigo-600 shrink-0" />
+            {notiBannerMsg}
+          </span>
+          <button onClick={() => setNotiBannerMsg(null)} className="text-slate-400 hover:text-slate-600 p-1">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Sub-Navigation Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-slate-200 pb-2">
@@ -1542,7 +1720,38 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     </div>
 
                     {!isComplete && (
-                      <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <div className="pt-3 border-t border-slate-100 space-y-2">
+                        {/* Reminder Controls */}
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleReminder(item, e)}
+                            className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition ${
+                              item.reminderSent
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                            }`}
+                            title="Toggle reminder checkmark"
+                          >
+                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition ${
+                              item.reminderSent ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'
+                            }`}>
+                              {item.reminderSent && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                            </span>
+                            {item.reminderSent ? 'Reminder Sent' : 'Mark Reminded'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleSendReminderPrompt(item)}
+                            className="py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center gap-1 shadow-xs"
+                            title="Open WhatsApp or copy polite reminder text"
+                          >
+                            <Send className="w-3 h-3" />
+                            Send Reminder
+                          </button>
+                        </div>
+
                         <button
                           onClick={() => {
                             setRepayTarget({ type: 'lend', item });
@@ -1973,13 +2182,25 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Category</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-bold text-slate-700">Category</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCategoryForm({ id: '', name: '', color: '#6366f1' });
+                        setIsCategoryModalOpen(true);
+                      }}
+                      className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5"
+                    >
+                      <Plus className="w-3 h-3" /> New
+                    </button>
+                  </div>
                   <select
                     value={expenseForm.category}
                     onChange={e => setExpenseForm(prev => ({ ...prev, category: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
                   >
-                    {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    {effectiveCategories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
 
@@ -2469,19 +2690,6 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Contact (Phone/Email)</label>
-                  <input
-                    type="text"
-                    placeholder="Optional phone number"
-                    value={lendForm.contact}
-                    onChange={e => setLendForm(prev => ({ ...prev, contact: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
                   <label className="block font-bold text-slate-700 mb-1">Lent Date</label>
                   <input
                     type="date"
@@ -2491,15 +2699,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Expected Return Date</label>
-                  <input
-                    type="date"
-                    value={lendForm.expectedReturnDate}
-                    onChange={e => setLendForm(prev => ({ ...prev, expectedReturnDate: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Expected Return Date</label>
+                <input
+                  type="date"
+                  value={lendForm.expectedReturnDate}
+                  onChange={e => setLendForm(prev => ({ ...prev, expectedReturnDate: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
 
               <label className="flex items-center gap-2 cursor-pointer p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
@@ -2619,19 +2828,6 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   />
                 </div>
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Contact (Phone/Email)</label>
-                  <input
-                    type="text"
-                    placeholder="Optional phone number"
-                    value={borrowForm.contact}
-                    onChange={e => setBorrowForm(prev => ({ ...prev, contact: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
                   <label className="block font-bold text-slate-700 mb-1">Borrowed Date</label>
                   <input
                     type="date"
@@ -2641,15 +2837,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
                   />
                 </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Expected Return Date</label>
-                  <input
-                    type="date"
-                    value={borrowForm.expectedReturnDate}
-                    onChange={e => setBorrowForm(prev => ({ ...prev, expectedReturnDate: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Expected Return Date</label>
+                <input
+                  type="date"
+                  value={borrowForm.expectedReturnDate}
+                  onChange={e => setBorrowForm(prev => ({ ...prev, expectedReturnDate: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
               </div>
 
               <label className="flex items-center gap-2 cursor-pointer p-2.5 bg-slate-50 border border-slate-200 rounded-xl">

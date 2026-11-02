@@ -92,6 +92,8 @@ export interface LendItem {
   expectedReturnDate: string;
   isRotation: boolean; // Short-term temporary lend (<24h)
   status: 'active' | 'partially_returned' | 'returned' | 'forgiven';
+  reminderSent?: boolean;
+  reminderSentAt?: string;
   notes?: string;
   repayments: RepaymentRecord[];
   createdAt: string;
@@ -112,6 +114,8 @@ export interface BorrowItem {
   createdAt: string;
   updatedAt: string;
 }
+
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function migratePeopleAndCategories(db: any) {
   const peopleCol = db.collection('finance_people');
@@ -513,6 +517,19 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
 
       if (method === 'POST') {
         const body: any = await request.json().catch(() => ({}));
+        // Check if this is a reminder toggle sub-action
+        if (resourceId && subAction === 'remind') {
+          const lend = await lendsCol.findOne({ id: resourceId });
+          if (!lend) return { status: 404, jsonBody: { error: 'Lend record not found.' } };
+          const reminderSent = body.reminderSent !== undefined ? Boolean(body.reminderSent) : !lend.reminderSent;
+          await lendsCol.updateOne(
+            { id: resourceId },
+            { $set: { reminderSent, reminderSentAt: reminderSent ? new Date().toISOString() : null, updatedAt: new Date().toISOString() } }
+          );
+          const updated = await lendsCol.findOne({ id: resourceId });
+          return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
+        }
+
         // Check if this is a repayment sub-action
         if (resourceId && subAction === 'repay') {
           const lend = await lendsCol.findOne({ id: resourceId });
@@ -544,15 +561,32 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           return { status: 400, jsonBody: { error: 'Person name and valid amount are required.' } };
         }
         const now = new Date().toISOString();
+        const pName = body.personName.trim();
+        let contact = (body.contact || '').trim();
+        const existingPerson = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(pName)}$`, 'i') } });
+        if (!contact && existingPerson?.contact) {
+          contact = existingPerson.contact;
+        } else if (!existingPerson) {
+          await peopleCol.insertOne({
+            id: crypto.randomUUID(),
+            name: pName,
+            contact,
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now
+          });
+        }
+
         const newLend: LendItem = {
           id: body.id || crypto.randomUUID(),
-          personName: body.personName.trim(),
-          contact: body.contact || '',
+          personName: pName,
+          contact,
           amount,
           lentDate: body.lentDate || now.slice(0, 10),
           expectedReturnDate: body.expectedReturnDate || '',
           isRotation: Boolean(body.isRotation),
           status: 'active',
+          reminderSent: false,
           notes: body.notes || '',
           repayments: [],
           createdAt: now,
@@ -573,6 +607,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         if (body.expectedReturnDate !== undefined) updates.expectedReturnDate = body.expectedReturnDate;
         if (body.isRotation !== undefined) updates.isRotation = Boolean(body.isRotation);
         if (body.status !== undefined) updates.status = body.status;
+        if (body.reminderSent !== undefined) updates.reminderSent = Boolean(body.reminderSent);
+        if (body.reminderSentAt !== undefined) updates.reminderSentAt = body.reminderSentAt;
         if (body.notes !== undefined) updates.notes = body.notes;
 
         await lendsCol.updateOne({ id: resourceId }, { $set: updates });
@@ -628,10 +664,26 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           return { status: 400, jsonBody: { error: 'Lender name and valid amount are required.' } };
         }
         const now = new Date().toISOString();
+        const pName = body.personName.trim();
+        let contact = (body.contact || '').trim();
+        const existingPerson = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(pName)}$`, 'i') } });
+        if (!contact && existingPerson?.contact) {
+          contact = existingPerson.contact;
+        } else if (!existingPerson) {
+          await peopleCol.insertOne({
+            id: crypto.randomUUID(),
+            name: pName,
+            contact,
+            isDefault: false,
+            createdAt: now,
+            updatedAt: now
+          });
+        }
+
         const newBorrow: BorrowItem = {
           id: body.id || crypto.randomUUID(),
-          personName: body.personName.trim(),
-          contact: body.contact || '',
+          personName: pName,
+          contact,
           amount,
           borrowedDate: body.borrowedDate || now.slice(0, 10),
           expectedReturnDate: body.expectedReturnDate || '',
