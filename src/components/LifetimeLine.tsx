@@ -4,7 +4,7 @@ import {
   Film, AlertCircle, 
   Loader2, Sparkles, BookOpen, Clock, Calendar,
   ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal,
-  Camera, X, RefreshCw, Share2, Check
+  Camera, X, RefreshCw, Share2, Check, MessageCircle, ExternalLink
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -23,6 +23,19 @@ export interface MediaItem {
   thumbnailUrl: string;
 }
 
+export interface PostReaction {
+  emoji: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface PostComment {
+  id: string;
+  name: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface Post {
   _id: string;
   title?: string;
@@ -32,6 +45,8 @@ export interface Post {
   category: string;
   tags: string[];
   media?: MediaItem[];
+  reactions?: PostReaction[];
+  comments?: PostComment[];
 }
 
 interface LifetimeLineProps {
@@ -1377,6 +1392,15 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   const currentMediaIdx = mediaCount > 0 ? momentPhotoIndex % mediaCount : 0;
   const currentMedia = post.media && post.media.length > 0 ? post.media[currentMediaIdx] : null;
 
+  // Social Engagement State on Card
+  const [showComments, setShowComments] = useState(false);
+  const reactions = post.reactions || [];
+  const comments = post.comments || [];
+  const emojiCounts: Record<string, number> = {};
+  reactions.forEach(r => {
+    emojiCounts[r.emoji] = (emojiCounts[r.emoji] || 0) + 1;
+  });
+
   if (isEditing) {
     return (
       <div className="space-y-4 animate-in fade-in duration-150">
@@ -1846,6 +1870,95 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
               #{t}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Social Engagement Summary Bar: Likes, Emojis & Comments */}
+      <div className="pt-2 border-t border-slate-100/90 flex flex-wrap items-center justify-between gap-2 text-xs">
+        {/* Reaction Emoji Badges */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {Object.entries(emojiCounts).length > 0 ? (
+            Object.entries(emojiCounts).map(([emoji, count]) => (
+              <span
+                key={emoji}
+                title={`Reacted by: ${reactions.filter(r => r.emoji === emoji).map(r => r.name).join(', ')}`}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold"
+              >
+                <span>{emoji}</span>
+                <span className="text-[11px] font-semibold">{count}</span>
+              </span>
+            ))
+          ) : (
+            <span className="text-[11px] text-slate-400 italic">No reactions yet</span>
+          )}
+          {reactions.length > 0 && (
+            <span className="text-[10px] text-slate-400 pl-1 hidden sm:inline truncate max-w-xs" title={reactions.map(r => r.name).join(', ')}>
+              ({Array.from(new Set(reactions.map(r => r.name))).join(', ')})
+            </span>
+          )}
+        </div>
+
+        {/* Comments Count & Public Link */}
+        <div className="flex items-center gap-2 ml-auto">
+          {comments.length > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowComments(prev => !prev)}
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition flex items-center gap-1.5 shadow-2xs ${
+                showComments
+                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                  : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-blue-600" />
+              <span>{comments.length} {comments.length === 1 ? 'Comment' : 'Comments'}</span>
+            </button>
+          ) : (
+            <span className="text-[11px] text-slate-400 italic flex items-center gap-1">
+              <MessageCircle className="w-3.5 h-3.5 text-slate-300" />
+              <span>0 comments</span>
+            </span>
+          )}
+
+          <a
+            href={`/?timelinePost=${post._id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] font-bold text-slate-500 hover:text-blue-600 flex items-center gap-1 px-1.5 py-1 rounded-lg hover:bg-slate-50 transition"
+            title="Open Public Social Media View"
+          >
+            <span>Public View</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+      </div>
+
+      {/* Collapsible Comments List */}
+      {showComments && comments.length > 0 && (
+        <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-200/80 space-y-2 animate-in fade-in duration-150">
+          <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+            Public Comments ({comments.length}):
+          </span>
+          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            {comments.map(c => (
+              <div key={c.id} className="p-2.5 bg-white rounded-xl border border-slate-100 text-xs space-y-0.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <span className="font-extrabold text-slate-800 flex items-center gap-1">
+                    <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-700 font-bold text-[9px] flex items-center justify-center uppercase">
+                      {c.name.slice(0, 1)}
+                    </span>
+                    {c.name}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {new Date(c.createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' })} at {new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                </div>
+                <p className="text-slate-600 pl-5 text-[11px] whitespace-pre-wrap font-medium">
+                  {c.text}
+                </p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
