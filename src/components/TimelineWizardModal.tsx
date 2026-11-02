@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Camera, Upload, Trash2, ArrowRight, ArrowLeft, Check, Sparkles, 
-  Calendar, Eye, Image as ImageIcon, Video, Film,
-  Clock, RotateCcw, AlertCircle, Loader2, ChevronLeft, ChevronRight,
-  Files, FileText, Plus, ChevronDown
+  Calendar, Eye, Image as ImageIcon, Film,
+  Clock, AlertCircle, ChevronLeft, ChevronRight,
+  Files, FileText, Plus, ChevronDown, GripVertical
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -36,25 +36,27 @@ export interface TimelineDraftMeta {
 interface TimelineWizardModalProps {
   onClose: () => void;
   onSubmit: (postData: {
+    draftId: string;
     title: string;
     content: string;
     category: string;
     tags: string[];
     timestamp: string;
     mediaFiles: DraftMediaItem[];
-  }) => Promise<boolean>;
+  }) => void;
   categoriesList?: string[];
   tagsList?: string[];
+  initialDraftId?: string;
 }
 
-const DRAFTS_LIST_KEY = 'shudkara_timeline_drafts_v2';
-const ACTIVE_DRAFT_ID_KEY = 'shudkara_timeline_active_draft_id_v2';
-const LEGACY_DRAFT_META_KEY = 'shudkara_timeline_draft_meta_v1';
-const IDB_NAME = 'shudkara_timeline_db';
-const IDB_STORE = 'draft_media';
+export const DRAFTS_LIST_KEY = 'shudkara_timeline_drafts_v2';
+export const ACTIVE_DRAFT_ID_KEY = 'shudkara_timeline_active_draft_id_v2';
+export const LEGACY_DRAFT_META_KEY = 'shudkara_timeline_draft_meta_v1';
+export const IDB_NAME = 'shudkara_timeline_db';
+export const IDB_STORE = 'draft_media';
 
 // IndexedDB Helper for Large Media Drafts
-async function openDraftDb(): Promise<IDBDatabase> {
+export async function openDraftDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(IDB_NAME, 1);
     request.onupgradeneeded = () => {
@@ -68,7 +70,7 @@ async function openDraftDb(): Promise<IDBDatabase> {
   });
 }
 
-async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
+export async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
   try {
     const db = await openDraftDb();
     const tx = db.transaction(IDB_STORE, 'readwrite');
@@ -79,7 +81,7 @@ async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
   }
 }
 
-async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]> {
+export async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]> {
   try {
     const db = await openDraftDb();
     return new Promise((resolve) => {
@@ -109,13 +111,100 @@ async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]> {
   }
 }
 
-async function clearDraftFromDb(draftId: string) {
+export async function clearDraftFromDb(draftId: string) {
   try {
     const db = await openDraftDb();
     const tx = db.transaction(IDB_STORE, 'readwrite');
     tx.objectStore(IDB_STORE).delete(`media_${draftId}`);
     tx.objectStore(IDB_STORE).delete('current_draft_media');
   } catch {}
+}
+
+export async function finalizeSuccessfulDraftUpload(draftId: string) {
+  try {
+    await clearDraftFromDb(draftId);
+    const raw = localStorage.getItem(DRAFTS_LIST_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        const updated = parsed.filter((d: any) => d.id !== draftId);
+        localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+        if (updated.length > 0) {
+          localStorage.setItem(ACTIVE_DRAFT_ID_KEY, updated[0].id);
+        } else {
+          localStorage.removeItem(ACTIVE_DRAFT_ID_KEY);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Error clearing successful draft:', e);
+  }
+}
+
+// Client-side image optimization helper for high-res photos
+async function processSelectedFile(file: File): Promise<DraftMediaItem> {
+  const mimeType = file.type || 'image/jpeg';
+  // If video or GIF, preserve raw format
+  if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string });
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // If image is larger than 1.5MB, scale down on canvas to max 2560px
+  if (mimeType.startsWith('image/') && file.size > 1.5 * 1024 * 1024) {
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      const img = new Image();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = dataUrl;
+      });
+
+      const maxDim = 2560;
+      let width = img.naturalWidth || img.width;
+      let height = img.naturalHeight || img.height;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.88);
+        return { name: file.name.replace(/\.[^.]+$/, '.jpg'), type: 'image/jpeg', base64: compressedBase64 };
+      }
+    } catch (e) {
+      console.warn('Canvas optimization fallback to original:', e);
+    }
+  }
+
+  // Default raw reader
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string });
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function getStoredDrafts(): TimelineDraftMeta[] {
@@ -137,55 +226,63 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   onClose,
   onSubmit,
   categoriesList = [],
-  tagsList = []
+  tagsList = [],
+  initialDraftId
 }) => {
-  // Wizard Steps: 1 = Media Studio, 2 = Story Details, 3 = Live Feed Preview
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
-
-  // Drafts state
-  const [draftsList, setDraftsList] = useState<TimelineDraftMeta[]>(() => getStoredDrafts());
+  // Multiple Drafts State
+  const [draftsList, setDraftsList] = useState<TimelineDraftMeta[]>(getStoredDrafts);
   const [activeDraftId, setActiveDraftId] = useState<string>(() => {
-    return localStorage.getItem(ACTIVE_DRAFT_ID_KEY) || generateDraftId();
+    if (initialDraftId) return initialDraftId;
+    const storedActive = localStorage.getItem(ACTIVE_DRAFT_ID_KEY);
+    if (storedActive) return storedActive;
+    const existing = getStoredDrafts();
+    if (existing.length > 0) return existing[0].id;
+    return generateDraftId();
   });
   const [showDraftsMenu, setShowDraftsMenu] = useState(false);
+  const [hasDraftLoaded, setHasDraftLoaded] = useState(false);
+  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
 
-  // Form states
+  // Wizard Steps: 1: Media -> 2: Details -> 3: Preview
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+
+  // Story Details Form States
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState('General');
   const [rawTags, setRawTags] = useState('');
-  const [timestamp, setTimestamp] = useState(new Date().toISOString().substring(0, 16));
+  
+  // Date & Time states
+  const [timestamp, setTimestamp] = useState<string>(() => {
+    const d = new Date();
+    return d.toISOString().substring(0, 16);
+  });
   const [dateMode, setDateMode] = useState<'AD' | 'BS'>('AD');
+  
+  // Bikram Sambat specific selectors
+  const [formBsYear, setFormBsYear] = useState<number>(() => adToBs(new Date()).year);
+  const [formBsMonth, setFormBsMonth] = useState<number>(() => adToBs(new Date()).month);
+  const [formBsDay, setFormBsDay] = useState<number>(() => adToBs(new Date()).day);
 
-  // BS state
-  const initialBs = adToBs(new Date());
-  const [formBsYear, setFormBsYear] = useState<number>(initialBs.year);
-  const [formBsMonth, setFormBsMonth] = useState<number>(initialBs.month);
-  const [formBsDay, setFormBsDay] = useState<number>(initialBs.day);
-
-  // Media
+  // Media attachments state
   const [selectedFiles, setSelectedFiles] = useState<DraftMediaItem[]>([]);
   const [showCamera, setShowCamera] = useState(false);
   const [previewMediaIndex, setPreviewMediaIndex] = useState<number | null>(null);
 
-  // Status
-  const [submitting, setSubmitting] = useState(false);
+  // Drag and drop reordering states
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  // Submission & feedback states
   const [errorMsg, setErrorMsg] = useState('');
-  const [hasDraftLoaded, setHasDraftLoaded] = useState(false);
-  const [lastSavedTime, setLastSavedTime] = useState<string | null>(null);
-
-  // Preview step snap page index
-  const [previewSnapIndex, setPreviewSnapIndex] = useState(0);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Load Draft on Mount or ID Change ─────────────────────────────────────
-  const loadDraftById = async (targetDraftId: string) => {
+  // ── Load Draft by ID ───────────────────────────────────────────────────
+  const loadDraftById = async (draftId: string) => {
     setHasDraftLoaded(false);
     try {
       const stored = getStoredDrafts();
-      const existing = stored.find(d => d.id === targetDraftId);
-
+      const existing = stored.find(d => d.id === draftId);
       if (existing) {
         setTitle(existing.title || '');
         setContent(existing.content || '');
@@ -194,9 +291,9 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         if (existing.timestamp) {
           setTimestamp(existing.timestamp);
           const bs = adToBs(new Date(existing.timestamp));
-          setFormBsYear(bs.year);
-          setFormBsMonth(bs.month);
-          setFormBsDay(bs.day);
+          setFormBsYear(existing.formBsYear || bs.year);
+          setFormBsMonth(existing.formBsMonth || bs.month);
+          setFormBsDay(existing.formBsDay || bs.day);
         }
         if (existing.dateMode) setDateMode(existing.dateMode);
         if (existing.currentStep) setCurrentStep(existing.currentStep);
@@ -259,7 +356,6 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         updatedAt: Date.now()
       };
 
-      // Only save non-empty drafts
       const isMeaningful = title.trim() || content.trim() || selectedFiles.length > 0;
       if (isMeaningful) {
         setDraftsList(prev => {
@@ -277,7 +373,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     return () => clearTimeout(timer);
   }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
 
-  // Handle Create New Draft
+  // Create New Draft
   const handleCreateNewDraft = () => {
     const newId = generateDraftId();
     setTitle('');
@@ -298,7 +394,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     setShowDraftsMenu(false);
   };
 
-  // Handle Switch Draft
+  // Switch Draft
   const handleSwitchDraft = (targetId: string) => {
     if (targetId === activeDraftId) {
       setShowDraftsMenu(false);
@@ -309,7 +405,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     setShowDraftsMenu(false);
   };
 
-  // Handle Delete Draft
+  // Delete Draft
   const handleDeleteDraft = async (targetId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!window.confirm('Delete this draft permanently?')) return;
@@ -326,12 +422,6 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         handleCreateNewDraft();
       }
     }
-  };
-
-  // Handle Discard Current Draft
-  const handleDiscardCurrentDraft = async () => {
-    if (!window.confirm('Discard current draft? All unsaved text and attached snaps for this draft will be cleared.')) return;
-    await handleDeleteDraft(activeDraftId);
   };
 
   // Sync AD & BS dates
@@ -373,26 +463,22 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     handleAdTimestampChange(isoStr);
   };
 
-  // File Upload Handlers
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // File Upload Handlers (Handles Images, Videos, GIFs)
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
-    Array.from(files).forEach(file => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setSelectedFiles(prev => [
-          ...prev,
-          {
-            name: file.name,
-            type: file.type,
-            base64: reader.result as string
-          }
-        ]);
-      };
-      reader.readAsDataURL(file);
-    });
+    const fileList = Array.from(files);
     e.target.value = '';
+
+    for (const file of fileList) {
+      try {
+        const item = await processSelectedFile(file);
+        setSelectedFiles(prev => [...prev, item]);
+      } catch (err) {
+        console.error('Error processing file:', file.name, err);
+      }
+    }
   };
 
   const handleRemoveFile = (index: number) => {
@@ -400,45 +486,72 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     if (previewMediaIndex === index) setPreviewMediaIndex(null);
   };
 
-  // Publish Moment
-  const handlePublish = async () => {
+  // Drag and drop reordering handlers
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.setData('text/plain', String(index));
+    e.dataTransfer.effectAllowed = 'move';
+    setDraggedIdx(index);
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverIdx !== index) {
+      setDragOverIdx(index);
+    }
+  };
+
+  const handleDragLeave = () => {
+    setDragOverIdx(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    const sourceIndexStr = e.dataTransfer.getData('text/plain');
+    const sourceIndex = sourceIndexStr ? parseInt(sourceIndexStr, 10) : draggedIdx;
+    
+    if (sourceIndex !== null && sourceIndex !== undefined && !isNaN(sourceIndex) && sourceIndex !== targetIndex) {
+      setSelectedFiles(prev => {
+        const copy = [...prev];
+        const [item] = copy.splice(sourceIndex, 1);
+        copy.splice(targetIndex, 0, item);
+        return copy;
+      });
+    }
+    setDraggedIdx(null);
+    setDragOverIdx(null);
+  };
+
+  const handleMoveItem = (fromIdx: number, direction: 'left' | 'right') => {
+    const targetIdx = direction === 'left' ? fromIdx - 1 : fromIdx + 1;
+    if (targetIdx < 0 || targetIdx >= selectedFiles.length) return;
+    setSelectedFiles(prev => {
+      const copy = [...prev];
+      const [item] = copy.splice(fromIdx, 1);
+      copy.splice(targetIdx, 0, item);
+      return copy;
+    });
+  };
+
+  // Publish Moment: Immediately minimizes to background floating upload widget
+  const handlePublish = () => {
     if (!content.trim()) {
       setErrorMsg('Please write some content or note for this moment.');
       setCurrentStep(2);
       return;
     }
 
-    setSubmitting(true);
-    setErrorMsg('');
-
-    try {
-      const tagsArray = rawTags.split(',').map(t => t.trim()).filter(Boolean);
-      const success = await onSubmit({
-        title: title.trim(),
-        content: content.trim(),
-        category: category.trim() || 'General',
-        tags: tagsArray,
-        timestamp: new Date(timestamp).toISOString(),
-        mediaFiles: selectedFiles
-      });
-
-      if (success) {
-        await clearDraftFromDb(activeDraftId);
-        const updated = draftsList.filter(d => d.id !== activeDraftId);
-        setDraftsList(updated);
-        localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
-        if (updated.length > 0) {
-          localStorage.setItem(ACTIVE_DRAFT_ID_KEY, updated[0].id);
-        } else {
-          localStorage.removeItem(ACTIVE_DRAFT_ID_KEY);
-        }
-        onClose();
-      }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to publish moment.');
-    } finally {
-      setSubmitting(false);
-    }
+    const tagsArray = rawTags.split(',').map(t => t.trim()).filter(Boolean);
+    onSubmit({
+      draftId: activeDraftId,
+      title: title.trim(),
+      content: content.trim(),
+      category: category.trim() || 'General',
+      tags: tagsArray,
+      timestamp: new Date(timestamp).toISOString(),
+      mediaFiles: selectedFiles
+    });
+    onClose();
   };
 
   const currentFormBs = adToBs(timestamp);
@@ -500,81 +613,51 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                     </button>
                   </div>
 
-                  {draftsList.length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-4">No drafts saved yet. As you write, drafts are automatically saved here.</p>
-                  ) : (
-                    <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100">
-                      {draftsList.map(d => {
-                        const isActive = d.id === activeDraftId;
-                        return (
-                          <div
-                            key={d.id}
-                            onClick={() => handleSwitchDraft(d.id)}
-                            className={`p-2.5 rounded-xl cursor-pointer transition flex items-start justify-between gap-2 ${
-                              isActive ? 'bg-blue-50 border border-blue-200' : 'hover:bg-slate-50 border border-transparent'
-                            }`}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
-                                <span className={`text-xs font-bold truncate ${isActive ? 'text-blue-900' : 'text-slate-800'}`}>
-                                  {d.title || d.content.substring(0, 24) || 'Untitled Draft'}
-                                </span>
-                                {isActive && (
-                                  <span className="text-[9px] px-1 rounded bg-blue-200 text-blue-800 font-extrabold">Active</span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-slate-500 truncate mt-0.5 pl-5">
-                                {d.content || 'No text content yet'}
-                              </p>
-                              <div className="flex items-center gap-2 pl-5 text-[10px] text-slate-400 mt-1">
-                                {d.mediaCount > 0 && <span>📸 {d.mediaCount} snap(s)</span>}
-                                <span>•</span>
-                                <span>{new Date(d.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                              </div>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={(e) => handleDeleteDraft(d.id, e)}
-                              className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
-                              title="Delete this draft"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                  <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                    {draftsList.map((d) => (
+                      <div
+                        key={d.id}
+                        onClick={() => handleSwitchDraft(d.id)}
+                        className={`p-2.5 rounded-xl border text-left cursor-pointer flex items-center justify-between transition ${
+                          d.id === activeDraftId 
+                            ? 'bg-blue-50/70 border-blue-300' 
+                            : 'bg-slate-50/50 border-slate-100 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="min-w-0 pr-2">
+                          <p className="text-xs font-bold text-slate-800 truncate">
+                            {d.title || d.content?.slice(0, 30) || 'Untitled Draft'}
+                          </p>
+                          <p className="text-[10px] text-slate-400">
+                            {d.mediaCount > 0 ? `${d.mediaCount} snaps • ` : ''}{new Date(d.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteDraft(d.id, e)}
+                          className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition"
+                          title="Delete draft"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Discard current draft button */}
-            {(title || content || selectedFiles.length > 0) && (
-              <button
-                type="button"
-                onClick={handleDiscardCurrentDraft}
-                className="px-2.5 py-1 text-slate-400 hover:text-red-600 text-xs font-bold transition flex items-center gap-1"
-                title="Discard current draft"
-              >
-                <RotateCcw className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Discard</span>
-              </button>
-            )}
-
             <button
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-xl transition"
+              className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* ── Progress Step Ribbon ── */}
-        <div className="grid grid-cols-3 border-b border-slate-100 bg-white text-xs font-bold text-center shrink-0">
+        {/* ── Steps Progress Tabs ── */}
+        <div className="grid grid-cols-3 border-b border-slate-200 text-xs font-extrabold text-center bg-slate-50/40">
           <button
             type="button"
             onClick={() => setCurrentStep(1)}
@@ -585,12 +668,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
             }`}
           >
             <span className={`w-5 h-5 rounded-full text-[10px] flex items-center justify-center ${currentStep === 1 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>1</span>
-            <span>Snaps & Media</span>
-            {selectedFiles.length > 0 && (
-              <span className="px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded-full text-[10px]">
-                {selectedFiles.length}
-              </span>
-            )}
+            <span>Media Studio</span>
           </button>
 
           <button
@@ -635,8 +713,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           {currentStep === 1 && (
             <div className="space-y-6 animate-in fade-in duration-150">
               <div className="text-center space-y-1">
-                <h3 className="text-base font-extrabold text-slate-900">Attach Photos or Live Snaps</h3>
-                <p className="text-xs text-slate-500">Capture moments with full-screen camera or upload from your device gallery.</p>
+                <h3 className="text-base font-extrabold text-slate-900">Attach Photos, Videos or Live Snaps</h3>
+                <p className="text-xs text-slate-500">Capture moments with full-screen camera or upload images, videos, and GIFs.</p>
               </div>
 
               {/* Action Buttons: Live Camera vs File Upload */}
@@ -661,26 +739,29 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                     <Upload className="w-6 h-6" />
                   </div>
                   <span className="font-extrabold text-sm text-slate-800">Browse Device Files</span>
-                  <span className="text-[11px] text-slate-500 font-medium">Select images or video clips</span>
+                  <span className="text-[11px] text-slate-500 font-medium">Select photos, videos (.mp4, .webm), or GIFs</span>
                   <input
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,video/*"
+                    accept="image/*,video/*,.gif"
                     onChange={handleFileInput}
                     className="hidden"
                   />
                 </div>
               </div>
 
-              {/* Visual Uploaded Media Gallery */}
+              {/* Visual Uploaded Media Gallery with Drag & Drop Reordering */}
               {selectedFiles.length > 0 ? (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                      <ImageIcon className="w-4 h-4 text-blue-600" />
-                      Attached Snaps ({selectedFiles.length})
-                    </span>
+                    <div>
+                      <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-blue-600" />
+                        Attached Snaps ({selectedFiles.length})
+                      </span>
+                      <p className="text-[10px] text-slate-400">Drag & drop cards or use arrows to rearrange order</p>
+                    </div>
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
@@ -694,20 +775,75 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                     {selectedFiles.map((file, idx) => (
                       <div
                         key={idx}
-                        className="group/media relative rounded-2xl overflow-hidden border border-slate-200 bg-slate-900 shadow-sm aspect-video flex items-center justify-center"
+                        draggable
+                        onDragStart={e => handleDragStart(e, idx)}
+                        onDragOver={e => handleDragOver(e, idx)}
+                        onDragLeave={handleDragLeave}
+                        onDrop={e => handleDrop(e, idx)}
+                        onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
+                        className={`group/media relative rounded-2xl overflow-hidden border bg-slate-900 shadow-sm aspect-video flex items-center justify-center cursor-grab active:cursor-grabbing transition-all ${
+                          draggedIdx === idx ? 'opacity-30 scale-95 border-dashed border-blue-500' : ''
+                        } ${
+                          dragOverIdx === idx ? 'ring-4 ring-blue-500 ring-offset-2 border-blue-600 scale-105' : 'border-slate-200'
+                        }`}
                       >
                         {file.type.startsWith('video/') ? (
-                          <div className="w-full h-full flex flex-col items-center justify-center text-white p-2">
-                            <Film className="w-7 h-7 text-blue-400 mb-1" />
-                            <span className="text-[10px] truncate max-w-full font-mono">{file.name}</span>
+                          <div className="w-full h-full flex flex-col items-center justify-center text-white p-2 relative bg-slate-950">
+                            <video src={file.base64} className="w-full h-full object-cover opacity-60 pointer-events-none" />
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
+                              <Film className="w-7 h-7 text-blue-400 mb-1" />
+                              <span className="text-[9px] truncate max-w-[90%] font-mono bg-black/60 px-1.5 py-0.5 rounded">{file.name}</span>
+                            </div>
                           </div>
                         ) : (
                           <img
                             src={file.base64}
                             alt={file.name}
-                            className="w-full h-full object-cover group-hover/media:scale-105 transition duration-300"
+                            className="w-full h-full object-cover group-hover/media:scale-105 transition duration-300 pointer-events-none"
                           />
                         )}
+
+                        {/* Drag Handle & Order Controls */}
+                        <div className="absolute top-1.5 left-1.5 flex items-center gap-1 z-10">
+                          <span className="bg-black/70 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                            <GripVertical className="w-3 h-3 text-slate-300" />
+                            #{idx + 1}
+                          </span>
+                          {idx > 0 && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleMoveItem(idx, 'left'); }}
+                              className="p-1 bg-black/70 hover:bg-black text-white rounded-md transition shadow-xs"
+                              title="Move Left"
+                            >
+                              <ChevronLeft className="w-3 h-3" />
+                            </button>
+                          )}
+                          {idx < selectedFiles.length - 1 && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleMoveItem(idx, 'right'); }}
+                              className="p-1 bg-black/70 hover:bg-black text-white rounded-md transition shadow-xs"
+                              title="Move Right"
+                            >
+                              <ChevronRight className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Media Type Badge */}
+                        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
+                          {file.type.startsWith('video/') && (
+                            <span className="px-1.5 py-0.5 bg-red-600/90 text-white text-[9px] font-bold rounded uppercase">
+                              Video
+                            </span>
+                          )}
+                          {file.type === 'image/gif' && (
+                            <span className="px-1.5 py-0.5 bg-purple-600/90 text-white text-[9px] font-bold rounded uppercase">
+                              GIF
+                            </span>
+                          )}
+                        </div>
 
                         {/* Hover Overlay Controls */}
                         <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/media:opacity-100 transition flex items-center justify-center gap-2">
@@ -728,11 +864,6 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-
-                        {/* Index badge */}
-                        <span className="absolute top-1.5 left-1.5 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-md">
-                          #{idx + 1}
-                        </span>
                       </div>
                     ))}
                   </div>
@@ -750,302 +881,261 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           {currentStep === 2 && (
             <div className="space-y-5 animate-in fade-in duration-150">
               
-              {/* Dual Calendar Mode Selector */}
-              <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Calendar className="w-4 h-4 text-amber-500" />
-                  <span className="text-xs font-extrabold text-slate-700">Calendar System:</span>
-                </div>
-                <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-xs">
-                  <button
-                    type="button"
-                    onClick={() => setDateMode('AD')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                      dateMode === 'AD' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Gregorian (AD)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDateMode('BS')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                      dateMode === 'BS' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    Bikram Sambat (BS)
-                  </button>
-                </div>
+              {/* Title Input */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5 text-blue-600" />
+                  Moment Title (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="e.g. Sunrise Trek at Poon Hill, Finished React App..."
+                  className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-2xl outline-hidden font-bold text-slate-800 transition"
+                />
               </div>
 
-              {/* Quick Date Presets & Date Input */}
-              <div className="space-y-2">
+              {/* Story Content Note */}
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">
-                    Date & Time
+                  <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+                    Story / Caption Note <span className="text-red-500">*</span>
                   </label>
-                  <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-slate-400">{content.length} characters</span>
+                </div>
+                <textarea
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  placeholder="What happened? What were you thinking, feeling or learning?"
+                  rows={4}
+                  className="w-full px-4 py-3 text-sm bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-2xl outline-hidden resize-none transition font-medium text-slate-700"
+                />
+              </div>
+
+              {/* Date & Bikram Sambat Selection */}
+              <div className="space-y-2 p-4 bg-slate-50/80 border border-slate-200/80 rounded-2xl">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                    When Did It Happen?
+                  </span>
+                  
+                  <div className="flex items-center gap-1 bg-white p-0.5 rounded-xl border border-slate-200 shadow-2xs">
                     <button
                       type="button"
-                      onClick={() => setQuickDate('today')}
-                      className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-bold text-slate-700 transition"
+                      onClick={() => setDateMode('AD')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition ${
+                        dateMode === 'AD' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      Today
+                      AD (Gregorian)
                     </button>
                     <button
                       type="button"
-                      onClick={() => setQuickDate('yesterday')}
-                      className="px-2.5 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-[10px] font-bold text-slate-700 transition"
+                      onClick={() => setDateMode('BS')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition ${
+                        dateMode === 'BS' ? 'bg-amber-600 text-white' : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      Yesterday
+                      BS (Nepali)
                     </button>
                   </div>
                 </div>
 
                 {dateMode === 'AD' ? (
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <input
                       type="datetime-local"
                       value={timestamp}
                       onChange={e => handleAdTimestampChange(e.target.value)}
-                      className="w-full px-4 py-2.5 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-medium"
-                      required
+                      className="w-full px-3.5 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-xl"
                     />
-                    <div className="text-[11px] text-amber-800 font-semibold bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200/80 flex items-center justify-between">
-                      <span>Nepali BS Equivalent:</span>
-                      <span className="font-extrabold">{currentFormBs.formattedBsNp} ({currentFormBs.formattedBs})</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setQuickDate('today')}
+                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-100"
+                      >
+                        Today
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQuickDate('yesterday')}
+                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-100"
+                      >
+                        Yesterday
+                      </button>
+                      <span className="text-[10px] text-amber-700 ml-auto font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        = {currentFormBs.formattedBsNp}
+                      </span>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="space-y-2">
                     <div className="grid grid-cols-3 gap-2">
                       <select
                         value={formBsYear}
                         onChange={e => handleBsDateChange(parseInt(e.target.value, 10), formBsMonth, formBsDay)}
-                        className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
                       >
                         {getAvailableBsYears().map(y => (
-                          <option key={y} value={y}>{y} BS ({toNepaliDigits(y)})</option>
+                          <option key={y} value={y}>{y} BS</option>
                         ))}
                       </select>
+
                       <select
                         value={formBsMonth}
                         onChange={e => handleBsDateChange(formBsYear, parseInt(e.target.value, 10), formBsDay)}
-                        className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
                       >
                         {BS_MONTHS.map(m => (
                           <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
                         ))}
                       </select>
+
                       <select
                         value={formBsDay}
                         onChange={e => handleBsDateChange(formBsYear, formBsMonth, parseInt(e.target.value, 10))}
-                        className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-amber-50/50 text-slate-800 focus:outline-none"
+                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
                       >
                         {Array.from({ length: getMonthDays(formBsYear, formBsMonth) }, (_, i) => i + 1).map(d => (
-                          <option key={d} value={d}>{d} गते ({toNepaliDigits(d)})</option>
+                          <option key={d} value={d}>{toNepaliDigits(d)} गते</option>
                         ))}
                       </select>
                     </div>
-                    <div className="text-[11px] text-blue-800 font-semibold bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200/80 flex items-center justify-between">
-                      <span>AD Equivalent:</span>
-                      <span className="font-extrabold">{new Date(timestamp).toLocaleDateString()}</span>
+
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Mapped Gregorian AD: <strong className="text-slate-700">{timestamp.slice(0, 10)}</strong></span>
+                      <span className="text-[10px] font-bold text-amber-700">{currentFormBs.formattedBsNp}</span>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Title (Optional) */}
-              <div className="space-y-1">
-                <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">
-                  Moment Title (Optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Sunset hike with friends, First day at new job"
-                  value={title}
-                  onChange={e => setTitle(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 font-medium"
-                />
-              </div>
-
-              {/* Story Content / Caption */}
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">
-                    Story / Caption *
-                  </label>
-                  <span className="text-[10px] text-slate-400">{content.length} characters</span>
-                </div>
-                <textarea
-                  rows={4}
-                  required
-                  placeholder="Share what happened, key memories, or reflections..."
-                  value={content}
-                  onChange={e => setContent(e.target.value)}
-                  className="w-full px-4 py-3 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-slate-50 resize-y font-sans leading-relaxed"
-                />
-              </div>
-
               {/* Category & Tags */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">
+                  <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
                     Category
                   </label>
                   <input
                     type="text"
                     value={category}
                     onChange={e => setCategory(e.target.value)}
-                    placeholder="e.g. Travel, Life"
-                    className="w-full px-4 py-2 border border-slate-200 rounded-2xl text-xs bg-slate-50 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="General, Travel, Life, Work..."
+                    className="w-full px-3.5 py-2 text-xs font-bold bg-slate-50 border border-slate-200 focus:bg-white rounded-xl"
                   />
                   <div className="flex flex-wrap gap-1 pt-1">
-                    {commonCategories.map(c => (
+                    {commonCategories.map(cat => (
                       <button
-                        key={c}
+                        key={cat}
                         type="button"
-                        onClick={() => setCategory(c)}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg transition ${
-                          category === c ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        onClick={() => setCategory(cat)}
+                        className={`text-[10px] px-2 py-0.5 rounded-md font-semibold transition ${
+                          category === cat ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                         }`}
                       >
-                        {c}
+                        {cat}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] font-extrabold text-slate-400 uppercase tracking-widest">
-                    Tags (comma separated)
+                  <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
+                    Tags (Comma Separated)
                   </label>
                   <input
                     type="text"
                     value={rawTags}
                     onChange={e => setRawTags(e.target.value)}
-                    placeholder="e.g. vacation, family, nature"
-                    className="w-full px-4 py-2 border border-slate-200 rounded-2xl text-xs bg-slate-50 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="family, nepal, mountain..."
+                    className="w-full px-3.5 py-2 text-xs font-bold bg-slate-50 border border-slate-200 focus:bg-white rounded-xl"
                   />
                   {commonTags.length > 0 && (
                     <div className="flex flex-wrap gap-1 pt-1">
-                      {commonTags.map(t => (
+                      {commonTags.map(tag => (
                         <button
-                          key={t}
+                          key={tag}
                           type="button"
                           onClick={() => {
-                            const cur = rawTags.split(',').map(x => x.trim()).filter(Boolean);
-                            if (!cur.includes(t)) {
-                              setRawTags(cur.concat(t).join(', '));
+                            const tags = rawTags.split(',').map(t => t.trim()).filter(Boolean);
+                            if (!tags.includes(tag)) {
+                              setRawTags(tags.length > 0 ? `${rawTags}, ${tag}` : tag);
                             }
                           }}
-                          className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 transition"
+                          className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition"
                         >
-                          #{t}
+                          #{tag}
                         </button>
                       ))}
                     </div>
                   )}
                 </div>
               </div>
+
             </div>
           )}
 
-          {/* ════════════ STEP 3: LIVE FEED PREVIEW ════════════ */}
+          {/* ════════════ STEP 3: LIVE PREVIEW ════════════ */}
           {currentStep === 3 && (
-            <div className="space-y-4 animate-in fade-in duration-150">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                  <Eye className="w-4 h-4 text-blue-600" />
-                  Feed Card Preview
-                </span>
-                <span className="text-[11px] font-semibold text-slate-400">
-                  How this moment will appear in your timeline
-                </span>
+            <div className="space-y-5 animate-in fade-in duration-150">
+              <div className="text-center space-y-1">
+                <h3 className="text-base font-extrabold text-slate-900">Review & Publish</h3>
+                <p className="text-xs text-slate-500">This is how your memory will appear in your timeline feed.</p>
               </div>
 
-              {/* Realistic Post Preview Card */}
-              <div className="bg-white border-2 border-slate-200/90 rounded-3xl p-6 shadow-sm space-y-4">
-                
-                {/* Meta Header */}
-                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="px-2.5 py-1 bg-amber-50 border border-amber-200 text-amber-700 font-extrabold uppercase tracking-wider rounded-lg text-[9px]">
+              {/* Moment Preview Card */}
+              <div className="p-5 rounded-3xl border border-slate-200 bg-white shadow-lg space-y-4 max-w-lg mx-auto">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1 bg-slate-100 border border-slate-200 text-slate-700 font-extrabold text-[10px] rounded-lg uppercase">
                       {category || 'General'}
                     </span>
-                    <span className="text-slate-400 flex items-center gap-1 font-medium">
-                      <Clock className="w-3.5 h-3.5" />
-                      {new Date(timestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100/70 border border-amber-300 text-amber-900 font-bold text-[11px] flex items-center gap-1">
-                      <Calendar className="w-3 h-3 text-amber-600" />
-                      <span>{currentFormBs.formattedBsNp}</span>
+                    <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
+                  <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-900 font-bold text-[10px] rounded-md flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-amber-700" />
+                    {currentFormBs.formattedBsNp}
+                  </span>
                 </div>
 
-                {/* Media Page-Turner / Stack Preview */}
+                {/* Media Preview in Card */}
                 {selectedFiles.length > 0 && (
-                  <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video flex items-center justify-center border border-slate-800 shadow-inner group">
-                    {selectedFiles[previewSnapIndex]?.type.startsWith('video/') ? (
-                      <div className="flex flex-col items-center justify-center text-white">
-                        <Video className="w-10 h-10 text-blue-400 mb-2" />
-                        <span className="text-xs font-mono">{selectedFiles[previewSnapIndex]?.name}</span>
+                  <div className="rounded-2xl overflow-hidden bg-slate-950 aspect-video relative flex items-center justify-center border border-slate-100">
+                    {selectedFiles[0].type.startsWith('video/') ? (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-white">
+                        <Film className="w-10 h-10 text-blue-400 mb-1" />
+                        <span className="text-xs font-mono">{selectedFiles[0].name}</span>
                       </div>
                     ) : (
                       <img
-                        src={selectedFiles[previewSnapIndex]?.base64}
+                        src={selectedFiles[0].base64}
                         alt="Preview snap"
                         className="w-full h-full object-cover"
                       />
                     )}
-
-                    {/* Page indicator pill */}
-                    <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full text-white text-[11px] font-bold">
-                      Snap {previewSnapIndex + 1} of {selectedFiles.length}
-                    </div>
-
-                    {/* Horizontal Page Turner Arrows */}
                     {selectedFiles.length > 1 && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => setPreviewSnapIndex(prev => (prev - 1 + selectedFiles.length) % selectedFiles.length)}
-                          className="absolute left-2 p-2 bg-black/50 hover:bg-black/75 text-white rounded-full transition"
-                        >
-                          <ChevronLeft className="w-5 h-5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPreviewSnapIndex(prev => (prev + 1) % selectedFiles.length)}
-                          className="absolute right-2 p-2 bg-black/50 hover:bg-black/75 text-white rounded-full transition"
-                        >
-                          <ChevronRight className="w-5 h-5" />
-                        </button>
-                      </>
-                    )}
-
-                    {/* Dot indicators */}
-                    {selectedFiles.length > 1 && (
-                      <div className="absolute bottom-2.5 flex items-center gap-1.5">
-                        {selectedFiles.map((_, dotIdx) => (
-                          <div
-                            key={dotIdx}
-                            className={`w-2 h-2 rounded-full transition-all ${
-                              dotIdx === previewSnapIndex ? 'w-4 bg-white' : 'bg-white/50'
-                            }`}
-                          />
-                        ))}
-                      </div>
+                      <span className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                        +{selectedFiles.length - 1} more snaps
+                      </span>
                     )}
                   </div>
                 )}
 
                 {/* Title & Content */}
                 <div className="space-y-1.5">
-                  {title && <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">{title}</h3>}
-                  <p className="text-sm text-slate-600 leading-relaxed font-sans whitespace-pre-wrap">
-                    {content || <span className="italic text-slate-400">No caption written yet.</span>}
+                  {title && (
+                    <h4 className="text-base font-black text-slate-900 leading-snug">
+                      {title}
+                    </h4>
+                  )}
+                  <p className="text-xs sm:text-sm text-slate-700 whitespace-pre-wrap leading-relaxed font-normal">
+                    {content || 'No story note written.'}
                   </p>
                 </div>
 
@@ -1094,20 +1184,11 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
               <button
                 type="button"
                 onClick={handlePublish}
-                disabled={submitting || !content.trim()}
+                disabled={!content.trim()}
                 className="px-6 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-extrabold transition flex items-center gap-2 shadow-md active:scale-95"
               >
-                {submitting ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Uploading to Drive & Saving...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>Publish Moment</span>
-                  </>
-                )}
+                <Check className="w-4 h-4" />
+                <span>Publish Moment</span>
               </button>
             )}
           </div>
@@ -1137,11 +1218,20 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
             >
               <X className="w-5 h-5" />
             </button>
-            <img
-              src={selectedFiles[previewMediaIndex].base64}
-              alt="Snap preview"
-              className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/10"
-            />
+            {selectedFiles[previewMediaIndex].type.startsWith('video/') ? (
+              <video
+                src={selectedFiles[previewMediaIndex].base64}
+                controls
+                autoPlay
+                className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/10"
+              />
+            ) : (
+              <img
+                src={selectedFiles[previewMediaIndex].base64}
+                alt="Snap preview"
+                className="max-w-full max-h-[80vh] rounded-2xl object-contain shadow-2xl border border-white/10"
+              />
+            )}
           </div>
         </div>
       )}

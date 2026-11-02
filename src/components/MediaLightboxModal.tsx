@@ -104,6 +104,7 @@ export const MediaLightboxModal: React.FC<MediaLightboxModalProps> = ({
               src={current.url}
               controls
               autoPlay
+              playsInline
               className="max-h-[75vh] max-w-full rounded-2xl object-contain shadow-2xl border border-slate-800"
             />
           ) : (

@@ -117,7 +117,7 @@ export async function uploadToFolder(
   fileName: string,
   mimeType: string,
   base64Data: string
-): Promise<{ fileId: string; viewUrl: string; thumbnailUrl: string }> {
+): Promise<{ fileId: string; viewUrl: string; thumbnailUrl: string; previewUrl?: string; streamUrl?: string }> {
   return executeDriveAction(async (drive) => {
     const base64Content = base64Data.split(';base64,').pop() || base64Data;
     const buffer = Buffer.from(base64Content, 'base64');
@@ -139,7 +139,7 @@ export async function uploadToFolder(
       requestBody: fileMetadata,
       media: media,
       supportsAllDrives: true,
-      fields: 'id, thumbnailLink'
+      fields: 'id, thumbnailLink, webViewLink, webContentLink'
     });
 
     const fileId = response.data.id;
@@ -157,10 +157,20 @@ export async function uploadToFolder(
       console.error('Failed to set public view permission:', err.message);
     }
 
-    const viewUrl = `https://lh3.googleusercontent.com/d/${fileId}`;
-    const thumbnailUrl = response.data.thumbnailLink || viewUrl;
+    const isVideo = (mimeType || '').startsWith('video/');
+    const viewUrl = isVideo 
+      ? `https://drive.google.com/uc?export=download&id=${fileId}`
+      : `https://lh3.googleusercontent.com/d/${fileId}`;
+    const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
+    const thumbnailUrl = response.data.thumbnailLink || (isVideo ? previewUrl : viewUrl);
 
-    return { fileId, viewUrl, thumbnailUrl };
+    return { 
+      fileId, 
+      viewUrl, 
+      thumbnailUrl, 
+      previewUrl,
+      streamUrl: `https://drive.google.com/uc?export=download&id=${fileId}`
+    };
   });
 }
 

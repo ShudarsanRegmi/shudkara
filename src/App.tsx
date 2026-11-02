@@ -16,6 +16,7 @@ import { ImgDrop } from './components/ImgDrop';
 import { Login } from './components/Login';
 import { LifetimeLine } from './components/LifetimeLine';
 import { SharedPromptViewer } from './components/SharedPromptViewer';
+import { SharedTimelinePostView } from './components/SharedTimelinePostView';
 import { Todos, type TodoItem } from './components/Todos';
 import { Lists, type ListCategory } from './components/Lists';
 import { Inventory } from './components/Inventory';
@@ -120,6 +121,15 @@ function App() {
   const [sharedPromptId, setSharedPromptId] = useState<string | null>(null);
   const [sharedPrompt, setSharedPrompt] = useState<any | null>(null);
 
+  // Standalone Public Timeline Post Share URL handling
+  const [sharedTimelinePostId, setSharedTimelinePostId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('timelinePost') || params.get('sharePost');
+    }
+    return null;
+  });
+
   // Authentication State (read synchronously from localStorage to prevent auth-gate blink on reload)
   const [authToken, setAuthToken] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
@@ -181,6 +191,11 @@ function App() {
     const promptId = params.get('promptId');
     if (promptId) {
       setSharedPromptId(promptId);
+    }
+
+    const timelinePostId = params.get('timelinePost') || params.get('sharePost');
+    if (timelinePostId) {
+      setSharedTimelinePostId(timelinePostId);
     }
 
     const timerId = params.get('timerId');
@@ -368,6 +383,22 @@ function App() {
       setUrlRoomId(null);
     }
   };
+
+  // ── Standalone Public Timeline Share View Mode ──
+  if (sharedTimelinePostId) {
+    return (
+      <SharedTimelinePostView
+        postId={sharedTimelinePostId}
+        onBack={() => {
+          setSharedTimelinePostId(null);
+          const url = new URL(window.location.href);
+          url.searchParams.delete('timelinePost');
+          url.searchParams.delete('sharePost');
+          window.history.pushState({}, '', url.pathname + (url.search ? url.search : '') + url.hash);
+        }}
+      />
+    );
+  }
 
   // ── Standalone Share View Mode ──
   // If viewing a shared prompt link, render ONLY the prompt card with NO website UI/header/footer

@@ -4,14 +4,14 @@ import {
   Film, AlertCircle, 
   Loader2, Sparkles, BookOpen, Clock, Calendar,
   ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal,
-  Camera, X, RefreshCw
+  Camera, X, RefreshCw, Share2, Check
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
   type BikramSambatDate 
 } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
-import { TimelineWizardModal, type DraftMediaItem } from './TimelineWizardModal';
+import { TimelineWizardModal, type DraftMediaItem, finalizeSuccessfulDraftUpload } from './TimelineWizardModal';
 import { TimelineSidebar } from './TimelineSidebar';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 
@@ -56,12 +56,33 @@ interface DayGroup {
   totalSnaps: number;
 }
 
+export interface ActiveUploadState {
+  draftId: string;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  timestamp: string;
+  mediaFiles: DraftMediaItem[];
+  status: 'uploading' | 'completed' | 'error';
+  stepText: string;
+  progressPercent: number;
+  currentIndex: number;
+  totalMedia: number;
+  errorMsg?: string;
+  createdPostId?: string;
+}
+
 export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [posts, setPosts] = useState<Post[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Background Upload Queue & Floating Progress Bar State
+  const [activeUpload, setActiveUpload] = useState<ActiveUploadState | null>(null);
+  const [shareToastPostId, setShareToastPostId] = useState<string | null>(null);
   
   // Filters & Search
   const [search, setSearch] = useState('');
@@ -295,18 +316,39 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     };
   }, [loading, loadingMore, posts.length, total]);
 
-  // Submit new post from Social Wizard (with offline queueing support)
+  // Public Share handler
+  const handleSharePost = (targetPost: Post) => {
+    const url = `${window.location.origin}/?timelinePost=${targetPost._id}`;
+    navigator.clipboard.writeText(url);
+    setShareToastPostId(targetPost._id);
+    setTimeout(() => {
+      setShareToastPostId(prev => (prev === targetPost._id ? null : prev));
+    }, 3000);
+  };
+
+  // Submit new post from Social Wizard with background queueing, single-file uploads & floating progress
   const handleWizardSubmit = async (postData: {
+    draftId: string;
     title: string;
     content: string;
     category: string;
     tags: string[];
     timestamp: string;
     mediaFiles: DraftMediaItem[];
-  }): Promise<boolean> => {
-    if (!authToken) return false;
+  }) => {
+    if (!authToken) return;
 
-    // If device is offline, enqueue immediately
+    const totalMedia = postData.mediaFiles.length;
+    setActiveUpload({
+      ...postData,
+      status: 'uploading',
+      stepText: totalMedia > 0 ? 'Creating directory & post...' : 'Publishing moment...',
+      progressPercent: 5,
+      currentIndex: 0,
+      totalMedia
+    });
+
+    // If device is offline, enqueue to offline queue
     if (!isDeviceOnline()) {
       enqueueOfflineAction({
         url: '/api/timeline',
@@ -326,11 +368,22 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
         subapp: 'timeline'
       });
-      return true;
+      setActiveUpload({
+        ...postData,
+        status: 'completed',
+        progressPercent: 100,
+        currentIndex: totalMedia,
+        totalMedia,
+        stepText: 'Saved to offline queue. Will sync when back online.'
+      });
+      await finalizeSuccessfulDraftUpload(postData.draftId);
+      setTimeout(() => setActiveUpload(null), 3500);
+      return;
     }
 
     try {
-      const res = await fetch('/api/timeline', {
+      // Step 1: Create post on server with metadata and empty media list (fast!)
+      const createRes = await fetch('/api/timeline', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -342,60 +395,80 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           category: postData.category,
           tags: postData.tags,
           timestamp: postData.timestamp,
-          mediaFiles: postData.mediaFiles
+          mediaFiles: [] // send empty so creation is fast and avoids huge payload limits
         })
       });
 
-      if (res.ok) {
-        fetchPosts(true);
-        fetchFilterMetadata();
-        return true;
-      } else {
-        const data = await res.json().catch(() => ({}));
-        if (res.status >= 500) {
-          enqueueOfflineAction({
-            url: '/api/timeline',
+      if (!createRes.ok) {
+        const errData = await createRes.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error (HTTP ${createRes.status})`);
+      }
+
+      const createData = await createRes.json();
+      const postId = createData.postId;
+
+      // Step 2: Upload each media file 1-by-1 directly to the post folder
+      if (totalMedia > 0) {
+        for (let i = 0; i < totalMedia; i++) {
+          const file = postData.mediaFiles[i];
+          const percent = Math.round(((i + 1) / (totalMedia + 1)) * 100);
+
+          setActiveUpload(prev => prev ? {
+            ...prev,
+            createdPostId: postId,
+            currentIndex: i + 1,
+            progressPercent: percent,
+            stepText: `Uploading file ${i + 1} of ${totalMedia}: ${file.name}...`
+          } : null);
+
+          const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'X-Session-Token': authToken
             },
-            body: {
-              title: postData.title,
-              content: postData.content,
-              category: postData.category,
-              tags: postData.tags,
-              timestamp: postData.timestamp,
-              mediaFiles: postData.mediaFiles
-            },
-            description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
-            subapp: 'timeline'
+            body: JSON.stringify({
+              name: file.name,
+              type: file.type,
+              base64: file.base64
+            })
           });
-          return true;
+
+          if (!mediaRes.ok) {
+            const errData = await mediaRes.json().catch(() => ({}));
+            throw new Error(errData.error || `Failed to upload "${file.name}"`);
+          }
         }
-        throw new Error(data.error || 'Failed to create post.');
       }
+
+      // Step 3: Success! Finalize draft cleanup and update feed
+      setActiveUpload(prev => prev ? {
+        ...prev,
+        status: 'completed',
+        progressPercent: 100,
+        stepText: 'Moment published to timeline!'
+      } : null);
+
+      // ONLY NOW clear draft from IndexedDB / LocalStorage
+      await finalizeSuccessfulDraftUpload(postData.draftId);
+
+      // Refresh posts feed
+      fetchPosts(true);
+      fetchFilterMetadata();
+
+      // Auto-hide floating progress bar after 4 seconds
+      setTimeout(() => {
+        setActiveUpload(prev => (prev?.status === 'completed' ? null : prev));
+      }, 4000);
+
     } catch (err: any) {
-      // Network disconnect / offline fallback
-      enqueueOfflineAction({
-        url: '/api/timeline',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken
-        },
-        body: {
-          title: postData.title,
-          content: postData.content,
-          category: postData.category,
-          tags: postData.tags,
-          timestamp: postData.timestamp,
-          mediaFiles: postData.mediaFiles
-        },
-        description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
-        subapp: 'timeline'
-      });
-      return true;
+      console.error('Timeline upload failed:', err);
+      setActiveUpload(prev => prev ? {
+        ...prev,
+        status: 'error',
+        errorMsg: err.message || 'Failed to upload files.'
+      } : null);
+      // NOTE: Draft is completely intact and safe in IndexedDB / localStorage!
     }
   };
 
@@ -487,7 +560,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           tags: editRawTags.split(',').map(t => t.trim()).filter(Boolean),
           timestamp: new Date(editTimestamp).toISOString(),
           newMediaFiles: editNewMedia,
-          removedMediaIds: editRemovedMediaIds
+          removedMediaIds: editRemovedMediaIds,
+          reorderedMedia: editExistingMedia
         })
       });
 
@@ -875,6 +949,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           isEditing={editingPostId === activePost._id}
                           startEdit={() => startEdit(activePost)}
                           onDelete={() => handleDeletePost(activePost._id)}
+                          onSharePost={handleSharePost}
+                          isShareToastActive={shareToastPostId === activePost._id}
                           onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
                           momentPhotoIndex={momentPhotoIndices[activePost._id] || 0}
                           onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(activePost._id, dir, count)}
@@ -956,6 +1032,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                               isEditing={editingPostId === post._id}
                               startEdit={() => startEdit(post)}
                               onDelete={() => handleDeletePost(post._id)}
+                              onSharePost={handleSharePost}
+                              isShareToastActive={shareToastPostId === post._id}
                               onOpenLightbox={(media, idx) => handleOpenLightbox(media, idx)}
                               momentPhotoIndex={momentPhotoIndices[post._id] || 0}
                               onTurnMomentPhoto={(dir, count) => handleTurnMomentPhoto(post._id, dir, count)}
@@ -1106,7 +1184,100 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           onSubmit={handleWizardSubmit}
           categoriesList={categories}
           tagsList={tags}
+          initialDraftId={activeUpload?.draftId}
         />
+      )}
+
+      {/* ── Floating Visual Upload Progress Bar (Bottom Right Corner) ── */}
+      {activeUpload && (
+        <aside 
+          aria-label="Upload progress feedback"
+          className={`fixed bottom-5 right-5 z-50 w-80 sm:w-96 rounded-2xl p-4 shadow-2xl border transition-all animate-in slide-in-from-bottom-5 duration-200 ${
+            activeUpload.status === 'error'
+              ? 'bg-white border-red-300 text-slate-900 shadow-red-500/10 ring-2 ring-red-500/20'
+              : activeUpload.status === 'completed'
+              ? 'bg-white border-emerald-300 text-slate-900 shadow-emerald-500/10'
+              : 'bg-slate-900 border-slate-800 text-white shadow-blue-500/20'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+                activeUpload.status === 'error'
+                  ? 'bg-red-100 text-red-600'
+                  : activeUpload.status === 'completed'
+                  ? 'bg-emerald-100 text-emerald-600'
+                  : 'bg-blue-600 text-white'
+              }`}>
+                {activeUpload.status === 'uploading' && <Loader2 className="w-4 h-4 animate-spin" />}
+                {activeUpload.status === 'completed' && <Check className="w-4 h-4" />}
+                {activeUpload.status === 'error' && <AlertCircle className="w-4 h-4" />}
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-black truncate">
+                  {activeUpload.title || 'Timeline Moment'}
+                </p>
+                <p className={`text-[11px] truncate ${
+                  activeUpload.status === 'error' 
+                    ? 'text-red-600 font-semibold' 
+                    : (activeUpload.status === 'completed' ? 'text-emerald-600 font-semibold' : 'text-slate-300')
+                }`}>
+                  {activeUpload.status === 'error' ? activeUpload.errorMsg : activeUpload.stepText}
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setActiveUpload(null)}
+              className="p-1 text-slate-400 hover:text-slate-600 rounded-lg shrink-0"
+              title="Close notification"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Upload Progress Bar */}
+          {activeUpload.status === 'uploading' && (
+            <div className="mt-3 space-y-1">
+              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${activeUpload.progressPercent}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                <span>{activeUpload.totalMedia > 0 ? `${activeUpload.currentIndex} / ${activeUpload.totalMedia} files` : 'Processing'}</span>
+                <span>{activeUpload.progressPercent}%</span>
+              </div>
+            </div>
+          )}
+
+          {/* Action buttons if error - Never lose draft */}
+          {activeUpload.status === 'error' && (
+            <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
+              <span className="text-[10px] text-slate-500 font-medium">Draft preserved safely</span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowWizard(true);
+                  }}
+                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg transition"
+                >
+                  Open Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleWizardSubmit(activeUpload)}
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold rounded-lg transition shadow-xs"
+                >
+                  Retry Upload
+                </button>
+              </div>
+            </div>
+          )}
+        </aside>
       )}
 
       {/* ── Media Lightbox Modal ── */}
@@ -1128,6 +1299,8 @@ interface MomentCardBodyProps {
   isEditing: boolean;
   startEdit: () => void;
   onDelete: () => void;
+  onSharePost: (post: Post) => void;
+  isShareToastActive: boolean;
   onOpenLightbox: (media: MediaItem[], index: number) => void;
   momentPhotoIndex: number;
   onTurnMomentPhoto: (direction: 'next' | 'prev', count: number) => void;
@@ -1166,6 +1339,8 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   isEditing,
   startEdit,
   onDelete,
+  onSharePost,
+  isShareToastActive,
   onOpenLightbox,
   momentPhotoIndex,
   onTurnMomentPhoto,
@@ -1301,16 +1476,19 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
         {/* Media / Pictures Management in Edit Mode */}
         <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-              <Camera className="w-3.5 h-3.5 text-blue-600" />
-              Pictures ({editExistingMedia.length + editNewMedia.length})
-            </span>
+            <div>
+              <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Camera className="w-3.5 h-3.5 text-blue-600" />
+                Attached Snaps ({editExistingMedia.length + editNewMedia.length})
+              </span>
+              <p className="text-[10px] text-slate-400">Use arrows to rearrange display sequence</p>
+            </div>
             <label className="cursor-pointer px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1 transition">
-              <Plus className="w-3.5 h-3.5" /> Add Pictures
+              <Plus className="w-3.5 h-3.5" /> Add Snaps
               <input
                 type="file"
                 multiple
-                accept="image/*"
+                accept="image/*,video/*,.gif"
                 className="hidden"
                 onChange={e => {
                   const files = e.target.files;
@@ -1333,22 +1511,68 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           {/* Pictures Preview Grid */}
           {(editExistingMedia.length > 0 || editNewMedia.length > 0) ? (
             <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 pt-1">
-              {/* Existing Media */}
+              {/* Existing Media with Reorder Buttons */}
               {editExistingMedia.map((m, idx) => (
-                <div key={m.googleDriveId || idx} className="relative group rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-100">
-                  <img
-                    src={m.thumbnailUrl || m.viewUrl}
-                    alt={m.fileName}
-                    className="w-full h-full object-cover"
-                  />
+                <div key={m.googleDriveId || idx} className="relative group rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-900">
+                  {m.mimeType?.startsWith('video/') ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-white p-1">
+                      <Film className="w-5 h-5 text-blue-400" />
+                      <span className="text-[8px] truncate max-w-full font-mono">{m.fileName}</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={m.thumbnailUrl || m.viewUrl}
+                      alt={m.fileName}
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+
+                  {/* Reorder Buttons */}
+                  <div className="absolute top-1 left-1 flex items-center gap-0.5 z-10">
+                    {idx > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditExistingMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx - 1, 0, item);
+                            return copy;
+                          });
+                        }}
+                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px] transition"
+                        title="Move Earlier"
+                      >
+                        <ChevronLeft className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                    {idx < editExistingMedia.length - 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditExistingMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx + 1, 0, item);
+                            return copy;
+                          });
+                        }}
+                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px] transition"
+                        title="Move Later"
+                      >
+                        <ChevronRight className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => {
                       setEditRemovedMediaIds(prev => [...prev, m.googleDriveId]);
                       setEditExistingMedia(prev => prev.filter((_, i) => i !== idx));
                     }}
-                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition"
-                    title="Remove Photo"
+                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition z-10"
+                    title="Remove Snap"
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -1361,15 +1585,61 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
               {/* New Media Added */}
               {editNewMedia.map((m, idx) => (
                 <div key={idx} className="relative group rounded-lg overflow-hidden border-2 border-dashed border-blue-400 aspect-square bg-blue-50/50">
-                  <img
-                    src={m.base64}
-                    alt={m.name}
-                    className="w-full h-full object-cover"
-                  />
+                  {m.type?.startsWith('video/') ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white p-1">
+                      <Film className="w-5 h-5 text-blue-400" />
+                      <span className="text-[8px] truncate max-w-full font-mono">{m.name}</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={m.base64}
+                      alt={m.name}
+                      className="w-full h-full object-cover"
+                    />
+                  )}
+
+                  {/* Reorder New Media Buttons */}
+                  <div className="absolute top-1 left-1 flex items-center gap-0.5 z-10">
+                    {idx > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditNewMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx - 1, 0, item);
+                            return copy;
+                          });
+                        }}
+                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px]"
+                        title="Move Earlier"
+                      >
+                        <ChevronLeft className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                    {idx < editNewMedia.length - 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditNewMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx + 1, 0, item);
+                            return copy;
+                          });
+                        }}
+                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px]"
+                        title="Move Later"
+                      >
+                        <ChevronRight className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => setEditNewMedia(prev => prev.filter((_, i) => i !== idx))}
-                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition"
+                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition z-10"
                     title="Remove New Photo"
                   >
                     <X className="w-3 h-3" />
@@ -1423,7 +1693,21 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           </span>
         </div>
 
-        <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition">
+        <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition relative">
+          {/* Public Social Share Button */}
+          <button
+            onClick={() => onSharePost(post)}
+            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition relative"
+            title="Share Public Link (Friends can like/comment with no login)"
+          >
+            {isShareToastActive ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5" />}
+          </button>
+          {isShareToastActive && (
+            <span className="absolute -top-7 right-0 bg-slate-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-lg whitespace-nowrap animate-in fade-in duration-150 z-30">
+              Copied Share Link!
+            </span>
+          )}
+
           <button
             onClick={startEdit}
             className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition"
@@ -1445,12 +1729,18 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
       {currentMedia && (
         <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video sm:aspect-[16/9] max-h-[380px] flex items-center justify-center border border-slate-100 shadow-xs group/snap">
           {currentMedia.mimeType.startsWith('video/') ? (
-            <div 
-              onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
-              className="w-full h-full flex flex-col items-center justify-center relative cursor-pointer text-white"
-            >
-              <Film className="w-12 h-12 text-blue-400 group-hover/snap:scale-110 transition duration-150" />
-              <span className="text-xs font-mono text-slate-300 absolute bottom-3 px-3 truncate max-w-full">{currentMedia.fileName}</span>
+            <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-950">
+              <video
+                src={currentMedia.viewUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="w-full h-full object-contain max-h-[380px]"
+              />
+              <span className="text-[10px] font-mono text-slate-300 absolute top-3 left-3 bg-black/60 px-2 py-0.5 rounded truncate max-w-[80%] flex items-center gap-1 pointer-events-none">
+                <Film className="w-3 h-3 text-blue-400" />
+                {currentMedia.fileName}
+              </span>
             </div>
           ) : (
             <img
@@ -1460,6 +1750,13 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
               loading="lazy"
               className="w-full h-full object-cover cursor-pointer group-hover/snap:scale-[1.02] transition duration-300"
             />
+          )}
+
+          {/* Media Type Badge if GIF */}
+          {currentMedia.mimeType === 'image/gif' && (
+            <span className="absolute top-3 left-3 bg-purple-600/90 text-white text-[9px] font-black px-2 py-0.5 rounded shadow-sm">
+              GIF
+            </span>
           )}
 
           {/* Quick Full-Screen View Overlay */}
