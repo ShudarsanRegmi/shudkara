@@ -3,7 +3,8 @@ import {
   Plus, Trash2, Edit2, 
   Film, AlertCircle, 
   Loader2, Sparkles, BookOpen, Clock, Calendar,
-  ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal
+  ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal,
+  Camera, X, RefreshCw
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -91,6 +92,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [editBsYear, setEditBsYear] = useState<number>(2083);
   const [editBsMonth, setEditBsMonth] = useState<number>(1);
   const [editBsDay, setEditBsDay] = useState<number>(1);
+  const [editExistingMedia, setEditExistingMedia] = useState<MediaItem[]>([]);
+  const [editRemovedMediaIds, setEditRemovedMediaIds] = useState<string[]>([]);
+  const [editNewMedia, setEditNewMedia] = useState<DraftMediaItem[]>([]);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   const [syncing, setSyncing] = useState(false);
 
@@ -430,6 +435,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     setEditBsMonth(bs.month);
     setEditBsDay(bs.day);
     setEditDateMode('AD');
+    setEditExistingMedia(post.media ? [...post.media] : []);
+    setEditRemovedMediaIds([]);
+    setEditNewMedia([]);
   };
 
   const handleEditAdTimestampChange = (newAdString: string) => {
@@ -464,6 +472,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const handleUpdatePost = async (id: string) => {
     if (!editContent.trim() || !authToken) return;
 
+    setIsSavingEdit(true);
     try {
       const res = await fetch(`/api/timeline/${id}`, {
         method: 'PUT',
@@ -476,25 +485,33 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           content: editContent.trim(),
           category: editCategory.trim(),
           tags: editRawTags.split(',').map(t => t.trim()).filter(Boolean),
-          timestamp: new Date(editTimestamp).toISOString()
+          timestamp: new Date(editTimestamp).toISOString(),
+          newMediaFiles: editNewMedia,
+          removedMediaIds: editRemovedMediaIds
         })
       });
 
       if (res.ok) {
+        const data = await res.json();
+        const updatedPost = data.post;
         setPosts(prev => prev.map(p => {
           if (p._id === id) {
-            return {
+            return updatedPost || {
               ...p,
               title: editTitle.trim(),
               content: editContent.trim(),
               category: editCategory.trim(),
               tags: editRawTags.split(',').map(t => t.trim()).filter(Boolean),
-              timestamp: new Date(editTimestamp).toISOString()
+              timestamp: new Date(editTimestamp).toISOString(),
+              media: editExistingMedia
             };
           }
           return p;
         }));
         setEditingPostId(null);
+        setEditExistingMedia([]);
+        setEditRemovedMediaIds([]);
+        setEditNewMedia([]);
         fetchFilterMetadata();
       } else {
         const data = await res.json();
@@ -502,6 +519,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       }
     } catch {
       alert('Network error.');
+    } finally {
+      setIsSavingEdit(false);
     }
   };
 
@@ -879,6 +898,12 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           handleEditBsDateChange={handleEditBsDateChange}
                           handleUpdatePost={() => handleUpdatePost(activePost._id)}
                           cancelEdit={() => setEditingPostId(null)}
+                          editExistingMedia={editExistingMedia}
+                          setEditExistingMedia={setEditExistingMedia}
+                          setEditRemovedMediaIds={setEditRemovedMediaIds}
+                          editNewMedia={editNewMedia}
+                          setEditNewMedia={setEditNewMedia}
+                          isSavingEdit={isSavingEdit}
                         />
 
                         {/* Bottom Mini-Thumbnails Strip to Jump Quickly */}
@@ -954,6 +979,12 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                               handleEditBsDateChange={handleEditBsDateChange}
                               handleUpdatePost={() => handleUpdatePost(post._id)}
                               cancelEdit={() => setEditingPostId(null)}
+                              editExistingMedia={editExistingMedia}
+                              setEditExistingMedia={setEditExistingMedia}
+                              setEditRemovedMediaIds={setEditRemovedMediaIds}
+                              editNewMedia={editNewMedia}
+                              setEditNewMedia={setEditNewMedia}
+                              isSavingEdit={isSavingEdit}
                             />
                           </div>
                         ))}
@@ -1122,6 +1153,12 @@ interface MomentCardBodyProps {
   handleEditBsDateChange: (y: number, m: number, d: number) => void;
   handleUpdatePost: () => void;
   cancelEdit: () => void;
+  editExistingMedia: MediaItem[];
+  setEditExistingMedia: React.Dispatch<React.SetStateAction<MediaItem[]>>;
+  setEditRemovedMediaIds: React.Dispatch<React.SetStateAction<string[]>>;
+  editNewMedia: DraftMediaItem[];
+  setEditNewMedia: React.Dispatch<React.SetStateAction<DraftMediaItem[]>>;
+  isSavingEdit: boolean;
 }
 
 const MomentCardBody: React.FC<MomentCardBodyProps> = ({
@@ -1151,7 +1188,13 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   handleEditAdTimestampChange,
   handleEditBsDateChange,
   handleUpdatePost,
-  cancelEdit
+  cancelEdit,
+  editExistingMedia,
+  setEditExistingMedia,
+  setEditRemovedMediaIds,
+  editNewMedia,
+  setEditNewMedia,
+  isSavingEdit
 }) => {
   const dt = new Date(post.timestamp);
   const bsDate = adToBs(post.timestamp);
@@ -1255,6 +1298,93 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           />
         </div>
 
+        {/* Media / Pictures Management in Edit Mode */}
+        <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+              <Camera className="w-3.5 h-3.5 text-blue-600" />
+              Pictures ({editExistingMedia.length + editNewMedia.length})
+            </span>
+            <label className="cursor-pointer px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1 transition">
+              <Plus className="w-3.5 h-3.5" /> Add Pictures
+              <input
+                type="file"
+                multiple
+                accept="image/*"
+                className="hidden"
+                onChange={e => {
+                  const files = e.target.files;
+                  if (!files) return;
+                  Array.from(files).forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = ev => {
+                      const base64 = ev.target?.result as string;
+                      if (base64) {
+                        setEditNewMedia(prev => [...prev, { name: file.name, type: file.type || 'image/jpeg', base64 }]);
+                      }
+                    };
+                    reader.readAsDataURL(file);
+                  });
+                }}
+              />
+            </label>
+          </div>
+
+          {/* Pictures Preview Grid */}
+          {(editExistingMedia.length > 0 || editNewMedia.length > 0) ? (
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 pt-1">
+              {/* Existing Media */}
+              {editExistingMedia.map((m, idx) => (
+                <div key={m.googleDriveId || idx} className="relative group rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-100">
+                  <img
+                    src={m.thumbnailUrl || m.viewUrl}
+                    alt={m.fileName}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditRemovedMediaIds(prev => [...prev, m.googleDriveId]);
+                      setEditExistingMedia(prev => prev.filter((_, i) => i !== idx));
+                    }}
+                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition"
+                    title="Remove Photo"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/60 text-white text-[9px] px-1 py-0.5 truncate">
+                    {m.fileName}
+                  </span>
+                </div>
+              ))}
+
+              {/* New Media Added */}
+              {editNewMedia.map((m, idx) => (
+                <div key={idx} className="relative group rounded-lg overflow-hidden border-2 border-dashed border-blue-400 aspect-square bg-blue-50/50">
+                  <img
+                    src={m.base64}
+                    alt={m.name}
+                    className="w-full h-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditNewMedia(prev => prev.filter((_, i) => i !== idx))}
+                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition"
+                    title="Remove New Photo"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                  <span className="absolute bottom-0 inset-x-0 bg-blue-600/80 text-white text-[9px] px-1 py-0.5 truncate font-semibold">
+                    New: {m.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-[11px] text-slate-400 text-center py-2">No pictures attached to this moment.</p>
+          )}
+        </div>
+
         <div className="flex gap-2 justify-end">
           <button
             onClick={cancelEdit}
@@ -1264,9 +1394,11 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           </button>
           <button
             onClick={handleUpdatePost}
-            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition"
+            disabled={isSavingEdit}
+            className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg transition disabled:opacity-50 flex items-center gap-1.5"
           >
-            Save Changes
+            {isSavingEdit && <RefreshCw className="w-3 h-3 animate-spin" />}
+            {isSavingEdit ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/fu
 import * as crypto from 'crypto';
 import * as nodemailer from 'nodemailer';
 import { connectToMongo } from './db';
+import { createFolderInDrive, uploadToFolder } from './gdrive';
 
 const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
 
@@ -241,12 +242,51 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
         photosArray = [existingItem.photoUrl];
       }
 
+      // Upload Base64 photos to Google Drive (like Timeline does) to avoid heavy base64 strings in MongoDB
+      let driveFolderId = streak.googleDriveFolderId;
+      const uploadedPhotos: string[] = [];
+
+      for (let idx = 0; idx < photosArray.length; idx++) {
+        const photoStr = photosArray[idx];
+        const isBase64 = photoStr.startsWith('data:image/') || (!photoStr.startsWith('http') && photoStr.length > 200);
+
+        if (isBase64) {
+          try {
+            // Ensure folder in Google Drive for this streak
+            if (!driveFolderId) {
+              const safeStreakSlug = (streak.title || 'streak')
+                .toLowerCase()
+                .replace(/[^a-z0-9]/g, '-')
+                .slice(0, 30);
+              const folderName = `streak-${safeStreakSlug}-${streak.id.slice(0, 8)}`;
+              driveFolderId = await createFolderInDrive(folderName);
+              await streaksCol.updateOne({ id: streakId }, { $set: { googleDriveFolderId: driveFolderId } });
+            }
+
+            let mimeType = 'image/jpeg';
+            if (photoStr.startsWith('data:image/png')) mimeType = 'image/png';
+            else if (photoStr.startsWith('data:image/webp')) mimeType = 'image/webp';
+
+            const fileName = `proof_${date}_${idx + 1}.jpg`;
+            const driveRes = await uploadToFolder(driveFolderId, fileName, mimeType, photoStr);
+            uploadedPhotos.push(driveRes.viewUrl);
+          } catch (driveErr: any) {
+            context.error('[GDrive] Failed to upload streak proof photo to Google Drive:', driveErr.message);
+            // Graceful fallback: preserve base64 so user's check-in proof is not lost
+            uploadedPhotos.push(photoStr);
+          }
+        } else {
+          // Already an external / Google Drive URL
+          uploadedPhotos.push(photoStr);
+        }
+      }
+
       const checkInItem: StreakCheckIn = {
         id: existingItem?.id || crypto.randomBytes(8).toString('hex'),
         date: date.trim(),
         timestamp: existingItem?.timestamp || new Date().toISOString(),
-        photoUrl: photosArray[0] || undefined,
-        photos: photosArray,
+        photoUrl: uploadedPhotos[0] || undefined,
+        photos: uploadedPhotos,
         title: title !== undefined ? (title?.trim() || undefined) : existingItem?.title,
         notes: notes !== undefined ? (notes?.trim() || undefined) : existingItem?.notes,
         isLeaveDay: isLeaveDay !== undefined ? !!isLeaveDay : !!existingItem?.isLeaveDay

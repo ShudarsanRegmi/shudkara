@@ -249,13 +249,13 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       };
     }
 
-    // ── 5. PUT /api/timeline/{id} (Update entry metadata) ──
+    // ── 5. PUT /api/timeline/{id} (Update entry metadata & manage media/pictures) ──
     if (method === 'PUT' && idParam) {
       let body: any;
       try { body = await request.json(); }
       catch { return { status: 400, jsonBody: { error: 'Invalid JSON body.' } }; }
 
-      const { title, content, timestamp, category, tags } = body;
+      const { title, content, timestamp, category, tags, newMediaFiles, removedMediaIds } = body;
       
       const updateData: any = {};
       if (title !== undefined) updateData.title = (title || '').trim();
@@ -271,13 +271,60 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         return { status: 404, jsonBody: { error: 'Post not found.' } };
       }
 
+      // Handle media removals from Google Drive & post
+      let currentMedia: any[] = Array.isArray(post.media) ? [...post.media] : [];
+      if (Array.isArray(removedMediaIds) && removedMediaIds.length > 0) {
+        const removedSet = new Set(removedMediaIds);
+        for (const m of currentMedia) {
+          if (removedSet.has(m.googleDriveId)) {
+            try {
+              await deleteFolderFromDrive(m.googleDriveId);
+            } catch (delErr: any) {
+              context.warn(`Failed to delete removed drive file ${m.googleDriveId}:`, delErr.message);
+            }
+          }
+        }
+        currentMedia = currentMedia.filter(m => !removedSet.has(m.googleDriveId));
+      }
+
+      // Handle adding new media pictures to Google Drive
+      if (Array.isArray(newMediaFiles) && newMediaFiles.length > 0) {
+        let folderId = post.googleDriveFolderId;
+        if (!folderId) {
+          const postDate = updateData.timestamp || new Date(post.timestamp);
+          const datePrefix = postDate.toISOString().substring(0, 10);
+          const folderSlug = (updateData.title || post.title) ? slugify(updateData.title || post.title) : 'moment';
+          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`);
+          updateData.googleDriveFolderId = folderId;
+        }
+
+        for (const file of newMediaFiles) {
+          try {
+            const driveRes = await uploadToFolder(folderId, file.name, file.type, file.base64);
+            currentMedia.push({
+              googleDriveId: driveRes.fileId,
+              fileName: file.name,
+              mimeType: file.type,
+              viewUrl: driveRes.viewUrl,
+              thumbnailUrl: driveRes.thumbnailUrl
+            });
+          } catch (driveErr: any) {
+            context.error(`Failed to upload new file "${file.name}" to GDrive:`, driveErr.message);
+          }
+        }
+      }
+
+      updateData.media = currentMedia;
+
       // Update in MongoDB
       await col.updateOne({ _id: new ObjectId(idParam) }, { $set: updateData });
+      const updatedPost = await col.findOne({ _id: new ObjectId(idParam) });
 
       // Update post.json in Google Drive to keep it in sync
-      if (post.googleDriveFolderId) {
+      const targetFolderId = updateData.googleDriveFolderId || post.googleDriveFolderId;
+      if (targetFolderId) {
         try {
-          const files = await getFilesInFolder(post.googleDriveFolderId);
+          const files = await getFilesInFolder(targetFolderId);
           const jsonFile = files.find(f => f.name.toLowerCase() === 'post.json');
           
           const updatedPayload = {
@@ -290,17 +337,16 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
 
           const metadataBase64 = Buffer.from(JSON.stringify(updatedPayload, null, 2)).toString('base64');
           
-          // Delete old post.json if it exists, and write new one
           if (jsonFile) {
-            await deleteFolderFromDrive(jsonFile.id); // deletes the file by id
+            await deleteFolderFromDrive(jsonFile.id);
           }
-          await uploadToFolder(post.googleDriveFolderId, 'post.json', 'application/json', metadataBase64);
+          await uploadToFolder(targetFolderId, 'post.json', 'application/json', metadataBase64);
         } catch (syncErr: any) {
           context.error('Failed to sync post.json file update in Google Drive:', syncErr.message);
         }
       }
 
-      return { status: 200, jsonBody: { success: true } };
+      return { status: 200, jsonBody: { success: true, post: updatedPost } };
     }
 
     // ── 6. DELETE /api/timeline/{id} (Delete post + delete folder recursively) ──

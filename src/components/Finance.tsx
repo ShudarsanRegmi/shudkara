@@ -4,8 +4,19 @@ import {
   RefreshCw, Clock, AlertTriangle, Filter,
   Trash2, X, DollarSign, Layers, ChevronRight,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
-  Users, CheckCircle2, Edit2
+  Users, CheckCircle2, Edit2, Tag
 } from 'lucide-react';
+
+export interface FinanceCategory {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  isDefault?: boolean;
+  usageCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
 
 export interface ExpenseSet {
   id: string;
@@ -125,10 +136,10 @@ const EXPENSE_CATEGORIES = [
   'Education', 'Travel & Stay', 'Miscellaneous'
 ];
 
-const PAYMENT_METHODS = ['Bank / Card', 'Cash', 'eSewa', 'Khalti', 'Other'];
+const PAYMENT_METHODS = ['Bank / Card', 'UPI', 'Cash', 'eSewa', 'Khalti', 'Other'];
 
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories'>('overview');
   const [loading, setLoading] = useState(true);
 
   // Data states
@@ -139,6 +150,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [borrows, setBorrows] = useState<BorrowItem[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [backlog, setBacklog] = useState<BankBacklogItem[]>([]);
+  const [categories, setCategories] = useState<FinanceCategory[]>([]);
 
   // Filter states for expenses
   const [filterSetId, setFilterSetId] = useState<string>('all');
@@ -151,8 +163,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [isLendModalOpen, setIsLendModalOpen] = useState(false);
   const [isBorrowModalOpen, setIsBorrowModalOpen] = useState(false);
   const [isPersonModalOpen, setIsPersonModalOpen] = useState(false);
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [selectedPersonLedger, setSelectedPersonLedger] = useState<Person | null>(null);
   const [reconcileTarget, setReconcileTarget] = useState<BankBacklogItem | null>(null);
   const [repayTarget, setRepayTarget] = useState<{ type: 'lend' | 'borrow'; item: LendItem | BorrowItem } | null>(null);
+
+  // Category form state
+  const [categoryForm, setCategoryForm] = useState({
+    id: '',
+    name: '',
+    color: '#6366f1'
+  });
 
   // Form states
   const [expenseForm, setExpenseForm] = useState({
@@ -236,14 +257,15 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     if (!authToken) return;
     setLoading(true);
     try {
-      const [ovRes, setsRes, expRes, lendsRes, borrowsRes, peopleRes, backlogRes] = await Promise.all([
+      const [ovRes, setsRes, expRes, lendsRes, borrowsRes, peopleRes, backlogRes, catRes] = await Promise.all([
         fetch('/api/finance/overview', { headers: authHeaders }),
         fetch('/api/finance/expense-sets', { headers: authHeaders }),
         fetch('/api/finance/expenses', { headers: authHeaders }),
         fetch('/api/finance/lends', { headers: authHeaders }),
         fetch('/api/finance/borrows', { headers: authHeaders }),
         fetch('/api/finance/people', { headers: authHeaders }),
-        fetch('/api/finance/backlog?status=pending', { headers: authHeaders })
+        fetch('/api/finance/backlog?status=pending', { headers: authHeaders }),
+        fetch('/api/finance/categories', { headers: authHeaders })
       ]);
 
       if (ovRes.ok) setOverview(await ovRes.json());
@@ -253,6 +275,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       if (borrowsRes.ok) setBorrows(await borrowsRes.json());
       if (peopleRes.ok) setPeople(await peopleRes.json());
       if (backlogRes.ok) setBacklog(await backlogRes.json());
+      if (catRes.ok) {
+        const catData = await catRes.json();
+        if (Array.isArray(catData)) setCategories(catData);
+      }
     } catch (err) {
       console.error('Error fetching finance data:', err);
     } finally {
@@ -263,6 +289,57 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   useEffect(() => {
     fetchAllData();
   }, [authToken]);
+
+  // Handle Save Category
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!categoryForm.name.trim()) return;
+
+    try {
+      const res = await fetch(
+        categoryForm.id ? `/api/finance/categories/${categoryForm.id}` : '/api/finance/categories',
+        {
+          method: categoryForm.id ? 'PUT' : 'POST',
+          headers: authHeaders,
+          body: JSON.stringify({
+            name: categoryForm.name.trim(),
+            color: categoryForm.color || '#6366f1'
+          })
+        }
+      );
+      if (res.ok) {
+        setIsCategoryModalOpen(false);
+        setCategoryForm({ id: '', name: '', color: '#6366f1' });
+        fetchAllData();
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Failed to save category');
+      }
+    } catch (err: any) {
+      console.error('Save category error:', err);
+      alert(err.message || 'Error saving category');
+    }
+  };
+
+  // Handle Delete Category
+  const handleDeleteCategory = async (id: string, name: string) => {
+    if (!confirm(`Are you sure you want to delete category "${name}"? Existing expenses will preserve their text label.`)) return;
+    try {
+      const res = await fetch(`/api/finance/categories/${id}`, {
+        method: 'DELETE',
+        headers: authHeaders
+      });
+      if (res.ok) {
+        fetchAllData();
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Failed to delete category');
+      }
+    } catch (err: any) {
+      console.error('Delete category error:', err);
+      alert(err.message || 'Error deleting category');
+    }
+  };
 
   // Handle Save Expense (with Split and Paid-by support)
   const handleSaveExpense = async (e: React.FormEvent) => {
@@ -368,9 +445,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         setIsPersonModalOpen(false);
         setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
         fetchAllData();
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Failed to save person');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Save person error:', err);
+      alert(err.message || 'Error saving person');
     }
   };
 
@@ -641,6 +722,9 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
+  // Effective categories list
+  const effectiveCategories = categories.length > 0 ? categories.map(c => c.name) : EXPENSE_CATEGORIES;
+
   // Filtered expenses
   const filteredExpenses = expenses.filter(e => {
     if (hideRotations && e.isRotation) return false;
@@ -707,7 +791,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 id: '',
                 amount: '',
                 description: '',
-                category: EXPENSE_CATEGORIES[0],
+                category: effectiveCategories[0] || 'Food & Dining',
                 expenseSetId: '',
                 paymentMethod: PAYMENT_METHODS[0],
                 isRotation: false,
@@ -743,6 +827,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
           <button
             onClick={() => {
+              setCategoryForm({ id: '', name: '', color: '#6366f1' });
+              setIsCategoryModalOpen(true);
+            }}
+            className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+          >
+            <Tag className="w-4 h-4" />
+            + Category
+          </button>
+
+          <button
+            onClick={() => {
               setSetForm({ id: '', name: '', category: 'Outing / Trip', budget: '', startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '' });
               setIsSetModalOpen(true);
             }}
@@ -770,7 +865,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
           { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
           { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
-          { key: 'people', label: 'People & Ledgers', icon: Users, count: people.length }
+          { key: 'people', label: 'People & Ledgers', icon: Users, count: people.length },
+          { key: 'categories', label: 'Categories', icon: Tag, count: categories.length }
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.key;
@@ -1163,10 +1259,22 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 className="px-2.5 py-1.5 border border-slate-200 rounded-lg text-slate-700 bg-slate-50/50"
               >
                 <option value="all">All Categories</option>
-                {EXPENSE_CATEGORIES.map(c => (
+                {effectiveCategories.map(c => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCategoryForm({ id: '', name: '', color: '#6366f1' });
+                  setIsCategoryModalOpen(true);
+                }}
+                className="px-2 py-1.5 border border-indigo-200 text-indigo-700 bg-indigo-50/50 hover:bg-indigo-100 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
+                title="Manage Categories"
+              >
+                <Plus className="w-3 h-3" /> Category
+              </button>
 
               {/* Rotation toggle */}
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
@@ -1717,8 +1825,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                       <button
                         type="button"
+                        onClick={() => setSelectedPersonLedger(p)}
+                        className="flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700"
+                        title="View Full Ledger History"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-indigo-600" />
+                        Ledger
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleSettlePerson(p)}
-                        className={`w-full py-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                        className={`flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                           balance !== 0
                             ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
                             : 'bg-slate-100 text-slate-400 cursor-not-allowed'
@@ -1733,6 +1850,81 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 );
               })
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* 7. CATEGORIES MANAGEMENT TAB */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {activeSubTab === 'categories' && (
+        <div className="space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                <Tag className="w-4 h-4 text-indigo-600" />
+                Expense Categories Management
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Organize, edit, or customize spending categories across your expenses, trips, and automated SMS backlog
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setCategoryForm({ id: '', name: '', color: '#6366f1' });
+                setIsCategoryModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+            >
+              <Plus className="w-4 h-4" /> Add New Category
+            </button>
+          </div>
+
+          {/* Categories Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {categories.map(c => (
+              <div
+                key={c.id || c.name}
+                className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between gap-3 hover:border-slate-300 transition"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className="w-3.5 h-3.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: c.color || '#6366f1' }}
+                  />
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 text-xs truncate">
+                      {c.name}
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {c.usageCount !== undefined ? `${c.usageCount} expense(s)` : 'Active category'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCategoryForm({ id: c.id, name: c.name, color: c.color || '#6366f1' });
+                      setIsCategoryModalOpen(true);
+                    }}
+                    className="p-1 text-slate-400 hover:text-indigo-600 rounded transition"
+                    title="Edit Category"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCategory(c.id, c.name)}
+                    className="p-1 text-slate-400 hover:text-red-500 rounded transition"
+                    title="Delete Category"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -2219,15 +2411,49 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
             <form onSubmit={handleSaveLend} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Borrower Name (Who took?)</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Ramesh, Alex"
-                  value={lendForm.personName}
-                  onChange={e => setLendForm(prev => ({ ...prev, personName: e.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-slate-700">Borrower Person (Who took?)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+                      setIsPersonModalOpen(true);
+                    }}
+                    className="text-[10px] text-emerald-600 hover:text-emerald-800 font-bold flex items-center gap-0.5"
+                  >
+                    <Plus className="w-3 h-3" /> New Person
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <select
+                    value={people.some(p => p.name.toLowerCase() === lendForm.personName.toLowerCase()) ? people.find(p => p.name.toLowerCase() === lendForm.personName.toLowerCase())?.name : ''}
+                    onChange={e => {
+                      const val = e.target.value;
+                      const matched = people.find(p => p.name === val);
+                      setLendForm(prev => ({
+                        ...prev,
+                        personName: val,
+                        contact: matched?.contact || prev.contact
+                      }));
+                    }}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                  >
+                    <option value="">Select registered person...</option>
+                    {people.map(p => (
+                      <option key={p.id} value={p.name}>
+                        {p.name} {p.isDefault ? '(Default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Or type name"
+                    value={lendForm.personName}
+                    onChange={e => setLendForm(prev => ({ ...prev, personName: e.target.value }))}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2335,15 +2561,49 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
             <form onSubmit={handleSaveBorrow} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Lender Name (Who gave?)</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Shyam, Boss, Uncle"
-                  value={borrowForm.personName}
-                  onChange={e => setBorrowForm(prev => ({ ...prev, personName: e.target.value }))}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-slate-700">Lender Person (Who gave?)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+                      setIsPersonModalOpen(true);
+                    }}
+                    className="text-[10px] text-amber-600 hover:text-amber-800 font-bold flex items-center gap-0.5"
+                  >
+                    <Plus className="w-3 h-3" /> New Person
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <select
+                    value={people.some(p => p.name.toLowerCase() === borrowForm.personName.toLowerCase()) ? people.find(p => p.name.toLowerCase() === borrowForm.personName.toLowerCase())?.name : ''}
+                    onChange={e => {
+                      const val = e.target.value;
+                      const matched = people.find(p => p.name === val);
+                      setBorrowForm(prev => ({
+                        ...prev,
+                        personName: val,
+                        contact: matched?.contact || prev.contact
+                      }));
+                    }}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 bg-white"
+                  >
+                    <option value="">Select registered person...</option>
+                    {people.map(p => (
+                      <option key={p.id} value={p.name}>
+                        {p.name} {p.isDefault ? '(Default)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Or type name"
+                    value={borrowForm.personName}
+                    onChange={e => setBorrowForm(prev => ({ ...prev, personName: e.target.value }))}
+                    className="flex-1 px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -2645,7 +2905,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     onChange={e => setReconcileForm(prev => ({ ...prev, category: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white"
                   >
-                    {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    {effectiveCategories.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div>
@@ -2811,6 +3071,295 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           </div>
         </div>
       )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MODAL: ADD / EDIT CATEGORY */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {isCategoryModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+                <Tag className="w-4 h-4 text-indigo-600" />
+                {categoryForm.id ? 'Edit Category' : 'Add New Category'}
+              </h3>
+              <button onClick={() => setIsCategoryModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCategory} className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Category Name</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Subscriptions, Gym & Fitness, Tech Gadgets"
+                  value={categoryForm.name}
+                  onChange={e => setCategoryForm(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Color Accent</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {[
+                    '#6366f1', '#10b981', '#f59e0b', '#ef4444',
+                    '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6',
+                    '#3b82f6', '#f97316', '#64748b'
+                  ].map(color => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setCategoryForm(prev => ({ ...prev, color }))}
+                      className={`w-6 h-6 rounded-full transition transform ${
+                        categoryForm.color === color ? 'scale-125 ring-2 ring-offset-2 ring-indigo-500' : 'hover:scale-110'
+                      }`}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={categoryForm.color}
+                    onChange={e => setCategoryForm(prev => ({ ...prev, color: e.target.value }))}
+                    className="w-7 h-7 rounded-lg border border-slate-200 cursor-pointer p-0.5"
+                    title="Custom Color"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCategoryModalOpen(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                >
+                  Save Category
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MODAL: COMPREHENSIVE PERSON LEDGER DETAILS */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {selectedPersonLedger && (() => {
+        const p = selectedPersonLedger;
+        const normName = p.name.toLowerCase();
+        const pLends = lends.filter(l => l.personName.toLowerCase() === normName);
+        const pBorrows = borrows.filter(b => b.personName.toLowerCase() === normName);
+        const pSplits = expenses.filter(e => (e.splitPersonName || '').toLowerCase() === normName);
+        const pPaidForMe = expenses.filter(e => (e.paidByPersonName || '').toLowerCase() === normName);
+
+        const totalLent = pLends.reduce((s, l) => s + (l.amount || 0), 0);
+        const totalLentRepaid = pLends.reduce((s, l) => s + (l.repayments || []).reduce((rSum, r) => rSum + (r.amount || 0), 0), 0);
+        const outstandingLent = Math.max(0, totalLent - totalLentRepaid);
+
+        const totalBorrowed = pBorrows.reduce((s, b) => s + (b.amount || 0), 0);
+        const totalBorrowedRepaid = pBorrows.reduce((s, b) => s + (b.repayments || []).reduce((rSum, r) => rSum + (r.amount || 0), 0), 0);
+        const outstandingBorrowed = Math.max(0, totalBorrowed - totalBorrowedRepaid);
+
+        const totalSplitForThem = pSplits.reduce((s, e) => s + (e.splitAmount || 0), 0);
+        const totalPaidByThem = pPaidForMe.reduce((s, e) => s + (e.amount || 0), 0);
+
+        const netLedger = (outstandingLent + totalSplitForThem) - (outstandingBorrowed + totalPaidByThem);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                    <User className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+                      {p.name}
+                      {p.isDefault && (
+                        <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700">
+                          Default
+                        </span>
+                      )}
+                    </h3>
+                    {p.contact && (
+                      <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                        <Phone className="w-3 h-3" /> {p.contact}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => setSelectedPersonLedger(null)} className="text-slate-400 hover:text-slate-600">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Ledger Summary Cards */}
+              <div className="grid grid-cols-3 gap-2.5 text-xs">
+                <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
+                  <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Owed To You</div>
+                  <div className="text-base font-black text-emerald-700 mt-0.5">
+                    Rs. {(outstandingLent + totalSplitForThem).toLocaleString()}
+                  </div>
+                  <div className="text-[9px] text-emerald-600 mt-0.5">
+                    Lent: Rs. {outstandingLent.toLocaleString()} • Splits: Rs. {totalSplitForThem.toLocaleString()}
+                  </div>
+                </div>
+
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3">
+                  <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">You Owe</div>
+                  <div className="text-base font-black text-amber-700 mt-0.5">
+                    Rs. {(outstandingBorrowed + totalPaidByThem).toLocaleString()}
+                  </div>
+                  <div className="text-[9px] text-amber-600 mt-0.5">
+                    Borrow: Rs. {outstandingBorrowed.toLocaleString()} • Paid for you: Rs. {totalPaidByThem.toLocaleString()}
+                  </div>
+                </div>
+
+                <div className={`border rounded-xl p-3 ${
+                  netLedger > 0 ? 'bg-emerald-100/50 border-emerald-300' : netLedger < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'
+                }`}>
+                  <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Net Position</div>
+                  <div className={`text-base font-black mt-0.5 ${
+                    netLedger > 0 ? 'text-emerald-700' : netLedger < 0 ? 'text-rose-600' : 'text-slate-700'
+                  }`}>
+                    {netLedger > 0 ? `+ Rs. ${netLedger.toLocaleString()}` : netLedger < 0 ? `- Rs. ${Math.abs(netLedger).toLocaleString()}` : 'Rs. 0 (All Settled)'}
+                  </div>
+                  <div className="text-[9px] text-slate-500 mt-0.5">
+                    {netLedger > 0 ? `${p.name} owes you` : netLedger < 0 ? `You owe ${p.name}` : 'Settled'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Transactions List */}
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-xs">
+                <div className="font-bold text-slate-700 text-xs">Transaction & Ledger Entries</div>
+
+                {pLends.length === 0 && pBorrows.length === 0 && pSplits.length === 0 && pPaidForMe.length === 0 ? (
+                  <p className="text-slate-400 text-center py-6">No transaction history recorded with {p.name} yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {/* Lends */}
+                    {pLends.map(l => (
+                      <div key={l.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
+                            <ArrowUpRight className="w-3.5 h-3.5" />
+                          </span>
+                          <div>
+                            <div className="font-bold text-slate-800">Lent to {p.name}</div>
+                            <div className="text-[10px] text-slate-400">Date: {l.lentDate} • Status: {l.status}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-black text-emerald-700">Rs. {l.amount.toLocaleString()}</div>
+                          {l.repayments?.length > 0 && (
+                            <div className="text-[10px] text-slate-500">
+                              Returned: Rs. {l.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Borrows */}
+                    {pBorrows.map(b => (
+                      <div key={b.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
+                            <ArrowDownLeft className="w-3.5 h-3.5" />
+                          </span>
+                          <div>
+                            <div className="font-bold text-slate-800">Borrowed from {p.name}</div>
+                            <div className="text-[10px] text-slate-400">Date: {b.borrowedDate} • Status: {b.status}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-black text-amber-700">Rs. {b.amount.toLocaleString()}</div>
+                          {b.repayments?.length > 0 && (
+                            <div className="text-[10px] text-slate-500">
+                              Repaid: Rs. {b.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Splits */}
+                    {pSplits.map(e => (
+                      <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
+                            <Users className="w-3.5 h-3.5" />
+                          </span>
+                          <div>
+                            <div className="font-bold text-slate-800">Split Outing: {e.description}</div>
+                            <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-black text-emerald-700">+ Rs. {(e.splitAmount || 0).toLocaleString()}</div>
+                          <div className="text-[10px] text-slate-400">Total Bill: Rs. {e.amount.toLocaleString()}</div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Paid by them */}
+                    {pPaidForMe.map(e => (
+                      <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
+                            <CreditCard className="w-3.5 h-3.5" />
+                          </span>
+                          <div>
+                            <div className="font-bold text-slate-800">{p.name} paid for: {e.description}</div>
+                            <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-black text-rose-600">- Rs. {e.amount.toLocaleString()}</div>
+                          <div className="text-[10px] text-slate-400">You owe {p.name}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSettlePerson(p)}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                    netLedger !== 0
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  }`}
+                  disabled={netLedger === 0}
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Settle Balance
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPersonLedger(null)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 text-xs"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };

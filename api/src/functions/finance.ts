@@ -47,6 +47,16 @@ export interface Person {
   updatedAt: string;
 }
 
+export interface FinanceCategory {
+  id: string;
+  name: string;
+  color?: string;
+  icon?: string;
+  isSystem?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BankBacklogItem {
   id: string;
   rawSms: string;
@@ -103,6 +113,89 @@ export interface BorrowItem {
   updatedAt: string;
 }
 
+async function migratePeopleAndCategories(db: any) {
+  const peopleCol = db.collection('finance_people');
+  const lendsCol = db.collection('finance_lends');
+  const borrowsCol = db.collection('finance_borrows');
+  const expensesCol = db.collection('finance_expenses');
+  const backlogCol = db.collection('finance_bank_backlog');
+  const categoriesCol = db.collection('finance_categories');
+  const setsCol = db.collection('finance_expense_sets');
+
+  const now = new Date().toISOString();
+
+  // 1. Unify and migrate all people across the whole finance system
+  const lendNames: string[] = await lendsCol.distinct('personName');
+  const borrowNames: string[] = await borrowsCol.distinct('personName');
+  const splitNames: string[] = await expensesCol.distinct('splitPersonName');
+  const paidByNames: string[] = await expensesCol.distinct('paidByPersonName');
+  const backlogSplitNames: string[] = await backlogCol.distinct('splitPersonName');
+
+  const allNames = Array.from(new Set([
+    ...lendNames,
+    ...borrowNames,
+    ...splitNames,
+    ...paidByNames,
+    ...backlogSplitNames
+  ]))
+    .map(n => (n || '').trim())
+    .filter(n => n.length > 0);
+
+  const existingPeople = await peopleCol.find({}).toArray();
+  const existingNamesSet = new Set(existingPeople.map((p: any) => p.name.trim().toLowerCase()));
+
+  for (const name of allNames) {
+    if (!existingNamesSet.has(name.toLowerCase())) {
+      const newPerson: Person = {
+        id: crypto.randomUUID(),
+        name,
+        contact: '',
+        isDefault: false,
+        notes: 'Auto-migrated from existing finance transactions',
+        createdAt: now,
+        updatedAt: now
+      };
+      await peopleCol.insertOne(newPerson);
+      existingNamesSet.add(name.toLowerCase());
+    }
+  }
+
+  // 2. Seed / Migrate Categories
+  const DEFAULT_CATEGORIES = [
+    'Food & Dining', 'Transport & Fuel', 'Groceries', 'Entertainment & Outing',
+    'Shopping', 'Health & Medical', 'Bills & Utilities', 'Work & Tools',
+    'Education', 'Travel & Stay', 'Miscellaneous'
+  ];
+
+  const expenseCategories: string[] = await expensesCol.distinct('category');
+  const setCategories: string[] = await setsCol.distinct('category');
+  const allCategories = Array.from(new Set([
+    ...DEFAULT_CATEGORIES,
+    ...expenseCategories,
+    ...setCategories
+  ]))
+    .map(c => (c || '').trim())
+    .filter(c => c.length > 0);
+
+  const existingCats = await categoriesCol.find({}).toArray();
+  const existingCatNames = new Set(existingCats.map((c: any) => c.name.trim().toLowerCase()));
+
+  for (const cat of allCategories) {
+    if (!existingCatNames.has(cat.toLowerCase())) {
+      await categoriesCol.insertOne({
+        id: crypto.randomUUID(),
+        name: cat,
+        color: '#4f46e5',
+        icon: 'tag',
+        isSystem: DEFAULT_CATEGORIES.includes(cat),
+        createdAt: now,
+        updatedAt: now
+      });
+      existingCatNames.add(cat.toLowerCase());
+    }
+  }
+}
+
 export async function financeHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;
   const token = extractToken(request);
@@ -125,6 +218,7 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
     const borrowsCol = db.collection('finance_borrows');
     const peopleCol = db.collection('finance_people');
     const backlogCol = db.collection('finance_bank_backlog');
+    const categoriesCol = db.collection('finance_categories');
 
     const url = new URL(request.url);
     const pathParts = url.pathname.replace(/^\/api\/finance\/?/, '').split('/').filter(Boolean);
@@ -581,9 +675,13 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
     // ─────────────────────────────────────────────────────────────────────────
     if (resource === 'people') {
       if (method === 'GET') {
+        // Run migration to guarantee all names across lends, borrows, and shared expenses are synced as users
+        await migratePeopleAndCategories(db);
+
         const people = await peopleCol.find({}).sort({ isDefault: -1, name: 1 }).toArray();
         const lends = await lendsCol.find({}).toArray();
         const borrows = await borrowsCol.find({}).toArray();
+        const expenses = await expensesCol.find({}).toArray();
 
         const enriched = people.map(p => {
           const personLends = lends.filter(l => (l.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase());
@@ -600,13 +698,19 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           }, 0);
           const netPayable = Math.max(0, totalBorrowed - borrowRepayments);
 
+          const sharedExpensesCount = expenses.filter(e =>
+            (e.splitPersonName || '').trim().toLowerCase() === p.name.trim().toLowerCase() ||
+            (e.paidByPersonName || '').trim().toLowerCase() === p.name.trim().toLowerCase()
+          ).length;
+
           return {
             ...p,
             netReceivable,
             netPayable,
-            netBalance: netReceivable - netPayable, // > 0: Ram owes me, < 0: I owe Ram
+            netBalance: netReceivable - netPayable, // > 0: Person owes me, < 0: I owe Person
             activeLendsCount: personLends.filter(l => l.status === 'active' || l.status === 'partially_returned').length,
-            activeBorrowsCount: personBorrows.filter(b => b.status === 'active' || b.status === 'partially_repaid').length
+            activeBorrowsCount: personBorrows.filter(b => b.status === 'active' || b.status === 'partially_repaid').length,
+            sharedExpensesCount
           };
         });
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: enriched };
@@ -690,11 +794,43 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
 
       if (method === 'PUT' && resourceId) {
         const body: any = await request.json().catch(() => ({}));
+        const existing = await peopleCol.findOne({ id: resourceId });
+        if (!existing) return { status: 404, jsonBody: { error: 'Person not found.' } };
+
         if (body.isDefault) {
           await peopleCol.updateMany({ id: { $ne: resourceId } }, { $set: { isDefault: false } });
         }
         const updates: any = { updatedAt: new Date().toISOString() };
-        if (body.name !== undefined) updates.name = body.name.trim();
+        if (body.name !== undefined && body.name.trim() !== existing.name) {
+          const newName = body.name.trim();
+          if (!newName) return { status: 400, jsonBody: { error: 'Person name cannot be empty.' } };
+          const dup = await peopleCol.findOne({ id: { $ne: resourceId }, name: { $regex: new RegExp(`^${newName}$`, 'i') } });
+          if (dup) return { status: 409, jsonBody: { error: 'Another person with this name already exists.' } };
+          updates.name = newName;
+
+          // Cascade update across entire finance system
+          const oldName = existing.name;
+          await lendsCol.updateMany(
+            { personName: { $regex: new RegExp(`^${oldName}$`, 'i') } },
+            { $set: { personName: newName } }
+          );
+          await borrowsCol.updateMany(
+            { personName: { $regex: new RegExp(`^${oldName}$`, 'i') } },
+            { $set: { personName: newName } }
+          );
+          await expensesCol.updateMany(
+            { splitPersonName: { $regex: new RegExp(`^${oldName}$`, 'i') } },
+            { $set: { splitPersonName: newName } }
+          );
+          await expensesCol.updateMany(
+            { paidByPersonName: { $regex: new RegExp(`^${oldName}$`, 'i') } },
+            { $set: { paidByPersonName: newName } }
+          );
+          await backlogCol.updateMany(
+            { splitPersonName: { $regex: new RegExp(`^${oldName}$`, 'i') } },
+            { $set: { splitPersonName: newName } }
+          );
+        }
         if (body.contact !== undefined) updates.contact = body.contact;
         if (body.isDefault !== undefined) updates.isDefault = Boolean(body.isDefault);
         if (body.notes !== undefined) updates.notes = body.notes;
@@ -708,6 +844,86 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         await peopleCol.deleteOne({ id: resourceId });
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, id: resourceId } };
       }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6b. CATEGORIES MANAGEMENT: /api/finance/categories
+    // ─────────────────────────────────────────────────────────────────────────
+    if (resource === 'categories') {
+      if (method === 'GET') {
+        await migratePeopleAndCategories(db);
+        const categories = await categoriesCol.find({}).sort({ name: 1 }).toArray();
+        const expenses = await expensesCol.find({}).toArray();
+        const enriched = categories.map((c: any) => {
+          const count = expenses.filter((e: any) => (e.category || '').toLowerCase() === c.name.toLowerCase()).length;
+          return {
+            ...c,
+            usageCount: count
+          };
+        });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: enriched };
+      }
+
+      if (method === 'POST') {
+        const body: any = await request.json().catch(() => ({}));
+        if (!body.name || !body.name.trim()) {
+          return { status: 400, jsonBody: { error: 'Category name is required.' } };
+        }
+        const name = body.name.trim();
+        const existing = await categoriesCol.findOne({ name: { $regex: new RegExp(`^${name}$`, 'i') } });
+        if (existing) {
+          return { status: 409, jsonBody: { error: 'Category with this name already exists.' } };
+        }
+        const now = new Date().toISOString();
+        const newCat: FinanceCategory = {
+          id: crypto.randomUUID(),
+          name,
+          color: body.color || '#4f46e5',
+          icon: body.icon || 'tag',
+          isSystem: false,
+          createdAt: now,
+          updatedAt: now
+        };
+        await categoriesCol.insertOne(newCat);
+        return { status: 201, headers: { 'Content-Type': 'application/json' }, jsonBody: newCat };
+      }
+
+      if (method === 'PUT' && resourceId) {
+        const body: any = await request.json().catch(() => ({}));
+        const existing = await categoriesCol.findOne({ id: resourceId });
+        if (!existing) return { status: 404, jsonBody: { error: 'Category not found.' } };
+
+        const updates: any = { updatedAt: new Date().toISOString() };
+        if (body.name && body.name.trim() !== existing.name) {
+          const newName = body.name.trim();
+          const dup = await categoriesCol.findOne({ id: { $ne: resourceId }, name: { $regex: new RegExp(`^${newName}$`, 'i') } });
+          if (dup) return { status: 409, jsonBody: { error: 'Another category with this name already exists.' } };
+          updates.name = newName;
+
+          // Cascade update to expenses & sets
+          await expensesCol.updateMany({ category: existing.name }, { $set: { category: newName } });
+          await setsCol.updateMany({ category: existing.name }, { $set: { category: newName } });
+        }
+        if (body.color !== undefined) updates.color = body.color;
+        if (body.icon !== undefined) updates.icon = body.icon;
+
+        await categoriesCol.updateOne({ id: resourceId }, { $set: updates });
+        const updated = await categoriesCol.findOne({ id: resourceId });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
+      }
+
+      if (method === 'DELETE' && resourceId) {
+        const existing = await categoriesCol.findOne({ id: resourceId });
+        if (!existing) return { status: 404, jsonBody: { error: 'Category not found.' } };
+        await categoriesCol.deleteOne({ id: resourceId });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, id: resourceId } };
+      }
+    }
+
+    // Explicit migration endpoint: /api/finance/migrate
+    if (resource === 'migrate' && method === 'POST') {
+      await migratePeopleAndCategories(db);
+      return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, message: 'Finance migration completed successfully.' } };
     }
 
     // ─────────────────────────────────────────────────────────────────────────
