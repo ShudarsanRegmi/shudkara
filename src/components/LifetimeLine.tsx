@@ -3,7 +3,7 @@ import {
   Plus, Trash2, Edit2, 
   Film, AlertCircle, 
   Loader2, Sparkles, BookOpen, Clock, Calendar,
-  ChevronLeft, ChevronRight, Layers, List, Eye, SlidersHorizontal,
+  ChevronLeft, ChevronRight, Layers, List, SlidersHorizontal,
   Camera, X, RefreshCw, Share2, Check, MessageCircle, ExternalLink
 } from 'lucide-react';
 import { 
@@ -14,6 +14,8 @@ import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal
 import { TimelineWizardModal, type DraftMediaItem, finalizeSuccessfulDraftUpload } from './TimelineWizardModal';
 import { TimelineSidebar } from './TimelineSidebar';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
+import { MediaCollageGrid } from './MediaCollageGrid';
+import { FBReactionSummary } from './FacebookReactions';
 
 export interface MediaItem {
   googleDriveId: string;
@@ -1357,8 +1359,8 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   onSharePost,
   isShareToastActive,
   onOpenLightbox,
-  momentPhotoIndex,
-  onTurnMomentPhoto,
+  momentPhotoIndex: _momentPhotoIndex,
+  onTurnMomentPhoto: _onTurnMomentPhoto,
   selectedTag,
   setSelectedTag,
   editTitle,
@@ -1388,18 +1390,11 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
 }) => {
   const dt = new Date(post.timestamp);
   const bsDate = adToBs(post.timestamp);
-  const mediaCount = post.media?.length || 0;
-  const currentMediaIdx = mediaCount > 0 ? momentPhotoIndex % mediaCount : 0;
-  const currentMedia = post.media && post.media.length > 0 ? post.media[currentMediaIdx] : null;
 
   // Social Engagement State on Card
   const [showComments, setShowComments] = useState(false);
   const reactions = post.reactions || [];
   const comments = post.comments || [];
-  const emojiCounts: Record<string, number> = {};
-  reactions.forEach(r => {
-    emojiCounts[r.emoji] = (emojiCounts[r.emoji] || 0) + 1;
-  });
 
   if (isEditing) {
     return (
@@ -1749,97 +1744,12 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
         </div>
       </div>
 
-      {/* Horizontal Multi-Snap Media Carousel / Deck */}
-      {currentMedia && (
-        <div className="relative rounded-2xl overflow-hidden bg-slate-900 aspect-video sm:aspect-[16/9] max-h-[380px] flex items-center justify-center border border-slate-100 shadow-xs group/snap">
-          {currentMedia.mimeType.startsWith('video/') ? (
-            <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-950">
-              <video
-                src={currentMedia.viewUrl}
-                controls
-                playsInline
-                preload="metadata"
-                className="w-full h-full object-contain max-h-[380px]"
-              />
-              <span className="text-[10px] font-mono text-slate-300 absolute top-3 left-3 bg-black/60 px-2 py-0.5 rounded truncate max-w-[80%] flex items-center gap-1 pointer-events-none">
-                <Film className="w-3 h-3 text-blue-400" />
-                {currentMedia.fileName}
-              </span>
-            </div>
-          ) : (
-            <img
-              src={currentMedia.viewUrl}
-              alt={currentMedia.fileName}
-              onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
-              loading="lazy"
-              className="w-full h-full object-cover cursor-pointer group-hover/snap:scale-[1.02] transition duration-300"
-            />
-          )}
-
-          {/* Media Type Badge if GIF */}
-          {currentMedia.mimeType === 'image/gif' && (
-            <span className="absolute top-3 left-3 bg-purple-600/90 text-white text-[9px] font-black px-2 py-0.5 rounded shadow-sm">
-              GIF
-            </span>
-          )}
-
-          {/* Quick Full-Screen View Overlay */}
-          <button
-            type="button"
-            onClick={() => onOpenLightbox(post.media!, currentMediaIdx)}
-            className="absolute top-3 left-3 p-1.5 bg-black/50 hover:bg-black/75 text-white rounded-lg backdrop-blur-md opacity-0 group-hover/snap:opacity-100 transition"
-            title="View Full Resolution"
-          >
-            <Eye className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Snap page count badge */}
-          {mediaCount > 1 && (
-            <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md px-2.5 py-0.5 rounded-full text-white text-[10px] font-bold">
-              Snap {currentMediaIdx + 1} of {mediaCount}
-            </div>
-          )}
-
-          {/* Page-turner navigation arrows inside multi-image moment */}
-          {mediaCount > 1 && (
-            <>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTurnMomentPhoto('prev', mediaCount);
-                }}
-                className="absolute left-2.5 p-2 bg-black/50 hover:bg-black/80 text-white rounded-full transition shadow-lg active:scale-90"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onTurnMomentPhoto('next', mediaCount);
-                }}
-                className="absolute right-2.5 p-2 bg-black/50 hover:bg-black/80 text-white rounded-full transition shadow-lg active:scale-90"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </>
-          )}
-
-          {/* Dot indicators */}
-          {mediaCount > 1 && (
-            <div className="absolute bottom-2.5 flex items-center gap-1">
-              {post.media!.map((_, dotIdx) => (
-                <div
-                  key={dotIdx}
-                  className={`h-1.5 rounded-full transition-all ${
-                    dotIdx === currentMediaIdx ? 'w-4 bg-white' : 'w-1.5 bg-white/50'
-                  }`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Photo / Video Collage Grid (Facebook Style) */}
+      {post.media && post.media.length > 0 && (
+        <MediaCollageGrid
+          media={post.media}
+          onOpenLightbox={(idx) => onOpenLightbox(post.media!, idx)}
+        />
       )}
 
       {/* Title & Description */}
@@ -1873,28 +1783,14 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
         </div>
       )}
 
-      {/* Social Engagement Summary Bar: Likes, Emojis & Comments */}
+      {/* Social Engagement Summary Bar: Facebook Icon Reactions & Comments */}
       <div className="pt-2 border-t border-slate-100/90 flex flex-wrap items-center justify-between gap-2 text-xs">
-        {/* Reaction Emoji Badges */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {Object.entries(emojiCounts).length > 0 ? (
-            Object.entries(emojiCounts).map(([emoji, count]) => (
-              <span
-                key={emoji}
-                title={`Reacted by: ${reactions.filter(r => r.emoji === emoji).map(r => r.name).join(', ')}`}
-                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-bold"
-              >
-                <span>{emoji}</span>
-                <span className="text-[11px] font-semibold">{count}</span>
-              </span>
-            ))
+        {/* Facebook-Style Reaction Summary with Circular Icon Badges */}
+        <div className="flex items-center gap-1.5">
+          {reactions.length > 0 ? (
+            <FBReactionSummary reactions={reactions} />
           ) : (
             <span className="text-[11px] text-slate-400 italic">No reactions yet</span>
-          )}
-          {reactions.length > 0 && (
-            <span className="text-[10px] text-slate-400 pl-1 hidden sm:inline truncate max-w-xs" title={reactions.map(r => r.name).join(', ')}>
-              ({Array.from(new Set(reactions.map(r => r.name))).join(', ')})
-            </span>
           )}
         </div>
 

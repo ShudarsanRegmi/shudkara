@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeft, Share2, MessageCircle, Send, Calendar, Clock, Tag, Check, 
-  Film, Sparkles, User, Edit3, X, AlertCircle, Loader2
+  User, Edit3, X, AlertCircle, Loader2
 } from 'lucide-react';
 import { adToBs } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
+import { MediaCollageGrid } from './MediaCollageGrid';
+import { FBReactionDock, FBReactionSummary, getReactionConfig } from './FacebookReactions';
 
 export interface PublicMediaItem {
   googleDriveId: string;
@@ -47,15 +49,6 @@ interface SharedTimelinePostViewProps {
   onBack: () => void;
 }
 
-const AVAILABLE_EMOJIS = [
-  { emoji: '❤️', label: 'Love' },
-  { emoji: '👍', label: 'Like' },
-  { emoji: '🔥', label: 'Fire' },
-  { emoji: '😂', label: 'Haha' },
-  { emoji: '🎉', label: 'Celebrate' },
-  { emoji: '💡', label: 'Insight' }
-];
-
 const GUEST_NAME_KEY = 'shudkara_guest_name';
 
 // Cookie helper
@@ -76,8 +69,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
-  // Media Gallery Index
-  const [currentMediaIdx, setCurrentMediaIdx] = useState(0);
+  // Media Lightbox Modal
   const [showLightbox, setShowLightbox] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
@@ -99,6 +91,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
   // Commenting
   const [commentText, setCommentText] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const commentInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Fetch Public Post
   useEffect(() => {
@@ -161,30 +154,31 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
     }
   };
 
-  // Toggle Emoji Reaction
-  const handleToggleReaction = (emoji: string) => {
+  // Handle Reaction Selection (Facebook Style)
+  const handleSelectReaction = (reactionKey: string) => {
     executeWithName(async () => {
       const activeName = guestName.trim() || nameInput.trim();
       if (!activeName || !post) return;
 
-      // Optimistic UI update
       const existingReactions = post.reactions || [];
       const matchIdx = existingReactions.findIndex(r => r.name.toLowerCase() === activeName.toLowerCase());
       let updatedReactions = [...existingReactions];
 
       if (matchIdx >= 0) {
-        if (existingReactions[matchIdx].emoji === emoji) {
+        if (getReactionConfig(existingReactions[matchIdx].emoji).id === reactionKey) {
+          // Toggle off
           updatedReactions.splice(matchIdx, 1);
         } else {
+          // Change reaction
           updatedReactions[matchIdx] = {
-            emoji,
+            emoji: reactionKey,
             name: activeName,
             createdAt: new Date().toISOString()
           };
         }
       } else {
         updatedReactions.push({
-          emoji,
+          emoji: reactionKey,
           name: activeName,
           createdAt: new Date().toISOString()
         });
@@ -196,7 +190,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
         const res = await fetch(`/api/timeline/public/${postId}/react`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ emoji, name: activeName })
+          body: JSON.stringify({ emoji: reactionKey, name: activeName })
         });
         if (res.ok) {
           const data = await res.json();
@@ -208,6 +202,18 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
         console.error('Failed to submit reaction:', err);
       }
     });
+  };
+
+  // Quick toggle (clicks main Like button)
+  const handleQuickToggleLike = () => {
+    if (!post) return;
+    const activeName = guestName.trim();
+    const existing = (post.reactions || []).find(r => r.name.toLowerCase() === activeName.toLowerCase());
+    if (existing) {
+      handleSelectReaction(getReactionConfig(existing.emoji).id);
+    } else {
+      handleSelectReaction('like');
+    }
   };
 
   // Submit Comment
@@ -287,17 +293,10 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
 
   const dt = new Date(post.timestamp);
   const bsDate = adToBs(post.timestamp);
-  const mediaCount = post.media?.length || 0;
-  const currentMedia = mediaCount > 0 ? post.media![currentMediaIdx % mediaCount] : null;
 
-  // Aggregate Reactions
   const reactions = post.reactions || [];
-  const emojiCounts: Record<string, number> = {};
-  reactions.forEach(r => {
-    emojiCounts[r.emoji] = (emojiCounts[r.emoji] || 0) + 1;
-  });
-
   const myReaction = guestName ? reactions.find(r => r.name.toLowerCase() === guestName.toLowerCase()) : null;
+  const myReactionKey = myReaction ? myReaction.emoji : null;
 
   const lightboxItems: LightboxMediaItem[] = (post.media || []).map(m => ({
     url: m.viewUrl,
@@ -414,127 +413,67 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
           )}
         </div>
 
-        {/* ── Media Gallery / Carousel ── */}
-        {currentMedia && (
-          <div className="relative bg-slate-950 border-y border-slate-200 aspect-video sm:aspect-[16/9] max-h-[480px] flex items-center justify-center overflow-hidden group select-none">
-            {currentMedia.mimeType.startsWith('video/') ? (
-              <video
-                src={currentMedia.viewUrl}
-                controls
-                playsInline
-                preload="metadata"
-                className="w-full h-full object-contain max-h-[480px]"
-              />
-            ) : (
-              <img
-                src={currentMedia.viewUrl}
-                alt={currentMedia.fileName}
-                onClick={() => {
-                  setLightboxIndex(currentMediaIdx);
-                  setShowLightbox(true);
-                }}
-                className="w-full h-full object-contain max-h-[480px] cursor-pointer"
-                loading="lazy"
-              />
-            )}
-
-            {/* Media Pagination Navigation */}
-            {mediaCount > 1 && (
-              <>
-                <button
-                  onClick={() => setCurrentMediaIdx(prev => (prev - 1 + mediaCount) % mediaCount)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white border border-slate-700 opacity-80 hover:opacity-100 transition shadow-lg active:scale-95"
-                  title="Previous photo/video"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => setCurrentMediaIdx(prev => (prev + 1) % mediaCount)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-slate-900/80 hover:bg-slate-900 text-white border border-slate-700 opacity-80 hover:opacity-100 transition shadow-lg active:scale-95"
-                  title="Next photo/video"
-                >
-                  <ArrowLeft className="w-4 h-4 rotate-180" />
-                </button>
-
-                <div className="absolute bottom-3 right-3 bg-slate-950/80 backdrop-blur-md px-3 py-1 rounded-full text-[11px] font-mono font-bold text-white border border-slate-800">
-                  {currentMediaIdx + 1} / {mediaCount}
-                </div>
-              </>
-            )}
-
-            {/* Media Type Badge */}
-            <div className="absolute top-3 left-3 flex items-center gap-2">
-              {currentMedia.mimeType.startsWith('video/') && (
-                <span className="px-2.5 py-1 bg-red-600/90 text-white text-[10px] font-black rounded-lg uppercase tracking-wider flex items-center gap-1 shadow-sm">
-                  <Film className="w-3 h-3" /> Video
-                </span>
-              )}
-              {currentMedia.mimeType === 'image/gif' && (
-                <span className="px-2.5 py-1 bg-purple-600/90 text-white text-[10px] font-black rounded-lg uppercase tracking-wider shadow-sm">
-                  GIF
-                </span>
-              )}
-            </div>
+        {/* ── Photo / Video Collage Grid ── */}
+        {post.media && post.media.length > 0 && (
+          <div className="px-4 sm:px-6 pb-4">
+            <MediaCollageGrid
+              media={post.media}
+              onOpenLightbox={(idx) => {
+                setLightboxIndex(idx);
+                setShowLightbox(true);
+              }}
+            />
           </div>
         )}
 
-        {/* ── Social Reactions Bar ── */}
-        <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/60 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-slate-800 flex items-center gap-1.5 uppercase tracking-wider">
-              <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              Reactions ({reactions.length})
-            </span>
+        {/* ── Facebook-Style Social Engagement Bar ── */}
+        <div className="border-t border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
+          
+          {/* Reaction Summary Counts & Comment Count */}
+          {(reactions.length > 0 || (post.comments && post.comments.length > 0)) && (
+            <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs">
+              <FBReactionSummary reactions={reactions} />
+              
+              {post.comments && post.comments.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => commentInputRef.current?.focus()}
+                  className="text-[11px] text-slate-500 hover:text-slate-800 hover:underline font-semibold ml-auto"
+                >
+                  {post.comments.length} {post.comments.length === 1 ? 'Comment' : 'Comments'}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Facebook Reaction Dock & Comment Button Row */}
+          <div className="px-4 sm:px-6 py-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <FBReactionDock
+                activeReactionKey={myReactionKey}
+                onSelectReaction={handleSelectReaction}
+                onQuickToggle={handleQuickToggleLike}
+              />
+              <button
+                type="button"
+                onClick={() => commentInputRef.current?.focus()}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition shadow-xs"
+              >
+                <MessageCircle className="w-4 h-4 text-slate-600" />
+                <span>Comment</span>
+              </button>
+            </div>
 
             {guestName ? (
-              <span className="text-[11px] text-slate-400">
-                Reacting as <strong className="text-slate-700 font-bold">{guestName}</strong>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">
+                Interacting as <strong className="text-slate-700 font-bold">{guestName}</strong>
               </span>
             ) : (
-              <span className="text-[11px] text-blue-600 font-semibold">
-                Tell your name to react • No login needed
+              <span className="text-[11px] text-blue-600 font-semibold hidden sm:inline">
+                No signup required • Just tell your name
               </span>
             )}
           </div>
-
-          {/* Emoji Buttons Grid */}
-          <div className="flex flex-wrap items-center gap-2">
-            {AVAILABLE_EMOJIS.map(item => {
-              const count = emojiCounts[item.emoji] || 0;
-              const hasReacted = myReaction?.emoji === item.emoji;
-
-              return (
-                <button
-                  key={item.emoji}
-                  type="button"
-                  onClick={() => handleToggleReaction(item.emoji)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shadow-xs active:scale-95 ${
-                    hasReacted
-                      ? 'bg-blue-600 text-white ring-2 ring-blue-500/30'
-                      : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                  }`}
-                  title={`React ${item.label}`}
-                >
-                  <span className="text-sm">{item.emoji}</span>
-                  <span>{item.label}</span>
-                  {count > 0 && (
-                    <span className={`ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] ${
-                      hasReacted ? 'bg-blue-700 text-white' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* List of who reacted */}
-          {reactions.length > 0 && (
-            <p className="text-[11px] text-slate-500 pt-1 truncate">
-              Reacted by: <span className="font-semibold text-slate-700">{Array.from(new Set(reactions.map(r => r.name))).join(', ')}</span>
-            </p>
-          )}
         </div>
 
         {/* ── Public Comments Section ── */}
@@ -550,6 +489,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
           <form onSubmit={handlePostComment} className="space-y-2">
             <div className="relative">
               <textarea
+                ref={commentInputRef}
                 value={commentText}
                 onChange={e => setCommentText(e.target.value)}
                 placeholder={

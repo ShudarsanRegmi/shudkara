@@ -71,11 +71,11 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         try { body = await request.json(); }
         catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
 
-        const emoji = (body.emoji || '').trim();
+        const emoji = (body.reaction || body.emoji || '').trim().toLowerCase();
         const name = (body.name || '').trim();
 
         if (!emoji) {
-          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Reaction emoji is required.' } };
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Reaction key is required.' } };
         }
         if (!name) {
           return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Name is required to react.' } };
