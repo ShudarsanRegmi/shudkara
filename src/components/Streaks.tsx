@@ -168,6 +168,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
   const [editingStreak, setEditingStreak] = useState<StreakItem | null>(null);
   const [checkInStreak, setCheckInStreak] = useState<StreakItem | null>(null);
   const [calendarStreak, setCalendarStreak] = useState<StreakItem | null>(null);
+  const [loadingCalendarStreak, setLoadingCalendarStreak] = useState(false);
   const [calendarViewMode, setCalendarViewMode] = useState<'grid' | 'calendar'>('grid');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [proofModalData, setProofModalData] = useState<{ checkIn: StreakCheckIn; streak: StreakItem } | null>(null);
@@ -502,6 +503,41 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [proofModalData]);
 
+  // Open Calendar & History Modal with on-demand lazy loading of full streak history with photos
+  const openCalendarHistory = async (streak: StreakItem) => {
+    setCalendarStreak(streak);
+    setCurrentCalendarMonth(new Date());
+    setCalendarViewMode('grid');
+
+    // Check if this streak needs full check-ins with photos loaded
+    const hasAnyLoadedPhotos = streak.checkIns.some(c => (c.photos && c.photos.length > 0) || c.photoUrl);
+    const hasAnyPhotosExpected = streak.checkIns.some(c => c.hasPhoto || (c.photoCount || 0) > 0);
+
+    if (!hasAnyLoadedPhotos && hasAnyPhotosExpected) {
+      try {
+        setLoadingCalendarStreak(true);
+        const res = await fetch(`/api/streaks/${streak.id}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.streak) {
+            setCalendarStreak(data.streak);
+            // Enrich streak in global state
+            setStreaks(prev => prev.map(s => s.id === streak.id ? data.streak : s));
+            try {
+              const cached = JSON.parse(localStorage.getItem('shudkara_streaks_cache') || '[]');
+              const updated = cached.map((s: any) => s.id === streak.id ? data.streak : s);
+              localStorage.setItem('shudkara_streaks_cache', JSON.stringify(updated));
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to lazy load streak history photos:', err);
+      } finally {
+        setLoadingCalendarStreak(false);
+      }
+    }
+  };
+
   // Open Full-screen Gallery Proof Modal with on-demand Lazy Photo Loading
   const openProofModal = async (streak: StreakItem, checkIn: StreakCheckIn, initialIndex = 0) => {
     setProofModalData({ checkIn, streak });
@@ -512,30 +548,60 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
     if (existingPhotos.length === 0 && (checkIn.hasPhoto || (checkIn.photoCount || 0) > 0)) {
       try {
         setLoadingProofPhotos(true);
-        const res = await fetch(`/api/streaks/${streak.id}/checkin/${checkIn.date}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.checkIn) {
-            const loadedPhotos = getCheckInPhotos(data.checkIn);
-            const enriched: StreakCheckIn = {
-              ...checkIn,
-              ...data.checkIn,
-              photos: loadedPhotos,
-              photoUrl: loadedPhotos[0]
-            };
-            setProofModalData({
-              checkIn: enriched,
-              streak
-            });
-            // Update cache and state so subsequent clicks are instantaneous
-            setStreaks(prev => prev.map(s => {
-              if (s.id !== streak.id) return s;
-              return {
-                ...s,
-                checkIns: s.checkIns.map(c => c.date === checkIn.date ? enriched : c)
-              };
-            }));
+        let loadedPhotos: string[] = [];
+
+        // 1. Try single checkin endpoint
+        try {
+          const res = await fetch(`/api/streaks/${streak.id}/checkin/${checkIn.date}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.checkIn) {
+              loadedPhotos = getCheckInPhotos(data.checkIn);
+            }
           }
+        } catch {}
+
+        // 2. If single checkin endpoint didn't return photos, fallback to full streak endpoint
+        if (loadedPhotos.length === 0) {
+          const resFull = await fetch(`/api/streaks/${streak.id}`);
+          if (resFull.ok) {
+            const dataFull = await resFull.json();
+            if (dataFull.streak && Array.isArray(dataFull.streak.checkIns)) {
+              const match = dataFull.streak.checkIns.find((c: any) => c.date === checkIn.date);
+              if (match) {
+                loadedPhotos = getCheckInPhotos(match);
+              }
+              // Update full streak in memory and cache
+              setStreaks(prev => prev.map(s => s.id === streak.id ? dataFull.streak : s));
+              setCalendarStreak(dataFull.streak);
+            }
+          }
+        }
+
+        if (loadedPhotos.length > 0) {
+          const enriched: StreakCheckIn = {
+            ...checkIn,
+            photos: loadedPhotos,
+            photoUrl: loadedPhotos[0]
+          };
+          setProofModalData({
+            checkIn: enriched,
+            streak
+          });
+          setStreaks(prev => prev.map(s => {
+            if (s.id !== streak.id) return s;
+            return {
+              ...s,
+              checkIns: s.checkIns.map(c => c.date === checkIn.date ? enriched : c)
+            };
+          }));
+          setCalendarStreak(prev => {
+            if (!prev || prev.id !== streak.id) return prev;
+            return {
+              ...prev,
+              checkIns: prev.checkIns.map(c => c.date === checkIn.date ? enriched : c)
+            };
+          });
         }
       } catch (err) {
         console.warn('Failed to lazy load check-in photos:', err);
@@ -561,6 +627,14 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
           const data = await res.json();
           if (data.checkIn) {
             photos = getCheckInPhotos(data.checkIn);
+          }
+        }
+        if (photos.length === 0) {
+          const resFull = await fetch(`/api/streaks/${streak.id}`);
+          if (resFull.ok) {
+            const dataFull = await resFull.json();
+            const match = dataFull.streak?.checkIns?.find((c: any) => c.date === checkIn.date);
+            if (match) photos = getCheckInPhotos(match);
           }
         }
       } catch (err) {
@@ -1378,11 +1452,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
 
                   {/* Calendar & Annotated Grid View Button */}
                   <button
-                    onClick={() => {
-                      setCalendarStreak(streak);
-                      setCurrentCalendarMonth(new Date());
-                      setCalendarViewMode('grid');
-                    }}
+                    onClick={() => openCalendarHistory(streak)}
                     className="w-full py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition"
                   >
                     <LayoutGrid className="w-3.5 h-3.5 text-slate-500" />
@@ -1761,11 +1831,19 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
           <div className="w-full max-w-3xl bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
-                <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
-                  <LayoutGrid className="w-5 h-5 text-orange-600" />
-                  <span>Streak Proofs & History</span>
-                </h3>
-                <p className="text-xs text-slate-500 font-semibold">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-extrabold text-slate-900 flex items-center gap-2">
+                    <LayoutGrid className="w-5 h-5 text-orange-600" />
+                    <span>Streak Proofs & History</span>
+                  </h3>
+                  {loadingCalendarStreak && (
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-orange-600 bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-200 animate-pulse">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Loading photos...
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 font-semibold mt-0.5">
                   {calendarStreak.title} • {calendarStreak.checkIns.length} total entries recorded
                 </p>
               </div>
@@ -1836,7 +1914,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                                 </span>
                               ) : (
                                 <span className="px-2 py-0.5 rounded-md bg-orange-50 text-orange-700 text-[10px] font-bold flex items-center gap-1 border border-orange-200">
-                                  <Flame className="w-3 h-3 text-orange-600" /> {photos.length} Photo{photos.length !== 1 ? 's' : ''}
+                                  <Flame className="w-3 h-3 text-orange-600" /> {photos.length > 0 ? photos.length : (checkIn.photoCount || (checkIn.hasPhoto ? 1 : 0))} Photo{(photos.length > 0 ? photos.length : (checkIn.photoCount || (checkIn.hasPhoto ? 1 : 0))) !== 1 ? 's' : ''}
                                 </span>
                               )}
                             </div>
@@ -1874,7 +1952,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                           )}
 
                           {/* Photos Grid for that Day */}
-                          {photos.length > 0 && (
+                          {photos.length > 0 ? (
                             <div className={`grid gap-2 ${
                               photos.length === 1
                                 ? 'grid-cols-1 sm:grid-cols-2 max-w-sm'
@@ -1892,6 +1970,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                                     src={photoUrl}
                                     alt={`proof-${pIdx}`}
                                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                    loading="lazy"
                                   />
                                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all flex items-center justify-center">
                                     <span className="text-[10px] text-white font-bold opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 px-2 py-0.5 rounded-md">
@@ -1901,7 +1980,26 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                                 </div>
                               ))}
                             </div>
-                          )}
+                          ) : (checkIn.hasPhoto || (checkIn.photoCount || 0) > 0) ? (
+                            <div
+                              onClick={() => openProofModal(calendarStreak, checkIn, 0)}
+                              className="p-3 bg-orange-50/70 border border-orange-200/80 rounded-xl flex items-center justify-between cursor-pointer hover:bg-orange-100 transition"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Camera className="w-4 h-4 text-orange-600" />
+                                <span className="text-xs font-bold text-orange-900">
+                                  {loadingCalendarStreak ? 'Loading full-resolution photos...' : 'View Attached Photo Proof'}
+                                </span>
+                              </div>
+                              {loadingCalendarStreak ? (
+                                <Loader2 className="w-4 h-4 text-orange-600 animate-spin" />
+                              ) : (
+                                <span className="text-[11px] font-bold text-orange-700 bg-white px-2 py-0.5 rounded-md border border-orange-200 shadow-xs">
+                                  Open Lightbox →
+                                </span>
+                              )}
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })}
@@ -1955,7 +2053,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                       }
 
                       const photos = getCheckInPhotos(cell.checkIn);
-                      const hasProof = photos.length > 0;
+                      const hasProof = photos.length > 0 || cell.checkIn?.hasPhoto || (cell.checkIn?.photoCount || 0) > 0;
                       const isLeave = !!cell.checkIn?.isLeaveDay;
                       const isChecked = !!cell.checkIn;
 
