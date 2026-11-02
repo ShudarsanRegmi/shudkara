@@ -22,7 +22,9 @@ import {
   Trophy,
   ShieldAlert,
   AlertTriangle,
-  Award
+  Award,
+  Loader2,
+  Share2
 } from 'lucide-react';
 import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
@@ -36,6 +38,8 @@ export interface StreakCheckIn {
   title?: string;
   notes?: string;
   isLeaveDay?: boolean;
+  hasPhoto?: boolean;
+  photoCount?: number;
 }
 
 export interface StreakItem {
@@ -146,7 +150,7 @@ function playTone(type: 'success' | 'alert' | 'urgent') {
   }
 }
 
-export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
+export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
   const [streaks, setStreaks] = useState<StreakItem[]>(() => {
     try {
       const cached = localStorage.getItem('shudkara_streaks_cache');
@@ -168,6 +172,13 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [proofModalData, setProofModalData] = useState<{ checkIn: StreakCheckIn; streak: StreakItem } | null>(null);
   const [proofActivePhotoIndex, setProofActivePhotoIndex] = useState(0);
+
+  // Lazy loading photos & Timeline post state
+  const [loadingProofPhotos, setLoadingProofPhotos] = useState(false);
+  const [shareToTimelineOnCheckIn, setShareToTimelineOnCheckIn] = useState(false);
+  const [postingToTimeline, setPostingToTimeline] = useState(false);
+  const [timelinePostSuccess, setTimelinePostSuccess] = useState(false);
+  const [testNotificationSent, setTestNotificationSent] = useState(false);
 
   // Full-screen native-like Camera Modal state (like Timeline)
   const [showCameraModal, setShowCameraModal] = useState(false);
@@ -469,15 +480,170 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     setCheckInPhotos(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Open existing check-in for editing / replacing bad photos
-  const openEditCheckIn = (streak: StreakItem, checkIn: StreakCheckIn) => {
+  // Keyboard navigation for Fullscreen Gallery Lightbox
+  useEffect(() => {
+    if (!proofModalData) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setProofModalData(null);
+      } else if (e.key === 'ArrowLeft') {
+        const photos = getCheckInPhotos(proofModalData.checkIn);
+        if (photos.length > 1) {
+          setProofActivePhotoIndex(prev => (prev - 1 + photos.length) % photos.length);
+        }
+      } else if (e.key === 'ArrowRight') {
+        const photos = getCheckInPhotos(proofModalData.checkIn);
+        if (photos.length > 1) {
+          setProofActivePhotoIndex(prev => (prev + 1) % photos.length);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [proofModalData]);
+
+  // Open Full-screen Gallery Proof Modal with on-demand Lazy Photo Loading
+  const openProofModal = async (streak: StreakItem, checkIn: StreakCheckIn, initialIndex = 0) => {
+    setProofModalData({ checkIn, streak });
+    setProofActivePhotoIndex(initialIndex);
+    setTimelinePostSuccess(false);
+
+    const existingPhotos = getCheckInPhotos(checkIn);
+    if (existingPhotos.length === 0 && (checkIn.hasPhoto || (checkIn.photoCount || 0) > 0)) {
+      try {
+        setLoadingProofPhotos(true);
+        const res = await fetch(`/api/streaks/${streak.id}/checkin/${checkIn.date}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.checkIn) {
+            const loadedPhotos = getCheckInPhotos(data.checkIn);
+            const enriched: StreakCheckIn = {
+              ...checkIn,
+              ...data.checkIn,
+              photos: loadedPhotos,
+              photoUrl: loadedPhotos[0]
+            };
+            setProofModalData({
+              checkIn: enriched,
+              streak
+            });
+            // Update cache and state so subsequent clicks are instantaneous
+            setStreaks(prev => prev.map(s => {
+              if (s.id !== streak.id) return s;
+              return {
+                ...s,
+                checkIns: s.checkIns.map(c => c.date === checkIn.date ? enriched : c)
+              };
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to lazy load check-in photos:', err);
+      } finally {
+        setLoadingProofPhotos(false);
+      }
+    }
+  };
+
+  // Open existing check-in for editing / replacing bad photos (with lazy photo fetch if needed)
+  const openEditCheckIn = async (streak: StreakItem, checkIn: StreakCheckIn) => {
     setCheckInStreak(streak);
     setCheckInDate(checkIn.date);
-    setCheckInPhotos(getCheckInPhotos(checkIn));
     setCheckInTitle(checkIn.title || '');
     setCheckInNotes(checkIn.notes || '');
     setIsLeaveDayCheck(!!checkIn.isLeaveDay);
+
+    let photos = getCheckInPhotos(checkIn);
+    if (photos.length === 0 && (checkIn.hasPhoto || (checkIn.photoCount || 0) > 0)) {
+      try {
+        const res = await fetch(`/api/streaks/${streak.id}/checkin/${checkIn.date}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.checkIn) {
+            photos = getCheckInPhotos(data.checkIn);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to lazy load photos for edit:', err);
+      }
+    }
+    setCheckInPhotos(photos);
     setProofModalData(null);
+  };
+
+  // Add existing Streak Check-In to Timeline
+  const handleAddCheckInToTimeline = async (streak: StreakItem, checkIn: StreakCheckIn) => {
+    const photos = getCheckInPhotos(checkIn);
+    setPostingToTimeline(true);
+    try {
+      const mediaFiles = photos.map((p, idx) => ({
+        name: `streak_${streak.title.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${checkIn.date}_${idx}.jpg`,
+        type: 'image/jpeg',
+        base64: p
+      }));
+
+      const res = await fetch('/api/timeline', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'X-Session-Token': authToken } : {})
+        },
+        body: JSON.stringify({
+          title: checkIn.title || `${streak.title} Streak Proof`,
+          content: checkIn.notes || `Daily Habit Streak Check-in for ${streak.title} (${checkIn.date})`,
+          category: streak.category || 'Habits',
+          tags: ['streak', streak.title.toLowerCase().replace(/[^a-z0-9]/g, '-'), 'habit'],
+          timestamp: checkIn.timestamp || new Date().toISOString(),
+          mediaFiles
+        })
+      });
+
+      if (res.ok) {
+        setTimelinePostSuccess(true);
+        setTimeout(() => setTimelinePostSuccess(false), 4000);
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        alert(errJson.error || 'Failed to post to timeline. Ensure you are signed in.');
+      }
+    } catch (err) {
+      console.error('Failed to post to timeline:', err);
+      alert('Failed to post to timeline.');
+    } finally {
+      setPostingToTimeline(false);
+    }
+  };
+
+  // Test System / Browser Notification
+  const handleTestSystemNotification = () => {
+    if (!('Notification' in window)) {
+      alert('Desktop notifications are not supported on this device/browser.');
+      return;
+    }
+
+    if (Notification.permission !== 'granted') {
+      Notification.requestPermission().then(permission => {
+        if (permission === 'granted') {
+          showNativeTestNotification();
+        } else {
+          alert('Notification permission was denied. Please allow notifications in your browser address bar.');
+        }
+      });
+    } else {
+      showNativeTestNotification();
+    }
+  };
+
+  const showNativeTestNotification = () => {
+    try {
+      new Notification('Shudkara Streaks Alert Test', {
+        body: 'Streaks notifications are active! You will be alerted before your streak deadline.',
+        icon: '/favicon.ico'
+      });
+      setTestNotificationSent(true);
+      setTimeout(() => setTestNotificationSent(false), 4000);
+    } catch (e: any) {
+      alert('Failed to show notification: ' + e.message);
+    }
   };
 
   // Submit Check-in or Check-in Edit
@@ -502,6 +668,29 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
       notes: checkInNotes.trim() || undefined,
       isLeaveDay: isLeaveDayCheck
     };
+
+    // If "Also share to Timeline" is checked, post to Timeline
+    if (shareToTimelineOnCheckIn && checkInPhotos.length > 0 && authToken) {
+      fetch('/api/timeline', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken
+        },
+        body: JSON.stringify({
+          title: checkInTitle.trim() || `${streakTitle} Check-In`,
+          content: checkInNotes.trim() || `Completed daily streak: ${streakTitle} on ${checkInDate}!`,
+          category: checkInStreak?.category || 'Habits',
+          tags: ['streak', streakTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')],
+          timestamp: new Date().toISOString(),
+          mediaFiles: checkInPhotos.map((p, idx) => ({
+            name: `streak_${checkInDate}_${idx}.jpg`,
+            type: 'image/jpeg',
+            base64: p
+          }))
+        })
+      }).catch(err => console.warn('Background timeline post failed:', err));
+    }
 
     // Optimistically update local state & cache immediately
     setStreaks(prev => {
@@ -534,6 +723,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
     setCheckInTitle('');
     setCheckInNotes('');
     setIsLeaveDayCheck(false);
+    setShareToTimelineOnCheckIn(false);
 
     // If offline, queue action into outbox
     if (!isDeviceOnline()) {
@@ -1133,15 +1323,9 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                           <Edit2 className="w-3 h-3" />
                           <span>Edit</span>
                         </button>
-                        {getCheckInPhotos(stats.todayCheckIn).length > 0 && (
+                        {stats.todayCheckIn && (getCheckInPhotos(stats.todayCheckIn).length > 0 || stats.todayCheckIn.hasPhoto || (stats.todayCheckIn.photoCount || 0) > 0) && (
                           <button
-                            onClick={() => {
-                              setProofActivePhotoIndex(0);
-                              setProofModalData({
-                                checkIn: stats.todayCheckIn!,
-                                streak
-                              });
-                            }}
+                            onClick={() => openProofModal(streak, stats.todayCheckIn!, 0)}
                             className="text-[11px] font-bold text-emerald-700 hover:underline px-1"
                           >
                             Proof
@@ -1512,6 +1696,20 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                 />
               </div>
 
+              {/* Share to Life Timeline Checkbox */}
+              <div className="flex items-center gap-2.5 p-3 bg-indigo-50/70 border border-indigo-100 rounded-xl">
+                <input
+                  type="checkbox"
+                  id="shareToTimelineCheck"
+                  checked={shareToTimelineOnCheckIn}
+                  onChange={e => setShareToTimelineOnCheckIn(e.target.checked)}
+                  className="w-4 h-4 text-indigo-600 rounded cursor-pointer accent-indigo-600"
+                />
+                <label htmlFor="shareToTimelineCheck" className="text-xs text-indigo-950 font-semibold cursor-pointer select-none">
+                  Also post to my <span className="text-indigo-600 font-extrabold">Life Timeline</span>
+                </label>
+              </div>
+
               {/* Submit Buttons */}
               <div className="flex items-center justify-between gap-3 pt-4 border-t border-slate-100">
                 <div>
@@ -1687,13 +1885,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                               {photos.map((photoUrl, pIdx) => (
                                 <div
                                   key={pIdx}
-                                  onClick={() => {
-                                    setProofActivePhotoIndex(pIdx);
-                                    setProofModalData({
-                                      checkIn,
-                                      streak: calendarStreak
-                                    });
-                                  }}
+                                  onClick={() => openProofModal(calendarStreak, checkIn, pIdx)}
                                   className="relative aspect-4/3 rounded-xl overflow-hidden border border-slate-200 cursor-pointer group bg-slate-900/5 hover:shadow-md transition"
                                 >
                                   <img
@@ -1773,11 +1965,7 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
                           disabled={!cell.checkIn}
                           onClick={() => {
                             if (cell.checkIn) {
-                              setProofActivePhotoIndex(0);
-                              setProofModalData({
-                                checkIn: cell.checkIn,
-                                streak: calendarStreak
-                              });
+                              openProofModal(calendarStreak, cell.checkIn, 0);
                             }
                           }}
                           className={`aspect-square rounded-xl p-1 flex flex-col items-center justify-between transition border text-xs font-bold relative group ${
@@ -1839,129 +2027,203 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
         </div>
       )}
 
-      {/* ── MODAL: FULL PHOTO PROOF CAROUSEL & VIEWER ── */}
+      {/* ── MODAL: FULL-SCREEN GALLERY LIGHTBOX & PROOF VIEWER ── */}
       {proofModalData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-fade-in">
-          <div className="w-full max-w-lg bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 md:p-6 bg-black/95 backdrop-blur-md animate-fade-in text-white">
+          <div className="w-full max-w-6xl h-full max-h-[96vh] flex flex-col justify-between overflow-hidden">
             {(() => {
               const photos = getCheckInPhotos(proofModalData.checkIn);
               const currentPhoto = photos[proofActivePhotoIndex] || photos[0];
 
               return (
-                <div>
-                  {currentPhoto ? (
-                    <div className="relative aspect-4/3 bg-slate-950 flex items-center justify-center">
-                      <img
-                        src={currentPhoto}
-                        alt="Proof"
-                        className="w-full h-full object-contain"
+                <div className="flex flex-col h-full justify-between">
+                  {/* Top Bar: Title, Date, Badges & Actions */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 border-b border-white/10 bg-black/40 rounded-2xl backdrop-blur-xs">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-3.5 h-3.5 rounded-full shrink-0"
+                        style={{ backgroundColor: proofModalData.streak.color || '#ea580c' }}
                       />
-
-                      {/* Navigation Carousel Arrows if multiple photos */}
-                      {photos.length > 1 && (
-                        <>
-                          <button
-                            onClick={() =>
-                              setProofActivePhotoIndex(prev => (prev - 1 + photos.length) % photos.length)
-                            }
-                            className="absolute left-3 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full transition"
-                            title="Previous photo"
-                          >
-                            <ChevronLeft className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() =>
-                              setProofActivePhotoIndex(prev => (prev + 1) % photos.length)
-                            }
-                            className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-black/60 hover:bg-black text-white rounded-full transition"
-                            title="Next photo"
-                          >
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                          <span className="absolute bottom-3 right-3 bg-black/60 px-2.5 py-1 rounded-md text-white text-xs font-bold">
-                            {proofActivePhotoIndex + 1} / {photos.length}
-                          </span>
-                        </>
-                      )}
-
-                      <button
-                        onClick={() => setProofModalData(null)}
-                        className="absolute top-3 right-3 p-2 bg-black/60 text-white rounded-full hover:bg-black transition"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="p-6 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-sky-100 text-sky-700 flex items-center justify-center">
-                          {proofModalData.checkIn.isLeaveDay ? (
-                            <Snowflake className="w-5 h-5" />
-                          ) : (
-                            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                            {proofModalData.checkIn.title || proofModalData.streak.title}
+                          </h3>
+                          {proofModalData.checkIn.isLeaveDay && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-400/30 flex items-center gap-1">
+                              <Snowflake className="w-3 h-3" /> Streak Freeze
+                            </span>
                           )}
                         </div>
-                        <div>
-                          <h4 className="text-sm font-bold text-slate-900">
-                            {proofModalData.checkIn.isLeaveDay ? 'Streak Freeze (Rest Day)' : 'Check-In Entry'}
-                          </h4>
-                          <p className="text-xs text-slate-500 font-medium">
-                            {proofModalData.checkIn.date}
-                          </p>
-                        </div>
+                        <p className="text-xs text-white/60">
+                          Recorded for: <span className="text-white font-medium">{proofModalData.checkIn.date}</span>
+                          {proofModalData.checkIn.timestamp && ` • ${new Date(proofModalData.checkIn.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                        </p>
                       </div>
+                    </div>
+
+                    {/* Top Right Action Controls */}
+                    <div className="flex items-center gap-2">
+                      {/* Add to Timeline Button */}
+                      <button
+                        onClick={() => handleAddCheckInToTimeline(proofModalData.streak, proofModalData.checkIn)}
+                        disabled={postingToTimeline}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition ${
+                          timelinePostSuccess
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-xs'
+                        }`}
+                        title="Cross-post this streak check-in to your Life Timeline"
+                      >
+                        {postingToTimeline ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span className="hidden sm:inline">Saving to Timeline...</span>
+                          </>
+                        ) : timelinePostSuccess ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Added to Timeline!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span>Add to Timeline</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* Edit / Replace Photos Button */}
+                      <button
+                        onClick={() => openEditCheckIn(proofModalData.streak, proofModalData.checkIn)}
+                        className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition border border-white/10"
+                        title="Edit entry or replace photos"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Edit Entry</span>
+                      </button>
+
+                      {/* Delete Entry Button */}
+                      <button
+                        onClick={() => handleDeleteCheckIn(proofModalData.streak.id, proofModalData.checkIn.date)}
+                        className="px-2.5 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 rounded-xl text-xs font-semibold flex items-center gap-1 transition border border-rose-500/30"
+                        title="Delete check-in"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Close Fullscreen Lightbox Button */}
                       <button
                         onClick={() => setProofModalData(null)}
-                        className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg"
+                        className="p-1.5 bg-white/10 hover:bg-white/25 text-white/80 hover:text-white rounded-xl transition ml-1"
+                        title="Close Gallery (Esc)"
                       >
                         <X className="w-5 h-5" />
                       </button>
                     </div>
-                  )}
+                  </div>
 
-                  <div className="p-6 pt-3 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h4 className="text-base font-bold text-slate-900">
-                          {proofModalData.checkIn.title || proofModalData.streak.title}
-                        </h4>
-                        <p className="text-xs text-slate-500 font-semibold">
-                          Date: {proofModalData.checkIn.date}
+                  {/* Main Gallery Display Canvas */}
+                  <div className="relative flex-1 flex items-center justify-center p-2 min-h-0 overflow-hidden">
+                    {loadingProofPhotos ? (
+                      <div className="flex flex-col items-center justify-center p-12 text-center">
+                        <Loader2 className="w-10 h-10 animate-spin text-orange-400 mb-3" />
+                        <p className="text-sm font-semibold text-white/90">Loading full-resolution photos...</p>
+                        <p className="text-xs text-white/50">Fetching high quality proof imagery</p>
+                      </div>
+                    ) : currentPhoto ? (
+                      <div className="relative w-full h-full flex items-center justify-center">
+                        <img
+                          src={currentPhoto}
+                          alt={`Proof ${proofActivePhotoIndex + 1}`}
+                          className="max-h-[68vh] sm:max-h-[72vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl transition duration-200"
+                        />
+
+                        {/* Navigation Arrows for Multi-Photo */}
+                        {photos.length > 1 && (
+                          <>
+                            <button
+                              onClick={() =>
+                                setProofActivePhotoIndex(prev => (prev - 1 + photos.length) % photos.length)
+                              }
+                              className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/90 text-white rounded-full transition shadow-lg border border-white/15 backdrop-blur-xs"
+                              title="Previous photo (Left Arrow)"
+                            >
+                              <ChevronLeft className="w-6 h-6" />
+                            </button>
+                            <button
+                              onClick={() =>
+                                setProofActivePhotoIndex(prev => (prev + 1) % photos.length)
+                              }
+                              className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/90 text-white rounded-full transition shadow-lg border border-white/15 backdrop-blur-xs"
+                              title="Next photo (Right Arrow)"
+                            >
+                              <ChevronRight className="w-6 h-6" />
+                            </button>
+
+                            {/* Photo counter overlay */}
+                            <div className="absolute top-4 right-4 bg-black/70 border border-white/20 text-white text-xs font-bold px-3 py-1 rounded-full backdrop-blur-xs">
+                              {proofActivePhotoIndex + 1} / {photos.length}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ) : proofModalData.checkIn.isLeaveDay ? (
+                      <div className="flex flex-col items-center justify-center p-12 text-center bg-white/5 rounded-3xl border border-white/10 max-w-md mx-auto">
+                        <div className="w-16 h-16 rounded-2xl bg-sky-500/20 text-sky-300 flex items-center justify-center mb-4">
+                          <Snowflake className="w-8 h-8" />
+                        </div>
+                        <h4 className="text-lg font-bold text-white mb-1">Streak Freeze Used</h4>
+                        <p className="text-xs text-white/60">
+                          This day was marked as an authorized rest day. Your streak counter was protected and maintained!
                         </p>
                       </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => openEditCheckIn(proofModalData.streak, proofModalData.checkIn)}
-                          className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-700 border border-orange-200 rounded-xl text-xs font-bold flex items-center gap-1 transition"
-                          title="Replace bad photos or edit caption"
-                        >
-                          <Edit2 className="w-3 h-3" />
-                          <span>Edit / Replace Photos</span>
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCheckIn(proofModalData.streak.id, proofModalData.checkIn.date)}
-                          className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1 transition"
-                          title="Delete this day's check-in entry"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>Delete Entry</span>
-                        </button>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center p-12 text-center bg-white/5 rounded-3xl border border-white/10 max-w-md mx-auto">
+                        <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center mb-4">
+                          <CheckCircle2 className="w-8 h-8" />
+                        </div>
+                        <h4 className="text-lg font-bold text-white mb-1">Checked In</h4>
+                        <p className="text-xs text-white/60">
+                          Streak completed without attached photos.
+                        </p>
                       </div>
-                    </div>
+                    )}
+                  </div>
 
-                    {proofModalData.checkIn.notes && (
-                      <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                        {proofModalData.checkIn.notes}
-                      </p>
+                  {/* Bottom Bar: Filmstrip Carousel & Caption Notes */}
+                  <div className="p-3 sm:p-4 bg-black/40 border-t border-white/10 rounded-2xl backdrop-blur-xs space-y-3">
+                    {/* Filmstrip thumbnails if multiple photos */}
+                    {photos.length > 1 && (
+                      <div className="flex items-center justify-center gap-2 overflow-x-auto py-1">
+                        {photos.map((ph, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => setProofActivePhotoIndex(idx)}
+                            className={`relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden shrink-0 border-2 transition ${
+                              proofActivePhotoIndex === idx
+                                ? 'border-orange-500 scale-105 shadow-md shadow-orange-500/30'
+                                : 'border-white/20 opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <img src={ph} alt={`thumb-${idx}`} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
                     )}
 
-                    <button
-                      onClick={() => setProofModalData(null)}
-                      className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs transition"
-                    >
-                      Close
-                    </button>
+                    {/* Check-in Notes / Description */}
+                    {proofModalData.checkIn.notes ? (
+                      <p className="text-xs text-white/80 bg-white/5 p-3 rounded-xl border border-white/10 max-w-3xl mx-auto text-center font-medium">
+                        "{proofModalData.checkIn.notes}"
+                      </p>
+                    ) : (
+                      <div className="text-[11px] text-white/40 text-center flex items-center justify-center gap-4">
+                        <span>Use Left/Right arrow keys or swipe to change photos</span>
+                        <span>•</span>
+                        <span>Press Esc to close gallery</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -1993,26 +2255,51 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken: _authToken }) => {
             </div>
 
             <form onSubmit={handleSaveNotificationSettings} className="space-y-5">
-              <div className="flex items-center justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-2xl">
-                <div className="space-y-0.5">
-                  <span className="text-xs font-bold text-slate-800 block">
-                    Phone / Browser System Notifications
-                  </span>
-                  <span className="text-[11px] text-slate-500 block">
-                    Alerts on your phone screen when deadline is near
-                  </span>
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-slate-800 block">
+                      Phone / Browser System Notifications
+                    </span>
+                    <span className="text-[11px] text-slate-500 block">
+                      Alerts on your screen when streak deadline is near
+                    </span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={notificationSettings.browserNotificationsEnabled}
+                    onChange={e =>
+                      setNotificationSettings(prev => ({
+                        ...prev,
+                        browserNotificationsEnabled: e.target.checked
+                      }))
+                    }
+                    className="w-5 h-5 accent-orange-600 rounded cursor-pointer"
+                  />
                 </div>
-                <input
-                  type="checkbox"
-                  checked={notificationSettings.browserNotificationsEnabled}
-                  onChange={e =>
-                    setNotificationSettings(prev => ({
-                      ...prev,
-                      browserNotificationsEnabled: e.target.checked
-                    }))
-                  }
-                  className="w-5 h-5 accent-orange-600 rounded cursor-pointer"
-                />
+
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
+                  <span className="text-[11px] text-slate-600 font-medium">
+                    Status:{' '}
+                    <strong className={
+                      typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
+                        ? 'text-emerald-600'
+                        : 'text-amber-600'
+                    }>
+                      {typeof window !== 'undefined' && 'Notification' in window
+                        ? Notification.permission.toUpperCase()
+                        : 'UNSUPPORTED'}
+                    </strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleTestSystemNotification}
+                    className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-800 text-[11px] font-bold rounded-lg transition flex items-center gap-1.5"
+                  >
+                    <Bell className="w-3 h-3" />
+                    <span>{testNotificationSent ? 'Notification Sent!' : 'Test System Notification Now'}</span>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-3 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl">

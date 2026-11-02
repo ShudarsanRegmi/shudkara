@@ -12,6 +12,7 @@ import {
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
 import { TimelineWizardModal, type DraftMediaItem } from './TimelineWizardModal';
 import { TimelineSidebar } from './TimelineSidebar';
+import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 
 export interface MediaItem {
   googleDriveId: string;
@@ -289,7 +290,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     };
   }, [loading, loadingMore, posts.length, total]);
 
-  // Submit new post from Social Wizard
+  // Submit new post from Social Wizard (with offline queueing support)
   const handleWizardSubmit = async (postData: {
     title: string;
     content: string;
@@ -300,29 +301,96 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   }): Promise<boolean> => {
     if (!authToken) return false;
 
-    const res = await fetch('/api/timeline', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-Token': authToken
-      },
-      body: JSON.stringify({
-        title: postData.title,
-        content: postData.content,
-        category: postData.category,
-        tags: postData.tags,
-        timestamp: postData.timestamp,
-        mediaFiles: postData.mediaFiles
-      })
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      fetchPosts(true);
-      fetchFilterMetadata();
+    // If device is offline, enqueue immediately
+    if (!isDeviceOnline()) {
+      enqueueOfflineAction({
+        url: '/api/timeline',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken
+        },
+        body: {
+          title: postData.title,
+          content: postData.content,
+          category: postData.category,
+          tags: postData.tags,
+          timestamp: postData.timestamp,
+          mediaFiles: postData.mediaFiles
+        },
+        description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
+        subapp: 'timeline'
+      });
       return true;
-    } else {
-      throw new Error(data.error || 'Failed to create post.');
+    }
+
+    try {
+      const res = await fetch('/api/timeline', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken
+        },
+        body: JSON.stringify({
+          title: postData.title,
+          content: postData.content,
+          category: postData.category,
+          tags: postData.tags,
+          timestamp: postData.timestamp,
+          mediaFiles: postData.mediaFiles
+        })
+      });
+
+      if (res.ok) {
+        fetchPosts(true);
+        fetchFilterMetadata();
+        return true;
+      } else {
+        const data = await res.json().catch(() => ({}));
+        if (res.status >= 500) {
+          enqueueOfflineAction({
+            url: '/api/timeline',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Session-Token': authToken
+            },
+            body: {
+              title: postData.title,
+              content: postData.content,
+              category: postData.category,
+              tags: postData.tags,
+              timestamp: postData.timestamp,
+              mediaFiles: postData.mediaFiles
+            },
+            description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
+            subapp: 'timeline'
+          });
+          return true;
+        }
+        throw new Error(data.error || 'Failed to create post.');
+      }
+    } catch (err: any) {
+      // Network disconnect / offline fallback
+      enqueueOfflineAction({
+        url: '/api/timeline',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': authToken
+        },
+        body: {
+          title: postData.title,
+          content: postData.content,
+          category: postData.category,
+          tags: postData.tags,
+          timestamp: postData.timestamp,
+          mediaFiles: postData.mediaFiles
+        },
+        description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
+        subapp: 'timeline'
+      });
+      return true;
     }
   };
 

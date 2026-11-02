@@ -295,14 +295,51 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
       };
     }
 
-    // ── 6. GET /api/streaks - List all streaks + settings ─────────────────────
+    // ── 5b. Get Single Day's Checkin (Lazy Photo Loading): GET /api/streaks/{id}/checkin/{date} ──
+    if (method === 'GET' && subPath1 && subPath2 === 'checkin' && subPath3) {
+      const streakId = subPath1;
+      const targetDate = subPath3;
+
+      const streak = await streaksCol.findOne({ id: streakId });
+      if (!streak) {
+        return { status: 404, jsonBody: { error: 'Streak not found.' } };
+      }
+
+      const existingCheckIns: StreakCheckIn[] = Array.isArray(streak.checkIns) ? streak.checkIns : [];
+      const checkIn = existingCheckIns.find(c => c.date === targetDate);
+      if (!checkIn) {
+        return { status: 404, jsonBody: { error: 'Check-in not found for this date.' } };
+      }
+
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        jsonBody: { checkIn }
+      };
+    }
+
+    // ── 6. GET /api/streaks - List all streaks + settings (Lightweight Summary by Default) ─────
     if (method === 'GET' && !subPath1) {
       const streaks = await streaksCol.find({}).sort({ createdAt: -1 }).toArray();
       const settingsDoc = await settingsCol.findOne({ key: 'streakNotifications' });
+      const includePhotos = url.searchParams.get('includePhotos') === 'true';
 
       const cleaned = streaks.map(s => {
         const { _id, ...rest } = s;
-        return rest;
+        // Optimization: strip heavy base64 photos from the main list unless explicitly requested.
+        // Check-in dates, counts, and metadata are preserved for instant calculation.
+        const checkIns = (rest.checkIns || []).map((c: any) => {
+          if (includePhotos) return c;
+          const { photos, photoUrl, ...lightweight } = c;
+          const photosArr = Array.isArray(photos) ? photos : (photoUrl ? [photoUrl] : []);
+          return {
+            ...lightweight,
+            hasPhoto: photosArr.length > 0,
+            photoCount: photosArr.length
+          };
+        });
+
+        return { ...rest, checkIns };
       });
 
       return {
@@ -312,6 +349,21 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
           streaks: cleaned,
           notificationSettings: settingsDoc ? settingsDoc.settings : DEFAULT_SETTINGS
         }
+      };
+    }
+
+    // ── 6b. GET /api/streaks/{id} - Get single streak with full check-ins & photos ───────────
+    if (method === 'GET' && subPath1 && !subPath2) {
+      const streakId = subPath1;
+      const streak = await streaksCol.findOne({ id: streakId });
+      if (!streak) {
+        return { status: 404, jsonBody: { error: 'Streak not found.' } };
+      }
+      const { _id, ...rest } = streak;
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        jsonBody: { streak: rest }
       };
     }
 

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   X, Camera, Upload, Trash2, ArrowRight, ArrowLeft, Check, Sparkles, 
   Calendar, Eye, Image as ImageIcon, Video, Film,
-  Clock, RotateCcw, AlertCircle, Loader2, ChevronLeft, ChevronRight
+  Clock, RotateCcw, AlertCircle, Loader2, ChevronLeft, ChevronRight,
+  Files, FileText, Plus, ChevronDown
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -14,6 +15,22 @@ export interface DraftMediaItem {
   name: string;
   type: string;
   base64: string;
+}
+
+export interface TimelineDraftMeta {
+  id: string;
+  title: string;
+  content: string;
+  category: string;
+  rawTags: string;
+  timestamp: string;
+  dateMode: 'AD' | 'BS';
+  formBsYear: number;
+  formBsMonth: number;
+  formBsDay: number;
+  currentStep: 1 | 2 | 3;
+  mediaCount: number;
+  updatedAt: number;
 }
 
 interface TimelineWizardModalProps {
@@ -30,7 +47,9 @@ interface TimelineWizardModalProps {
   tagsList?: string[];
 }
 
-const DRAFT_META_KEY = 'shudkara_timeline_draft_meta_v1';
+const DRAFTS_LIST_KEY = 'shudkara_timeline_drafts_v2';
+const ACTIVE_DRAFT_ID_KEY = 'shudkara_timeline_active_draft_id_v2';
+const LEGACY_DRAFT_META_KEY = 'shudkara_timeline_draft_meta_v1';
 const IDB_NAME = 'shudkara_timeline_db';
 const IDB_STORE = 'draft_media';
 
@@ -49,29 +68,38 @@ async function openDraftDb(): Promise<IDBDatabase> {
   });
 }
 
-async function saveMediaToDb(media: DraftMediaItem[]) {
+async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
   try {
     const db = await openDraftDb();
     const tx = db.transaction(IDB_STORE, 'readwrite');
     const store = tx.objectStore(IDB_STORE);
-    store.put({ id: 'current_draft_media', items: media });
+    store.put({ id: `media_${draftId}`, items: media });
   } catch (e) {
     console.warn('Failed to save draft media to IndexedDB:', e);
   }
 }
 
-async function loadMediaFromDb(): Promise<DraftMediaItem[]> {
+async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]> {
   try {
     const db = await openDraftDb();
     return new Promise((resolve) => {
       const tx = db.transaction(IDB_STORE, 'readonly');
       const store = tx.objectStore(IDB_STORE);
-      const req = store.get('current_draft_media');
+      const req = store.get(`media_${draftId}`);
       req.onsuccess = () => {
         if (req.result && Array.isArray(req.result.items)) {
           resolve(req.result.items);
         } else {
-          resolve([]);
+          // Fallback to legacy single draft key if migrating
+          const legacyReq = store.get('current_draft_media');
+          legacyReq.onsuccess = () => {
+            if (legacyReq.result && Array.isArray(legacyReq.result.items)) {
+              resolve(legacyReq.result.items);
+            } else {
+              resolve([]);
+            }
+          };
+          legacyReq.onerror = () => resolve([]);
         }
       };
       req.onerror = () => resolve([]);
@@ -81,13 +109,28 @@ async function loadMediaFromDb(): Promise<DraftMediaItem[]> {
   }
 }
 
-async function clearDraftFromDb() {
+async function clearDraftFromDb(draftId: string) {
   try {
     const db = await openDraftDb();
     const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).delete(`media_${draftId}`);
     tx.objectStore(IDB_STORE).delete('current_draft_media');
   } catch {}
-  localStorage.removeItem(DRAFT_META_KEY);
+}
+
+function getStoredDrafts(): TimelineDraftMeta[] {
+  try {
+    const raw = localStorage.getItem(DRAFTS_LIST_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function generateDraftId(): string {
+  return `draft_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 }
 
 export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
@@ -98,6 +141,13 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 }) => {
   // Wizard Steps: 1 = Media Studio, 2 = Story Details, 3 = Live Feed Preview
   const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+
+  // Drafts state
+  const [draftsList, setDraftsList] = useState<TimelineDraftMeta[]>(() => getStoredDrafts());
+  const [activeDraftId, setActiveDraftId] = useState<string>(() => {
+    return localStorage.getItem(ACTIVE_DRAFT_ID_KEY) || generateDraftId();
+  });
+  const [showDraftsMenu, setShowDraftsMenu] = useState(false);
 
   // Form states
   const [title, setTitle] = useState('');
@@ -129,13 +179,35 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Load Draft on Mount ──────────────────────────────────────────────────
-  useEffect(() => {
-    const loadDraft = async () => {
-      try {
-        const metaStr = localStorage.getItem(DRAFT_META_KEY);
-        if (metaStr) {
-          const meta = JSON.parse(metaStr);
+  // ── Load Draft on Mount or ID Change ─────────────────────────────────────
+  const loadDraftById = async (targetDraftId: string) => {
+    setHasDraftLoaded(false);
+    try {
+      const stored = getStoredDrafts();
+      const existing = stored.find(d => d.id === targetDraftId);
+
+      if (existing) {
+        setTitle(existing.title || '');
+        setContent(existing.content || '');
+        setCategory(existing.category || 'General');
+        setRawTags(existing.rawTags || '');
+        if (existing.timestamp) {
+          setTimestamp(existing.timestamp);
+          const bs = adToBs(new Date(existing.timestamp));
+          setFormBsYear(bs.year);
+          setFormBsMonth(bs.month);
+          setFormBsDay(bs.day);
+        }
+        if (existing.dateMode) setDateMode(existing.dateMode);
+        if (existing.currentStep) setCurrentStep(existing.currentStep);
+
+        const mediaItems = await loadMediaFromDb(existing.id);
+        setSelectedFiles(mediaItems);
+      } else {
+        // Check legacy v1 draft for migration
+        const legacyMetaStr = localStorage.getItem(LEGACY_DRAFT_META_KEY);
+        if (legacyMetaStr) {
+          const meta = JSON.parse(legacyMetaStr);
           if (meta.title !== undefined) setTitle(meta.title);
           if (meta.content !== undefined) setContent(meta.content);
           if (meta.category !== undefined) setCategory(meta.category);
@@ -149,30 +221,32 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           }
           if (meta.dateMode) setDateMode(meta.dateMode);
           if (meta.currentStep) setCurrentStep(meta.currentStep);
-        }
 
-        const mediaItems = await loadMediaFromDb();
-        if (mediaItems.length > 0) {
+          const mediaItems = await loadMediaFromDb('current_draft_media');
           setSelectedFiles(mediaItems);
+          localStorage.removeItem(LEGACY_DRAFT_META_KEY);
         }
-      } catch (err) {
-        console.warn('Failed to restore draft:', err);
-      } finally {
-        setHasDraftLoaded(true);
       }
-    };
+    } catch (err) {
+      console.warn('Failed to restore draft:', err);
+    } finally {
+      setHasDraftLoaded(true);
+    }
+  };
 
-    loadDraft();
-  }, []);
-
-  // ── Auto-Save Draft on Change ────────────────────────────────────────────
   useEffect(() => {
-    if (!hasDraftLoaded) return;
+    loadDraftById(activeDraftId);
+  }, [activeDraftId]);
+
+  // ── Auto-Save Active Draft on Change ────────────────────────────────────
+  useEffect(() => {
+    if (!hasDraftLoaded || !activeDraftId) return;
 
     const timer = setTimeout(() => {
-      const meta = {
-        title,
-        content,
+      const draftMeta: TimelineDraftMeta = {
+        id: activeDraftId,
+        title: title.trim(),
+        content: content.trim(),
         category,
         rawTags,
         timestamp,
@@ -180,20 +254,32 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         formBsYear,
         formBsMonth,
         formBsDay,
-        currentStep
+        currentStep,
+        mediaCount: selectedFiles.length,
+        updatedAt: Date.now()
       };
-      localStorage.setItem(DRAFT_META_KEY, JSON.stringify(meta));
-      saveMediaToDb(selectedFiles);
-      setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+      // Only save non-empty drafts
+      const isMeaningful = title.trim() || content.trim() || selectedFiles.length > 0;
+      if (isMeaningful) {
+        setDraftsList(prev => {
+          const filtered = prev.filter(d => d.id !== activeDraftId);
+          const updated = [draftMeta, ...filtered];
+          localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+          return updated;
+        });
+        localStorage.setItem(ACTIVE_DRAFT_ID_KEY, activeDraftId);
+        saveMediaToDb(activeDraftId, selectedFiles);
+        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      }
     }, 400);
 
     return () => clearTimeout(timer);
-  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded]);
+  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
 
-  // Handle Discard Draft
-  const handleDiscardDraft = async () => {
-    if (!window.confirm('Discard draft? All unsaved text and attached snaps will be cleared.')) return;
-    await clearDraftFromDb();
+  // Handle Create New Draft
+  const handleCreateNewDraft = () => {
+    const newId = generateDraftId();
     setTitle('');
     setContent('');
     setCategory('General');
@@ -207,6 +293,45 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     setSelectedFiles([]);
     setCurrentStep(1);
     setLastSavedTime(null);
+    setActiveDraftId(newId);
+    localStorage.setItem(ACTIVE_DRAFT_ID_KEY, newId);
+    setShowDraftsMenu(false);
+  };
+
+  // Handle Switch Draft
+  const handleSwitchDraft = (targetId: string) => {
+    if (targetId === activeDraftId) {
+      setShowDraftsMenu(false);
+      return;
+    }
+    setActiveDraftId(targetId);
+    localStorage.setItem(ACTIVE_DRAFT_ID_KEY, targetId);
+    setShowDraftsMenu(false);
+  };
+
+  // Handle Delete Draft
+  const handleDeleteDraft = async (targetId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Delete this draft permanently?')) return;
+
+    await clearDraftFromDb(targetId);
+    const updated = draftsList.filter(d => d.id !== targetId);
+    setDraftsList(updated);
+    localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+
+    if (activeDraftId === targetId) {
+      if (updated.length > 0) {
+        handleSwitchDraft(updated[0].id);
+      } else {
+        handleCreateNewDraft();
+      }
+    }
+  };
+
+  // Handle Discard Current Draft
+  const handleDiscardCurrentDraft = async () => {
+    if (!window.confirm('Discard current draft? All unsaved text and attached snaps for this draft will be cleared.')) return;
+    await handleDeleteDraft(activeDraftId);
   };
 
   // Sync AD & BS dates
@@ -298,7 +423,15 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       });
 
       if (success) {
-        await clearDraftFromDb();
+        await clearDraftFromDb(activeDraftId);
+        const updated = draftsList.filter(d => d.id !== activeDraftId);
+        setDraftsList(updated);
+        localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+        if (updated.length > 0) {
+          localStorage.setItem(ACTIVE_DRAFT_ID_KEY, updated[0].id);
+        } else {
+          localStorage.removeItem(ACTIVE_DRAFT_ID_KEY);
+        }
         onClose();
       }
     } catch (err: any) {
@@ -318,8 +451,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       {/* ── Wizard Dialog Box ── */}
       <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden relative animate-in zoom-in-95 duration-200 my-auto">
         
-        {/* ── Top Bar with Step Indicators & Draft Status ── */}
-        <div className="px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between shrink-0">
+        {/* ── Top Bar with Step Indicators & Multiple Drafts Dropdown ── */}
+        <div className="px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between shrink-0 relative">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-extrabold text-sm shadow-md shadow-blue-500/20">
               <Sparkles className="w-4 h-4" />
@@ -338,17 +471,99 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Multiple Drafts Switcher Button */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowDraftsMenu(prev => !prev)}
+                className="px-2.5 py-1.5 bg-white border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition"
+                title="View and manage saved drafts"
+              >
+                <Files className="w-3.5 h-3.5 text-blue-600" />
+                <span>Drafts ({draftsList.length})</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+
+              {/* Drafts Dropdown Menu */}
+              {showDraftsMenu && (
+                <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                      <Files className="w-3.5 h-3.5 text-blue-600" /> Saved Drafts ({draftsList.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleCreateNewDraft}
+                      className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 shadow-xs transition"
+                    >
+                      <Plus className="w-3 h-3" /> New Draft
+                    </button>
+                  </div>
+
+                  {draftsList.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-4">No drafts saved yet. As you write, drafts are automatically saved here.</p>
+                  ) : (
+                    <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100">
+                      {draftsList.map(d => {
+                        const isActive = d.id === activeDraftId;
+                        return (
+                          <div
+                            key={d.id}
+                            onClick={() => handleSwitchDraft(d.id)}
+                            className={`p-2.5 rounded-xl cursor-pointer transition flex items-start justify-between gap-2 ${
+                              isActive ? 'bg-blue-50 border border-blue-200' : 'hover:bg-slate-50 border border-transparent'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <FileText className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-blue-600' : 'text-slate-400'}`} />
+                                <span className={`text-xs font-bold truncate ${isActive ? 'text-blue-900' : 'text-slate-800'}`}>
+                                  {d.title || d.content.substring(0, 24) || 'Untitled Draft'}
+                                </span>
+                                {isActive && (
+                                  <span className="text-[9px] px-1 rounded bg-blue-200 text-blue-800 font-extrabold">Active</span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 truncate mt-0.5 pl-5">
+                                {d.content || 'No text content yet'}
+                              </p>
+                              <div className="flex items-center gap-2 pl-5 text-[10px] text-slate-400 mt-1">
+                                {d.mediaCount > 0 && <span>📸 {d.mediaCount} snap(s)</span>}
+                                <span>•</span>
+                                <span>{new Date(d.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteDraft(d.id, e)}
+                              className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition"
+                              title="Delete this draft"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Discard current draft button */}
             {(title || content || selectedFiles.length > 0) && (
               <button
                 type="button"
-                onClick={handleDiscardDraft}
+                onClick={handleDiscardCurrentDraft}
                 className="px-2.5 py-1 text-slate-400 hover:text-red-600 text-xs font-bold transition flex items-center gap-1"
-                title="Discard draft and start fresh"
+                title="Discard current draft"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Reset</span>
+                <span className="hidden sm:inline">Discard</span>
               </button>
             )}
+
             <button
               onClick={onClose}
               className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-xl transition"
