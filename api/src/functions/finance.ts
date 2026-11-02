@@ -128,31 +128,89 @@ async function migratePeopleAndCategories(db: any) {
 
   const now = new Date().toISOString();
 
-  // 1. Unify and migrate all people across the whole finance system
+  // 1. Clean up any existing duplicate categories in database
+  try {
+    const allExistingCats = await categoriesCol.find({}).toArray();
+    const seenCatMap = new Map<string, any>();
+    const dupCatIds: any[] = [];
+    for (const cat of allExistingCats) {
+      const norm = (cat.name || '').trim().toLowerCase();
+      if (!norm) {
+        dupCatIds.push(cat._id);
+        continue;
+      }
+      if (seenCatMap.has(norm)) {
+        const prev = seenCatMap.get(norm);
+        if (!prev.isSystem && cat.isSystem) {
+          dupCatIds.push(prev._id);
+          seenCatMap.set(norm, cat);
+        } else {
+          dupCatIds.push(cat._id);
+        }
+      } else {
+        seenCatMap.set(norm, cat);
+      }
+    }
+    if (dupCatIds.length > 0) {
+      await categoriesCol.deleteMany({ _id: { $in: dupCatIds } });
+    }
+  } catch (err) {
+    console.error('Error cleaning duplicate categories:', err);
+  }
+
+  // 2. Clean up any existing duplicate people in database
+  try {
+    const allExistingPeople = await peopleCol.find({}).toArray();
+    const seenPeopleMap = new Map<string, any>();
+    const dupPeopleIds: any[] = [];
+    for (const p of allExistingPeople) {
+      const norm = (p.name || '').trim().toLowerCase();
+      if (!norm) {
+        dupPeopleIds.push(p._id);
+        continue;
+      }
+      if (seenPeopleMap.has(norm)) {
+        const prev = seenPeopleMap.get(norm);
+        if ((!prev.contact && p.contact) || (!prev.isDefault && p.isDefault)) {
+          dupPeopleIds.push(prev._id);
+          seenPeopleMap.set(norm, p);
+        } else {
+          dupPeopleIds.push(p._id);
+        }
+      } else {
+        seenPeopleMap.set(norm, p);
+      }
+    }
+    if (dupPeopleIds.length > 0) {
+      await peopleCol.deleteMany({ _id: { $in: dupPeopleIds } });
+    }
+  } catch (err) {
+    console.error('Error cleaning duplicate people:', err);
+  }
+
+  // 3. Unify and migrate all people across the whole finance system
   const lendNames: string[] = await lendsCol.distinct('personName');
   const borrowNames: string[] = await borrowsCol.distinct('personName');
   const splitNames: string[] = await expensesCol.distinct('splitPersonName');
   const paidByNames: string[] = await expensesCol.distinct('paidByPersonName');
   const backlogSplitNames: string[] = await backlogCol.distinct('splitPersonName');
 
-  const allNames = Array.from(new Set([
-    ...lendNames,
-    ...borrowNames,
-    ...splitNames,
-    ...paidByNames,
-    ...backlogSplitNames
-  ]))
-    .map(n => (n || '').trim())
-    .filter(n => n.length > 0);
+  const peopleNameMap = new Map<string, string>();
+  for (const n of [...lendNames, ...borrowNames, ...splitNames, ...paidByNames, ...backlogSplitNames]) {
+    const trimmed = (n || '').trim();
+    if (trimmed && !peopleNameMap.has(trimmed.toLowerCase())) {
+      peopleNameMap.set(trimmed.toLowerCase(), trimmed);
+    }
+  }
 
-  const existingPeople = await peopleCol.find({}).toArray();
-  const existingNamesSet = new Set(existingPeople.map((p: any) => p.name.trim().toLowerCase()));
+  const freshPeople = await peopleCol.find({}).toArray();
+  const existingNamesSet = new Set(freshPeople.map((p: any) => p.name.trim().toLowerCase()));
 
-  for (const name of allNames) {
-    if (!existingNamesSet.has(name.toLowerCase())) {
+  for (const [lowerName, originalName] of peopleNameMap.entries()) {
+    if (!existingNamesSet.has(lowerName)) {
       const newPerson: Person = {
         id: crypto.randomUUID(),
-        name,
+        name: originalName,
         contact: '',
         isDefault: false,
         notes: 'Auto-migrated from existing finance transactions',
@@ -160,11 +218,11 @@ async function migratePeopleAndCategories(db: any) {
         updatedAt: now
       };
       await peopleCol.insertOne(newPerson);
-      existingNamesSet.add(name.toLowerCase());
+      existingNamesSet.add(lowerName);
     }
   }
 
-  // 2. Seed / Migrate Categories
+  // 4. Seed / Migrate Categories
   const DEFAULT_CATEGORIES = [
     'Food & Dining', 'Transport & Fuel', 'Groceries', 'Entertainment & Outing',
     'Shopping', 'Health & Medical', 'Bills & Utilities', 'Work & Tools',
@@ -173,29 +231,30 @@ async function migratePeopleAndCategories(db: any) {
 
   const expenseCategories: string[] = await expensesCol.distinct('category');
   const setCategories: string[] = await setsCol.distinct('category');
-  const allCategories = Array.from(new Set([
-    ...DEFAULT_CATEGORIES,
-    ...expenseCategories,
-    ...setCategories
-  ]))
-    .map(c => (c || '').trim())
-    .filter(c => c.length > 0);
 
-  const existingCats = await categoriesCol.find({}).toArray();
-  const existingCatNames = new Set(existingCats.map((c: any) => c.name.trim().toLowerCase()));
+  const categoryMap = new Map<string, string>();
+  for (const c of [...DEFAULT_CATEGORIES, ...expenseCategories, ...setCategories]) {
+    const trimmed = (c || '').trim();
+    if (trimmed && !categoryMap.has(trimmed.toLowerCase())) {
+      categoryMap.set(trimmed.toLowerCase(), trimmed);
+    }
+  }
 
-  for (const cat of allCategories) {
-    if (!existingCatNames.has(cat.toLowerCase())) {
+  const freshCats = await categoriesCol.find({}).toArray();
+  const existingCatNames = new Set(freshCats.map((c: any) => c.name.trim().toLowerCase()));
+
+  for (const [lowerCat, originalCat] of categoryMap.entries()) {
+    if (!existingCatNames.has(lowerCat)) {
       await categoriesCol.insertOne({
         id: crypto.randomUUID(),
-        name: cat,
+        name: originalCat,
         color: '#4f46e5',
         icon: 'tag',
-        isSystem: DEFAULT_CATEGORIES.includes(cat),
+        isSystem: DEFAULT_CATEGORIES.some(dc => dc.toLowerCase() === lowerCat),
         createdAt: now,
         updatedAt: now
       });
-      existingCatNames.add(cat.toLowerCase());
+      existingCatNames.add(lowerCat);
     }
   }
 }
@@ -735,15 +794,15 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         const borrows = await borrowsCol.find({}).toArray();
         const expenses = await expensesCol.find({}).toArray();
 
-        const enriched = people.map(p => {
-          const personLends = lends.filter(l => (l.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase());
+        const enriched = people.map((p: any) => {
+          const personLends = lends.filter(l => (l.personName || '').trim().toLowerCase() === (p.name || '').trim().toLowerCase());
           const totalLent = personLends.reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
           const lendRepayments = personLends.reduce((sum, l) => {
             return sum + (l.repayments || []).reduce((rSum: number, r: any) => rSum + (Number(r.amount) || 0), 0);
           }, 0);
           const netReceivable = Math.max(0, totalLent - lendRepayments);
 
-          const personBorrows = borrows.filter(b => (b.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase());
+          const personBorrows = borrows.filter(b => (b.personName || '').trim().toLowerCase() === (p.name || '').trim().toLowerCase());
           const totalBorrowed = personBorrows.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
           const borrowRepayments = personBorrows.reduce((sum, b) => {
             return sum + (b.repayments || []).reduce((rSum: number, r: any) => rSum + (Number(r.amount) || 0), 0);
@@ -751,8 +810,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           const netPayable = Math.max(0, totalBorrowed - borrowRepayments);
 
           const sharedExpensesCount = expenses.filter(e =>
-            (e.splitPersonName || '').trim().toLowerCase() === p.name.trim().toLowerCase() ||
-            (e.paidByPersonName || '').trim().toLowerCase() === p.name.trim().toLowerCase()
+            (e.splitPersonName || '').trim().toLowerCase() === (p.name || '').trim().toLowerCase() ||
+            (e.paidByPersonName || '').trim().toLowerCase() === (p.name || '').trim().toLowerCase()
           ).length;
 
           return {
@@ -765,7 +824,15 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
             sharedExpensesCount
           };
         });
-        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: enriched };
+
+        const uniquePeopleMap = new Map<string, any>();
+        for (const p of enriched as any[]) {
+          const norm = (p.name || '').trim().toLowerCase();
+          if (norm && !uniquePeopleMap.has(norm)) {
+            uniquePeopleMap.set(norm, p);
+          }
+        }
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: Array.from(uniquePeopleMap.values()) };
       }
 
       if (method === 'POST') {
@@ -906,14 +973,19 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         await migratePeopleAndCategories(db);
         const categories = await categoriesCol.find({}).sort({ name: 1 }).toArray();
         const expenses = await expensesCol.find({}).toArray();
-        const enriched = categories.map((c: any) => {
-          const count = expenses.filter((e: any) => (e.category || '').toLowerCase() === c.name.toLowerCase()).length;
-          return {
-            ...c,
-            usageCount: count
-          };
-        });
-        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: enriched };
+        const uniqueCatMap = new Map<string, any>();
+        for (const c of categories) {
+          const norm = (c.name || '').trim().toLowerCase();
+          if (norm && !uniqueCatMap.has(norm)) {
+            const count = expenses.filter((e: any) => (e.category || '').trim().toLowerCase() === norm).length;
+            uniqueCatMap.set(norm, {
+              ...c,
+              name: c.name.trim(),
+              usageCount: count
+            });
+          }
+        }
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: Array.from(uniqueCatMap.values()) };
       }
 
       if (method === 'POST') {

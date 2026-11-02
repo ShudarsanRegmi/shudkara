@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Wallet, Plus, Calendar, ArrowUpRight, ArrowDownLeft,
   RefreshCw, Clock, AlertTriangle, Filter,
@@ -279,7 +279,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       if (backlogRes.ok) setBacklog(await backlogRes.json());
       if (catRes.ok) {
         const catData = await catRes.json();
-        if (Array.isArray(catData)) setCategories(catData);
+        if (Array.isArray(catData)) {
+          const seen = new Set<string>();
+          const dedupedCats = catData.filter((c: any) => {
+            const lower = (c.name || '').trim().toLowerCase();
+            if (!lower || seen.has(lower)) return false;
+            seen.add(lower);
+            return true;
+          });
+          setCategories(dedupedCats);
+        }
       }
     } catch (err) {
       console.error('Error fetching finance data:', err);
@@ -867,8 +876,21 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
-  // Effective categories list
-  const effectiveCategories = categories.length > 0 ? categories.map(c => c.name) : EXPENSE_CATEGORIES;
+  // Effective categories list (strictly deduplicated case-insensitively)
+  const effectiveCategories = useMemo(() => {
+    const sourceList = categories.length > 0 ? categories.map(c => c.name) : EXPENSE_CATEGORIES;
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const c of sourceList) {
+      const trimmed = (c || '').trim();
+      const lower = trimmed.toLowerCase();
+      if (trimmed && !seen.has(lower)) {
+        seen.add(lower);
+        result.push(trimmed);
+      }
+    }
+    return result.length > 0 ? result : EXPENSE_CATEGORIES;
+  }, [categories]);
 
   // Filtered expenses
   const filteredExpenses = expenses.filter(e => {
