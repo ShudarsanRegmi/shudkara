@@ -30,7 +30,8 @@ import {
   Cloud,
   RefreshCw,
   Flame,
-  Wallet
+  Wallet,
+  Hourglass
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -46,6 +47,17 @@ export interface AppDefinition {
 }
 
 export const ALL_APPS: AppDefinition[] = [
+  {
+    id: 'lifeodyssey',
+    label: 'Life Odyssey',
+    description: 'Age visualization, milestones, life matrix & gamified countdowns',
+    icon: Hourglass,
+    category: 'Knowledge & Vaults',
+    requiresLogin: false,
+    colorBg: 'bg-indigo-50',
+    colorText: 'text-indigo-700',
+    colorBorder: 'border-indigo-200'
+  },
   {
     id: 'finance',
     label: 'Finance',

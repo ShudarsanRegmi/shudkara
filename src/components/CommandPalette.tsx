@@ -22,6 +22,7 @@ import {
   Plus,
   Shield,
   Wallet,
+  Hourglass,
   X
 } from 'lucide-react';
 
@@ -73,6 +74,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Master command registry
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
+    {
+      id: 'app-lifeodyssey',
+      title: 'Life Odyssey & Age Matrix',
+      subtitle: 'Age visualization, mortal weeks matrix, gamified milestones & destiny countdowns',
+      category: 'Applications',
+      icon: Hourglass,
+      colorBg: 'bg-indigo-50',
+      colorText: 'text-indigo-600',
+      badge: 'New',
+      action: () => {
+        setActiveTab('lifeodyssey');
+        onClose();
+      }
+    },
     {
       id: 'app-finance',
       title: 'Finance & Cashflow',

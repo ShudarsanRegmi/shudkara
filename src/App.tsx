@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
   ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow,
-  Flame, Search, Wallet
+  Flame, Search, Wallet, Hourglass
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -27,6 +27,7 @@ import { SavePost } from './components/SavePost';
 import { Streaks } from './components/Streaks';
 import { Notes } from './components/Notes';
 import { Finance } from './components/Finance';
+import { LifeOdyssey } from './components/LifeOdyssey';
 import { CommandPalette } from './components/CommandPalette';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
@@ -52,6 +53,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'lifeodyssey', label: 'Life Odyssey', description: 'Age visualization, milestones, life matrix & gamified countdowns', icon: Hourglass, requiresLogin: false },
       { key: 'notes', label: 'Notes', description: 'Categorized notes, markdown support & quick organization', icon: FileText, requiresLogin: false },
       { key: 'finance', label: 'Finance', description: 'Expense sets, lends, borrows & cashflow', icon: Wallet, requiresLogin: true },
       { key: 'streaks', label: 'Streaks', description: 'Daily photo streak challenge with reminders', icon: Flame, requiresLogin: false },
@@ -69,6 +71,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  lifeodyssey: { requiresLogin: false, label: 'Life Odyssey', icon: Hourglass },
   finance: { requiresLogin: true, label: 'Finance', icon: Wallet },
   notes: { requiresLogin: false, label: 'Notes', icon: FileText },
   streaks: { requiresLogin: false, label: 'Streaks', icon: Flame },
@@ -466,6 +469,8 @@ function App() {
         );
       case 'prompts':
         return <PromptVault prompts={prompts} onPromptsChange={setPrompts} authToken={authToken} />;
+      case 'lifeodyssey':
+        return <LifeOdyssey authToken={authToken} />;
       case 'timeline':
         return <LifetimeLine authToken={authToken} />;
       case 'links':
