@@ -16,11 +16,48 @@ export interface ExpenseSet {
   updatedAt: string;
 }
 
+export interface SplitParticipant {
+  personName: string;
+  amount: number;
+  originalAmount?: number;
+  isSponsored?: boolean;
+}
+
+export interface ExpenseGroup {
+  id: string;
+  name: string;
+  description?: string;
+  members: string[];
+  defaultSplitMode?: 'equal' | 'custom';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FinanceSettings {
+  defaultCurrency: 'NPR' | 'INR' | 'USD' | 'EUR';
+  exchangeRates: {
+    NPR: number;
+    INR: number;
+    USD: number;
+    EUR: number;
+  };
+  defaultPaymentMethod: string;
+  defaultCompanion: string;
+  defaultCategory: string;
+  defaultDateOption: 'today' | 'yesterday' | 'keep_last';
+  defaultSplitMode: 'none' | '50_50' | 'group' | 'custom';
+  updatedAt?: string;
+}
+
 export interface ExpenseItem {
   id: string;
   expenseSetId?: string | null;
+  groupId?: string | null;
   amount: number;
+  totalAmount?: number | null;
   currency: string;
+  originalAmount?: number | null;
+  exchangeRate?: number | null;
   category: string;
   description: string;
   date: string; // YYYY-MM-DD
@@ -30,6 +67,7 @@ export interface ExpenseItem {
   rotationNote?: string | null;
   splitPersonName?: string | null;
   splitAmount?: number | null;
+  splits?: SplitParticipant[];
   paidByPersonName?: string | null;
   tags?: string[];
   receiptUrl?: string | null;
@@ -88,6 +126,8 @@ export interface LendItem {
   personName: string;
   contact?: string;
   amount: number;
+  currency?: string;
+  originalAmount?: number;
   lentDate: string;
   expectedReturnDate: string;
   isRotation: boolean; // Short-term temporary lend (<24h)
@@ -105,6 +145,8 @@ export interface BorrowItem {
   personName: string;
   contact?: string;
   amount: number;
+  currency?: string;
+  originalAmount?: number;
   borrowedDate: string;
   expectedReturnDate: string;
   isRotation: boolean; // Short-term temporary borrow (<24h)
@@ -282,6 +324,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
     const peopleCol = db.collection('finance_people');
     const backlogCol = db.collection('finance_bank_backlog');
     const categoriesCol = db.collection('finance_categories');
+    const groupsCol = db.collection('finance_groups');
+    const settingsCol = db.collection('finance_settings');
 
     const url = new URL(request.url);
     const pathParts = url.pathname.replace(/^\/api\/finance\/?/, '').split('/').filter(Boolean);
@@ -455,22 +499,49 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
       if (method === 'POST') {
         const body: any = await request.json().catch(() => ({}));
         const amount = Number(body.amount);
-        const splitPersonName = body.splitWith?.personName?.trim() || body.splitPersonName?.trim() || null;
-        const splitAmount = body.splitWith?.amount ? Number(body.splitWith.amount) : body.splitAmount ? Number(body.splitAmount) : null;
+        const totalAmount = body.totalAmount !== undefined ? Number(body.totalAmount) : amount;
+        const currency = body.currency || 'NPR';
+        const originalAmount = body.originalAmount !== undefined ? Number(body.originalAmount) : amount;
+        const exchangeRate = body.exchangeRate !== undefined ? Number(body.exchangeRate) : 1;
+        const groupId = body.groupId || null;
+
+        // Multi-split support:
+        const splits: SplitParticipant[] = Array.isArray(body.splits) ? body.splits : [];
+
+        // Single split / legacy support:
+        const legacySplitPerson = body.splitWith?.personName?.trim() || body.splitPersonName?.trim() || null;
+        const legacySplitAmount = body.splitWith?.amount ? Number(body.splitWith.amount) : body.splitAmount ? Number(body.splitAmount) : null;
         const paidByPersonName = body.paidBy?.personName?.trim() || body.paidByPersonName?.trim() || null;
 
-        if (isNaN(amount) || (amount <= 0 && (!splitPersonName || !splitAmount || splitAmount <= 0))) {
+        if (isNaN(amount) || (amount <= 0 && totalAmount <= 0 && splits.length === 0 && (!legacySplitPerson || !legacySplitAmount || legacySplitAmount <= 0))) {
           return { status: 400, jsonBody: { error: 'Valid positive expense amount is required.' } };
         }
         const now = new Date().toISOString();
 
+        // Calculate summary for backward compatibility
+        let finalSplitSummary = legacySplitPerson;
+        let finalSplitAmount = legacySplitAmount;
+
+        if (splits.length > 0) {
+          const nonSponsored = splits.filter(s => !s.isSponsored && Number(s.amount) > 0);
+          const sponsored = splits.filter(s => s.isSponsored && Number(s.amount) > 0);
+          const nonSpNames = nonSponsored.map(s => s.personName.trim()).join(', ');
+          const spNames = sponsored.length > 0 ? ` (+${sponsored.map(s => s.personName.trim()).join(', ')} sponsored)` : '';
+          finalSplitSummary = `${nonSpNames}${spNames}`.trim() || null;
+          finalSplitAmount = nonSponsored.reduce((acc, s) => acc + (Number(s.amount) || 0), 0);
+        }
+
         let newExpense: ExpenseItem | null = null;
-        if (amount > 0) {
+        if (amount > 0 || totalAmount > 0) {
           newExpense = {
             id: body.id || crypto.randomUUID(),
             expenseSetId: body.expenseSetId || null,
-            amount,
-            currency: body.currency || 'NPR',
+            groupId,
+            amount: amount >= 0 ? amount : 0,
+            totalAmount,
+            currency,
+            originalAmount,
+            exchangeRate,
             category: body.category || 'General',
             description: (body.description || '').trim() || 'Expense',
             date: body.date || now.slice(0, 10),
@@ -478,8 +549,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
             paymentMethod: body.paymentMethod || 'Bank / Card',
             isRotation: Boolean(body.isRotation),
             rotationNote: body.rotationNote || null,
-            splitPersonName,
-            splitAmount,
+            splitPersonName: finalSplitSummary,
+            splitAmount: finalSplitAmount,
+            splits: splits.length > 0 ? splits : undefined,
             paidByPersonName,
             tags: Array.isArray(body.tags) ? body.tags : [],
             receiptUrl: body.receiptUrl || null,
@@ -489,23 +561,52 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           await expensesCol.insertOne(newExpense);
         }
 
-        // If split with someone -> auto-create Lend record & ensure person exists
-        let autoLend: LendItem | null = null;
-        if (splitPersonName && splitAmount && splitAmount > 0) {
-          const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${splitPersonName}$`, 'i') } });
-          if (!pExists) {
-            await peopleCol.insertOne({ id: crypto.randomUUID(), name: splitPersonName, contact: '', isDefault: false, createdAt: now, updatedAt: now });
+        // Auto-create Lend records for participants
+        if (splits.length > 0) {
+          for (const s of splits) {
+            const sAmount = Number(s.amount);
+            if (!s.isSponsored && sAmount > 0) {
+              const pName = s.personName.trim();
+              const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(pName)}$`, 'i') } });
+              if (!pExists) {
+                await peopleCol.insertOne({ id: crypto.randomUUID(), name: pName, contact: '', isDefault: false, notes: 'Added via split expense', createdAt: now, updatedAt: now });
+              }
+              const autoLend: LendItem = {
+                id: crypto.randomUUID(),
+                personName: pName,
+                contact: '',
+                amount: sAmount,
+                currency,
+                originalAmount: s.originalAmount !== undefined ? Number(s.originalAmount) : sAmount,
+                lentDate: body.date || now.slice(0, 10),
+                expectedReturnDate: body.expectedReturnDate || '',
+                isRotation: false,
+                status: 'active',
+                notes: `Split from: ${(body.description || 'Expense')} (${pName}'s share of ${currency} ${sAmount})`,
+                repayments: [],
+                createdAt: now,
+                updatedAt: now
+              };
+              await lendsCol.insertOne(autoLend);
+            }
           }
-          autoLend = {
+        } else if (legacySplitPerson && legacySplitAmount && legacySplitAmount > 0) {
+          const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(legacySplitPerson)}$`, 'i') } });
+          if (!pExists) {
+            await peopleCol.insertOne({ id: crypto.randomUUID(), name: legacySplitPerson, contact: '', isDefault: false, createdAt: now, updatedAt: now });
+          }
+          const autoLend: LendItem = {
             id: crypto.randomUUID(),
-            personName: splitPersonName,
+            personName: legacySplitPerson,
             contact: '',
-            amount: splitAmount,
+            amount: legacySplitAmount,
+            currency,
+            originalAmount: legacySplitAmount,
             lentDate: body.date || now.slice(0, 10),
             expectedReturnDate: body.expectedReturnDate || '',
             isRotation: false,
             status: 'active',
-            notes: `Split from: ${(body.description || 'Expense')} (Total: ${amount + splitAmount})`,
+            notes: `Split from: ${(body.description || 'Expense')} (Total: ${amount + legacySplitAmount})`,
             repayments: [],
             createdAt: now,
             updatedAt: now
@@ -515,7 +616,7 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
 
         // If paid by someone else on user's behalf -> auto-create Borrow record & ensure person exists
         if (paidByPersonName) {
-          const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${paidByPersonName}$`, 'i') } });
+          const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(paidByPersonName)}$`, 'i') } });
           if (!pExists) {
             await peopleCol.insertOne({ id: crypto.randomUUID(), name: paidByPersonName, contact: '', isDefault: false, createdAt: now, updatedAt: now });
           }
@@ -524,6 +625,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
             personName: paidByPersonName,
             contact: '',
             amount,
+            currency,
+            originalAmount,
             borrowedDate: newExpense?.date || now.slice(0, 10),
             expectedReturnDate: '',
             isRotation: false,
@@ -544,6 +647,12 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         const now = new Date().toISOString();
         const updates: any = { updatedAt: now };
         if (body.amount !== undefined) updates.amount = Number(body.amount);
+        if (body.totalAmount !== undefined) updates.totalAmount = Number(body.totalAmount);
+        if (body.currency !== undefined) updates.currency = body.currency;
+        if (body.originalAmount !== undefined) updates.originalAmount = Number(body.originalAmount);
+        if (body.exchangeRate !== undefined) updates.exchangeRate = Number(body.exchangeRate);
+        if (body.groupId !== undefined) updates.groupId = body.groupId || null;
+        if (body.splits !== undefined) updates.splits = body.splits;
         if (body.category !== undefined) updates.category = body.category;
         if (body.description !== undefined) updates.description = body.description;
         if (body.date !== undefined) updates.date = body.date;
@@ -636,11 +745,16 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           });
         }
 
+        const currency = body.currency || 'NPR';
+        const originalAmount = body.originalAmount !== undefined ? Number(body.originalAmount) : amount;
+
         const newLend: LendItem = {
           id: body.id || crypto.randomUUID(),
           personName: pName,
           contact,
           amount,
+          currency,
+          originalAmount,
           lentDate: body.lentDate || now.slice(0, 10),
           expectedReturnDate: body.expectedReturnDate || '',
           isRotation: Boolean(body.isRotation),
@@ -739,11 +853,16 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           });
         }
 
+        const currency = body.currency || 'NPR';
+        const originalAmount = body.originalAmount !== undefined ? Number(body.originalAmount) : amount;
+
         const newBorrow: BorrowItem = {
           id: body.id || crypto.randomUUID(),
           personName: pName,
           contact,
           amount,
+          currency,
+          originalAmount,
           borrowedDate: body.borrowedDate || now.slice(0, 10),
           expectedReturnDate: body.expectedReturnDate || '',
           isRotation: Boolean(body.isRotation),
@@ -1181,6 +1300,155 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
       if (method === 'DELETE' && resourceId) {
         await backlogCol.deleteOne({ id: resourceId });
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, id: resourceId } };
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 8. EXPENSE GROUPS: /api/finance/groups
+    // ─────────────────────────────────────────────────────────────────────────
+    if (resource === 'groups') {
+      if (method === 'GET') {
+        const groups = await groupsCol.find({}).sort({ name: 1 }).toArray();
+        const expenses = await expensesCol.find({}).toArray();
+        const enriched = groups.map(g => {
+          const groupExpenses = expenses.filter(e => e.groupId === g.id);
+          const totalSpent = groupExpenses.reduce((sum, e) => sum + (Number(e.totalAmount || e.amount) || 0), 0);
+          return {
+            ...g,
+            expenseCount: groupExpenses.length,
+            totalSpent
+          };
+        });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: enriched };
+      }
+
+      if (method === 'POST') {
+        const body: any = await request.json().catch(() => ({}));
+        if (!body.name || !body.name.trim()) {
+          return { status: 400, jsonBody: { error: 'Group name is required.' } };
+        }
+        const now = new Date().toISOString();
+        const rawMembers = Array.isArray(body.members) ? body.members : [];
+        const members: string[] = rawMembers.map((m: any) => typeof m === 'string' ? m.trim() : m?.name?.trim()).filter(Boolean);
+
+        // Ensure each group member exists in finance_people
+        for (const memberName of members) {
+          const exists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(memberName)}$`, 'i') } });
+          if (!exists) {
+            await peopleCol.insertOne({
+              id: crypto.randomUUID(),
+              name: memberName,
+              contact: '',
+              isDefault: false,
+              notes: `Added via Group "${body.name.trim()}"`,
+              createdAt: now,
+              updatedAt: now
+            });
+          }
+        }
+
+        const newGroup: ExpenseGroup = {
+          id: body.id || crypto.randomUUID(),
+          name: body.name.trim(),
+          description: body.description || '',
+          members,
+          defaultSplitMode: body.defaultSplitMode || 'equal',
+          createdAt: now,
+          updatedAt: now
+        };
+        await groupsCol.insertOne(newGroup);
+        return { status: 201, headers: { 'Content-Type': 'application/json' }, jsonBody: newGroup };
+      }
+
+      if (method === 'PUT' && resourceId) {
+        const body: any = await request.json().catch(() => ({}));
+        const now = new Date().toISOString();
+        const updates: any = { updatedAt: now };
+        if (body.name !== undefined) updates.name = body.name.trim();
+        if (body.description !== undefined) updates.description = body.description;
+        if (body.defaultSplitMode !== undefined) updates.defaultSplitMode = body.defaultSplitMode;
+        if (body.members !== undefined && Array.isArray(body.members)) {
+          const members: string[] = body.members.map((m: any) => typeof m === 'string' ? m.trim() : m?.name?.trim()).filter(Boolean);
+          updates.members = members;
+          for (const memberName of members) {
+            const exists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(memberName)}$`, 'i') } });
+            if (!exists) {
+              await peopleCol.insertOne({
+                id: crypto.randomUUID(),
+                name: memberName,
+                contact: '',
+                isDefault: false,
+                notes: 'Added via Group update',
+                createdAt: now,
+                updatedAt: now
+              });
+            }
+          }
+        }
+
+        await groupsCol.updateOne({ id: resourceId }, { $set: updates });
+        const updated = await groupsCol.findOne({ id: resourceId });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
+      }
+
+      if (method === 'DELETE' && resourceId) {
+        await groupsCol.deleteOne({ id: resourceId });
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, id: resourceId } };
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 9. SETTINGS & DEFAULTS: /api/finance/settings
+    // ─────────────────────────────────────────────────────────────────────────
+    if (resource === 'settings') {
+      const defaultSettings: FinanceSettings = {
+        defaultCurrency: 'NPR',
+        exchangeRates: {
+          NPR: 1.0,
+          INR: 1.6, // 1 INR = 1.6 NPR
+          USD: 134.5,
+          EUR: 142.0
+        },
+        defaultPaymentMethod: 'Bank / Card',
+        defaultCompanion: '',
+        defaultCategory: 'Food & Dining',
+        defaultDateOption: 'today',
+        defaultSplitMode: 'none'
+      };
+
+      if (method === 'GET') {
+        const saved = await settingsCol.findOne({ _id: 'global_finance_settings' as any });
+        if (!saved) {
+          return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: defaultSettings };
+        }
+        const { _id, ...settingsData } = saved;
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { ...defaultSettings, ...settingsData } };
+      }
+
+      if (method === 'POST' || method === 'PUT') {
+        const body: any = await request.json().catch(() => ({}));
+        const now = new Date().toISOString();
+        const updated: FinanceSettings = {
+          defaultCurrency: body.defaultCurrency || 'NPR',
+          exchangeRates: {
+            NPR: Number(body.exchangeRates?.NPR) || 1.0,
+            INR: Number(body.exchangeRates?.INR) || 1.6,
+            USD: Number(body.exchangeRates?.USD) || 134.5,
+            EUR: Number(body.exchangeRates?.EUR) || 142.0
+          },
+          defaultPaymentMethod: body.defaultPaymentMethod || 'Bank / Card',
+          defaultCompanion: body.defaultCompanion || '',
+          defaultCategory: body.defaultCategory || 'Food & Dining',
+          defaultDateOption: body.defaultDateOption || 'today',
+          defaultSplitMode: body.defaultSplitMode || 'none',
+          updatedAt: now
+        };
+        await settingsCol.updateOne(
+          { _id: 'global_finance_settings' as any },
+          { $set: updated },
+          { upsert: true }
+        );
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
       }
     }
 
