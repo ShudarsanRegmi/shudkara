@@ -149,9 +149,13 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
 
         if (response.ok || (response.status >= 200 && response.status < 300)) {
           // Successfully processed on server
+          let responseData: any = null;
+          try {
+            responseData = await response.clone().json();
+          } catch {}
           removeOfflineAction(item.id);
           synced++;
-          window.dispatchEvent(new CustomEvent('shudkara:action-synced', { detail: { action: item } }));
+          window.dispatchEvent(new CustomEvent('shudkara:action-synced', { detail: { action: item, response: responseData } }));
         } else if (response.status >= 400 && response.status < 500) {
           // Client error (e.g. 404, 400), don't deadlock the queue indefinitely
           console.warn(`Offline action rejected by server with status ${response.status}:`, item.description);

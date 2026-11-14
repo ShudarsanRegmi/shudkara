@@ -215,6 +215,9 @@ export async function uploadToFolder(
   mimeType: string,
   base64Data: string
 ): Promise<{ fileId: string; viewUrl: string; thumbnailUrl: string; previewUrl?: string; streamUrl?: string }> {
+  if (!base64Data || typeof base64Data !== 'string') {
+    throw new Error(`Invalid or empty base64 data for file "${fileName}"`);
+  }
   return executeDriveAction(async (drive) => {
     const base64Content = base64Data.split(';base64,').pop() || base64Data;
     const buffer = Buffer.from(base64Content, 'base64');

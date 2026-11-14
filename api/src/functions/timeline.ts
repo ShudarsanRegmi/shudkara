@@ -419,12 +419,16 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       const uploadedMedia: any[] = [];
       if (mediaFiles && Array.isArray(mediaFiles) && mediaFiles.length > 0) {
         for (const file of mediaFiles) {
+          if (!file || !file.name || !file.base64 || typeof file.base64 !== 'string') {
+            context.warn('Skipping invalid media file in POST /api/timeline:', file?.name);
+            continue;
+          }
           try {
-            const driveRes = await uploadToFolder(folderId, file.name, file.type, file.base64);
+            const driveRes = await uploadToFolder(folderId, file.name, file.type || 'image/jpeg', file.base64);
             uploadedMedia.push({
               googleDriveId: driveRes.fileId,
               fileName: file.name,
-              mimeType: file.type,
+              mimeType: file.type || 'image/jpeg',
               viewUrl: driveRes.viewUrl,
               thumbnailUrl: driveRes.thumbnailUrl,
               previewUrl: driveRes.previewUrl,
@@ -432,11 +436,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
             });
           } catch (driveErr: any) {
             context.error(`Failed to upload file "${file.name}" to folder:`, driveErr);
-            return {
-              status: 502,
-              headers: { 'Content-Type': 'application/json' },
-              jsonBody: { error: `Failed to upload "${file.name}" inside directory. Check Google Drive credentials.` }
-            };
+            // Non-fatal: continue so post writeup is NEVER rejected because of one image glitch
           }
         }
       }

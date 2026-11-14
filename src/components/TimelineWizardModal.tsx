@@ -208,14 +208,51 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
 }
 
 function getStoredDrafts(): TimelineDraftMeta[] {
+  let list: TimelineDraftMeta[] = [];
   try {
     const raw = localStorage.getItem(DRAFTS_LIST_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
+      if (Array.isArray(parsed)) list = parsed;
     }
   } catch {}
-  return [];
+
+  // AUTO-RECOVERY SAFETY NET:
+  // Check the offline outbox for any timeline writeups that failed or were interrupted during sync
+  try {
+    const outboxRaw = localStorage.getItem('shudkara_offline_outbox');
+    if (outboxRaw) {
+      const outbox = JSON.parse(outboxRaw);
+      if (Array.isArray(outbox)) {
+        for (const item of outbox) {
+          if (item.subapp === 'timeline' && item.body && (item.body.content || item.body.title)) {
+            const draftKey = item.body.draftId || `recovered_${item.id}`;
+            const exists = list.some(d => d.id === draftKey || (d.content && d.content === item.body.content));
+            if (!exists) {
+              const recovered: TimelineDraftMeta = {
+                id: draftKey,
+                title: item.body.title || 'Recovered Writeup',
+                content: item.body.content || '',
+                category: item.body.category || 'General',
+                rawTags: Array.isArray(item.body.tags) ? item.body.tags.join(', ') : '',
+                timestamp: item.body.timestamp || new Date().toISOString(),
+                dateMode: 'AD',
+                formBsYear: adToBs(new Date()).year,
+                formBsMonth: adToBs(new Date()).month,
+                formBsDay: adToBs(new Date()).day,
+                currentStep: 2,
+                mediaCount: Array.isArray(item.body.mediaFiles) ? item.body.mediaFiles.length : 0,
+                updatedAt: item.timestamp || Date.now()
+              };
+              list.unshift(recovered);
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return list;
 }
 
 function generateDraftId(): string {

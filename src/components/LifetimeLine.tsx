@@ -11,7 +11,7 @@ import {
   type BikramSambatDate 
 } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
-import { TimelineWizardModal, type DraftMediaItem, finalizeSuccessfulDraftUpload } from './TimelineWizardModal';
+import { TimelineWizardModal, type DraftMediaItem, finalizeSuccessfulDraftUpload, loadMediaFromDb } from './TimelineWizardModal';
 import { TimelineSidebar } from './TimelineSidebar';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 import { MediaCollageGrid } from './MediaCollageGrid';
@@ -218,6 +218,50 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
   }, [showStreaksMoments]);
 
+  // Auto-sync listener for offline timeline moments
+  useEffect(() => {
+    const handleActionSynced = async (e: any) => {
+      const action = e.detail?.action;
+      const responseData = e.detail?.response;
+      if (action && action.subapp === 'timeline' && action.body?.draftId) {
+        const draftId = action.body.draftId;
+        const postId = responseData?.postId;
+
+        if (postId) {
+          try {
+            const mediaItems = await loadMediaFromDb(draftId);
+            if (mediaItems && mediaItems.length > 0) {
+              for (const file of mediaItems) {
+                await fetch(`/api/timeline/${postId}/media`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-Token': authToken || ''
+                  },
+                  body: JSON.stringify({
+                    name: file.name,
+                    type: file.type,
+                    base64: file.base64
+                  })
+                });
+              }
+            }
+          } catch (err) {
+            console.warn('Error uploading media for synced offline draft:', err);
+          }
+        }
+
+        // Only after the server has accepted the post and processed media do we retire the draft
+        await finalizeSuccessfulDraftUpload(draftId);
+        fetchPosts(true);
+        fetchFilterMetadata();
+      }
+    };
+
+    window.addEventListener('shudkara:action-synced', handleActionSynced);
+    return () => window.removeEventListener('shudkara:action-synced', handleActionSynced);
+  }, [authToken]);
+
   // Infinite Scroll / Lazy Load Sentinel Ref
   const observerTargetRef = useRef<HTMLDivElement>(null);
 
@@ -375,12 +419,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           'X-Session-Token': authToken
         },
         body: {
+          draftId: postData.draftId,
           title: postData.title,
           content: postData.content,
           category: postData.category,
           tags: postData.tags,
           timestamp: postData.timestamp,
-          mediaFiles: postData.mediaFiles
+          mediaFiles: [] // send empty so offline action fits in localStorage and never times out Azure Functions
         },
         description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
         subapp: 'timeline'
@@ -391,9 +436,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         progressPercent: 100,
         currentIndex: totalMedia,
         totalMedia,
-        stepText: 'Saved to offline queue. Will sync when back online.'
+        stepText: 'Saved to offline queue. Your writeup is safely preserved in drafts until sync completes.'
       });
-      await finalizeSuccessfulDraftUpload(postData.draftId);
+      // SAFETY: Draft remains 100% intact in IndexedDB / localStorage until sync actually succeeds!
       setTimeout(() => setActiveUpload(null), 3500);
       return;
     }
