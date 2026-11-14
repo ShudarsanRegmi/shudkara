@@ -272,8 +272,11 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
             uploadedPhotos.push(driveRes.viewUrl);
           } catch (driveErr: any) {
             context.error('[GDrive] Failed to upload streak proof photo to Google Drive:', driveErr.message);
-            // Graceful fallback: preserve base64 so user's check-in proof is not lost
-            uploadedPhotos.push(photoStr);
+            return {
+              status: 502,
+              headers: { 'Content-Type': 'application/json' },
+              jsonBody: { error: `Failed to upload streak proof photo to Google Drive: ${driveErr.message}. Base64 images are not permitted in MongoDB database storage.` }
+            };
           }
         } else {
           // Already an external / Google Drive URL
