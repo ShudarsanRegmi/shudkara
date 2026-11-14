@@ -31,7 +31,8 @@ import {
   RefreshCw,
   Flame,
   Wallet,
-  Hourglass
+  Hourglass,
+  Shield
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -47,6 +48,17 @@ export interface AppDefinition {
 }
 
 export const ALL_APPS: AppDefinition[] = [
+  {
+    id: 'caretaker',
+    label: 'The Sentinel',
+    description: 'Autonomous AI caretaker, MemGPT virtual memory & system audit',
+    icon: Shield,
+    category: 'Tools & Utilities',
+    requiresLogin: false,
+    colorBg: 'bg-indigo-50',
+    colorText: 'text-indigo-700',
+    colorBorder: 'border-indigo-200'
+  },
   {
     id: 'lifeodyssey',
     label: 'Life Odyssey',

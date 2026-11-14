@@ -45,6 +45,7 @@ interface CommandPaletteProps {
   authToken?: string | null;
   onOpenNewStreak?: () => void;
   onOpenCheckIn?: () => void;
+  onOpenCaretaker?: () => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -53,7 +54,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   setActiveTab,
   authToken: _authToken,
   onOpenNewStreak,
-  onOpenCheckIn
+  onOpenCheckIn,
+  onOpenCaretaker
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -74,6 +76,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Master command registry
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
+    {
+      id: 'app-caretaker',
+      title: 'The Sentinel (AI Caretaker)',
+      subtitle: 'Autonomous watchman, MemGPT virtual memory & system audit',
+      category: 'Applications',
+      icon: Shield,
+      colorBg: 'bg-indigo-50',
+      colorText: 'text-indigo-600',
+      badge: 'AI',
+      action: () => {
+        if (onOpenCaretaker) onOpenCaretaker();
+        onClose();
+      }
+    },
     {
       id: 'app-lifeodyssey',
       title: 'Life Odyssey & Age Matrix',

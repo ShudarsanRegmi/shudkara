@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
   ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow,
-  Flame, Search, Wallet, Hourglass
+  Flame, Search, Wallet, Hourglass, Shield
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -28,6 +28,7 @@ import { Streaks } from './components/Streaks';
 import { Notes } from './components/Notes';
 import { Finance } from './components/Finance';
 import { LifeOdyssey } from './components/LifeOdyssey';
+import { CaretakerDrawer } from './components/CaretakerDrawer';
 import { CommandPalette } from './components/CommandPalette';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
 import { PrivacyPolicy } from './components/PrivacyPolicy';
@@ -71,6 +72,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  caretaker: { requiresLogin: false, label: 'The Sentinel', icon: Shield },
   lifeodyssey: { requiresLogin: false, label: 'Life Odyssey', icon: Hourglass },
   finance: { requiresLogin: true, label: 'Finance', icon: Wallet },
   notes: { requiresLogin: false, label: 'Notes', icon: FileText },
@@ -154,6 +156,8 @@ function App() {
 
   // Global Command Palette state
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // Sentinel AI Caretaker Drawer state
+  const [caretakerOpen, setCaretakerOpen] = useState(false);
 
   // Global Keyboard Shortcuts (Press / anywhere or Cmd+K)
   useEffect(() => {
@@ -469,6 +473,8 @@ function App() {
         );
       case 'prompts':
         return <PromptVault prompts={prompts} onPromptsChange={setPrompts} authToken={authToken} />;
+      case 'caretaker':
+        return <CaretakerDrawer isOpen={true} onClose={() => setActiveTab('dashboard')} setActiveTab={setActiveTab} />;
       case 'lifeodyssey':
         return <LifeOdyssey authToken={authToken} />;
       case 'timeline':
@@ -592,6 +598,20 @@ function App() {
 
           {/* Authentication Action, Command Palette & Mobile Menu Toggle */}
           <div className="flex items-center gap-2 sm:gap-3 pl-2">
+            {/* Sentinel Caretaker Beacon Button */}
+            <button
+              onClick={() => setCaretakerOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-bold text-slate-700 hover:text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-xl transition border border-indigo-200/80 shadow-2xs group cursor-pointer"
+              title="The Sentinel (AI Caretaker & Memory Engine)"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+              </span>
+              <Shield className="w-3.5 h-3.5 text-indigo-600 group-hover:scale-110 transition" />
+              <span className="hidden sm:inline text-[11px]">Sentinel</span>
+            </button>
+
             {/* Quick Command Palette Button */}
             <button
               onClick={() => setCommandPaletteOpen(true)}
@@ -705,6 +725,14 @@ function App() {
         onClose={() => setCommandPaletteOpen(false)}
         setActiveTab={setActiveTab}
         authToken={authToken}
+        onOpenCaretaker={() => setCaretakerOpen(true)}
+      />
+
+      {/* Sentinel AI Caretaker Drawer (MemGPT Memory & Watchman) */}
+      <CaretakerDrawer
+        isOpen={caretakerOpen}
+        onClose={() => setCaretakerOpen(false)}
+        setActiveTab={setActiveTab}
       />
 
       {/* Offline Status & Background Sync Outbox Indicator */}
