@@ -78,3 +78,22 @@ export async function verifySession(token: string | null): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * Centrally log application errors to MongoDB 'system_logs' collection.
+ * This guarantees full auditability and allows diagnosing 500 errors in serverless environments.
+ */
+export async function logAppError(source: string, err: any, meta: any = {}): Promise<void> {
+  try {
+    const db = await connectToMongo();
+    await db.collection('system_logs').insertOne({
+      source,
+      message: err?.message || String(err),
+      stack: err?.stack || null,
+      meta,
+      timestamp: new Date().toISOString()
+    });
+  } catch (logErr: any) {
+    console.error('Failed to write to system_logs collection:', logErr?.message || logErr);
+  }
+}

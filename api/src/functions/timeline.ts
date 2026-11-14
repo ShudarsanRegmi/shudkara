@@ -1,6 +1,6 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import { ObjectId } from 'mongodb';
-import { connectToMongo, verifySession, extractToken } from './db';
+import { connectToMongo, verifySession, extractToken, logAppError } from './db';
 import { 
   createFolderInDrive, uploadToFolder, listSubFolders, 
   getFilesInFolder, getFileContent, ensureFilePublic, deleteFolderFromDrive 
@@ -261,6 +261,21 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       };
     }
 
+    // ── 2b. GET /api/timeline/logs (Fetch recent timeline & application error logs) ──
+    if (method === 'GET' && pathParts[0] === 'logs') {
+      const logs = await db.collection('system_logs')
+        .find({})
+        .sort({ timestamp: -1 })
+        .limit(50)
+        .toArray();
+
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        jsonBody: { success: true, count: logs.length, logs }
+      };
+    }
+
     // ── 3. POST /api/timeline/:id/media (Single file upload directly to post folder) ──
     if (method === 'POST' && pathParts.length === 2 && pathParts[1] === 'media') {
       const postId = pathParts[0];
@@ -283,15 +298,16 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       let folderId = post.googleDriveFolderId;
-      if (!folderId) {
-        const postDate = new Date(post.timestamp || Date.now());
-        const datePrefix = postDate.toISOString().substring(0, 10);
-        const folderSlug = post.title ? slugify(post.title) : 'moment';
-        folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
-        await col.updateOne({ _id: new ObjectId(postId) }, { $set: { googleDriveFolderId: folderId } });
-      }
-
       try {
+        if (!folderId) {
+          const rawDate = post.timestamp ? new Date(post.timestamp) : new Date();
+          const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
+          const datePrefix = postDate.toISOString().substring(0, 10);
+          const folderSlug = post.title ? slugify(post.title) : 'moment';
+          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
+          await col.updateOne({ _id: new ObjectId(postId) }, { $set: { googleDriveFolderId: folderId } });
+        }
+
         const driveRes = await uploadToFolder(folderId, name, type || 'image/jpeg', base64);
         const mediaItem = {
           googleDriveId: driveRes.fileId,
@@ -327,16 +343,17 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       const tag = url.searchParams.get('tag');
       const search = url.searchParams.get('search');
       
-      const limit = parseInt(url.searchParams.get('limit') || '20', 10);
-      const skip = parseInt(url.searchParams.get('skip') || '0', 10);
+      const limit = Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10) || 20);
+      const skip = Math.max(0, parseInt(url.searchParams.get('skip') || '0', 10) || 0);
 
       const filter: any = {};
       if (category) filter.category = category;
       if (tag) filter.tags = tag;
-      if (search) {
+      if (search && search.trim()) {
+        const safeSearch = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         filter.$or = [
-          { title: { $regex: search, $options: 'i' } },
-          { content: { $regex: search, $options: 'i' } }
+          { title: { $regex: safeSearch, $options: 'i' } },
+          { content: { $regex: safeSearch, $options: 'i' } }
         ];
       }
 
@@ -367,7 +384,8 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Content is required.' } };
       }
 
-      const postDate = timestamp ? new Date(timestamp) : new Date();
+      const rawDate = timestamp ? new Date(timestamp) : new Date();
+      const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
       const datePrefix = postDate.toISOString().substring(0, 10);
       const folderSlug = title ? slugify(title) : 'moment';
       const folderName = `${datePrefix}-${folderSlug}`;
@@ -457,7 +475,10 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       const updateData: any = {};
       if (title !== undefined) updateData.title = (title || '').trim();
       if (content !== undefined) updateData.content = content.trim();
-      if (timestamp !== undefined) updateData.timestamp = new Date(timestamp);
+      if (timestamp !== undefined) {
+        const parsed = new Date(timestamp);
+        updateData.timestamp = !isNaN(parsed.getTime()) ? parsed : new Date();
+      }
       if (category !== undefined) updateData.category = (category || 'General').trim();
       if (tags !== undefined && Array.isArray(tags)) {
         updateData.tags = tags.map((t: string) => t.trim().toLowerCase()).filter(Boolean);
@@ -491,7 +512,8 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       if (Array.isArray(newMediaFiles) && newMediaFiles.length > 0) {
         let folderId = post.googleDriveFolderId;
         if (!folderId) {
-          const postDate = updateData.timestamp || new Date(post.timestamp);
+          const rawDate = updateData.timestamp || (post.timestamp ? new Date(post.timestamp) : new Date());
+          const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
           const datePrefix = postDate.toISOString().substring(0, 10);
           const folderSlug = (updateData.title || post.title) ? slugify(updateData.title || post.title) : 'moment';
           folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
@@ -560,12 +582,20 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
 
       // Delete the entire subdirectory in Google Drive (recursively deletes all containing files)
       if (post.googleDriveFolderId) {
-        await deleteFolderFromDrive(post.googleDriveFolderId);
+        try {
+          await deleteFolderFromDrive(post.googleDriveFolderId);
+        } catch (delErr: any) {
+          context.warn(`Failed to delete Google Drive folder ${post.googleDriveFolderId}:`, delErr.message);
+        }
       }
       if (Array.isArray(post.media)) {
         for (const item of post.media) {
           if (item.googleDriveId) {
-            await deleteFolderFromDrive(item.googleDriveId);
+            try {
+              await deleteFolderFromDrive(item.googleDriveId);
+            } catch (delMediaErr: any) {
+              context.warn(`Failed to delete media file ${item.googleDriveId}:`, delMediaErr.message);
+            }
           }
         }
       }
@@ -577,7 +607,20 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
     return { status: 405, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: `Method ${method} not allowed.` } };
   } catch (err: any) {
     context.error('Timeline handler error:', err);
-    return { status: 500, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Internal server error.', details: err.message } };
+    await logAppError('timeline', err, {
+      method,
+      url: request.url,
+      pathParts
+    });
+    return { 
+      status: 500, 
+      headers: { 'Content-Type': 'application/json' }, 
+      jsonBody: { 
+        error: 'Internal server error.', 
+        details: err?.message || String(err),
+        stack: err?.stack || undefined
+      } 
+    };
   }
 }
 

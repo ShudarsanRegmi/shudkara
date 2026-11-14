@@ -237,7 +237,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         fetchPosts(true);
         fetchFilterMetadata();
       } else {
-        setErrorMsg(data.error || 'Failed to sync Google Drive.');
+        setErrorMsg(data.details ? `${data.error} (${data.details})` : (data.error || 'Failed to sync Google Drive.'));
       }
     } catch {
       setErrorMsg('Network error occurred during Google Drive sync.');
@@ -294,7 +294,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         }
         setTotal(data.total || 0);
       } else {
-        setErrorMsg(data.error || 'Failed to load timeline feed.');
+        setErrorMsg(data.details ? `${data.error} (${data.details})` : (data.error || 'Failed to load timeline feed.'));
       }
     } catch {
       setErrorMsg('Network error while loading timeline feed.');
@@ -418,7 +418,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
       if (!createRes.ok) {
         const errData = await createRes.json().catch(() => ({}));
-        throw new Error(errData.error || `Server error (HTTP ${createRes.status})`);
+        const detailMsg = errData.details ? `${errData.error} (${errData.details})` : errData.error;
+        throw new Error(detailMsg || `Server error (HTTP ${createRes.status})`);
       }
 
       const createData = await createRes.json();
