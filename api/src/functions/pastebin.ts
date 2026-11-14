@@ -3,7 +3,7 @@ import * as crypto from 'crypto';
 import { google } from 'googleapis';
 import { connectToMongo, verifySession, extractToken } from './db';
 import { 
-  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, trashFileOrFolderInDrive 
+  getSubappBucketId, executeDriveAction, uploadToFolder, trashFileOrFolderInDrive 
 } from './gdrive';
 
 const EXPIRY_MAP: Record<string, number> = {
@@ -19,30 +19,10 @@ let pastebinParentFolderId: string | null = null;
 async function getOrCreatePastebinFolderId(): Promise<string> {
   if (pastebinParentFolderId) return pastebinParentFolderId;
 
-  const auth = getAuthClient();
-  const drive = google.drive({ version: 'v3', auth });
-
-  const parentFolderId = getFolderId();
-  const query = parentFolderId 
-    ? `'${parentFolderId}' in parents and name = 'Pastebin' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
-    : `name = 'Pastebin' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-
-  const res = await drive.files.list({
-    q: query,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-    fields: 'files(id, name)',
-    pageSize: 1
-  });
-
-  if (res.data.files && res.data.files.length > 0) {
-    pastebinParentFolderId = res.data.files[0].id!;
+  return executeDriveAction(async (drive) => {
+    pastebinParentFolderId = await getSubappBucketId(drive, 'Pastebin');
     return pastebinParentFolderId;
-  }
-
-  const folderId = await createFolderInDrive('Pastebin');
-  pastebinParentFolderId = folderId;
-  return pastebinParentFolderId;
+  });
 }
 
 async function uploadBase64FileToDrive(

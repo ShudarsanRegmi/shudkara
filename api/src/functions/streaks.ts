@@ -259,7 +259,7 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
                 .replace(/[^a-z0-9]/g, '-')
                 .slice(0, 30);
               const folderName = `streak-${safeStreakSlug}-${streak.id.slice(0, 8)}`;
-              driveFolderId = await createFolderInDrive(folderName);
+              driveFolderId = await createFolderInDrive(folderName, 'Streaks');
               await streaksCol.updateOne({ id: streakId }, { $set: { googleDriveFolderId: driveFolderId } });
             }
 

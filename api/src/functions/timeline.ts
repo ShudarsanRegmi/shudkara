@@ -287,7 +287,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         const postDate = new Date(post.timestamp || Date.now());
         const datePrefix = postDate.toISOString().substring(0, 10);
         const folderSlug = post.title ? slugify(post.title) : 'moment';
-        folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`);
+        folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
         await col.updateOne({ _id: new ObjectId(postId) }, { $set: { googleDriveFolderId: folderId } });
       }
 
@@ -375,7 +375,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       // A. Create the folder in Google Drive
       let folderId = '';
       try {
-        folderId = await createFolderInDrive(folderName);
+        folderId = await createFolderInDrive(folderName, 'Timeline');
       } catch (folderErr: any) {
         context.error('Failed to create Google Drive folder:', folderErr);
         return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Failed to create directory in Google Drive. Check credentials.' } };
@@ -431,6 +431,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         category: metadataPayload.category,
         tags: metadataPayload.tags,
         googleDriveFolderId: folderId,
+        gdriveBucket: 'StorageBuckets/ShudkaraBucket/Timeline',
         media: uploadedMedia,
         reactions: [],
         comments: []
@@ -493,7 +494,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           const postDate = updateData.timestamp || new Date(post.timestamp);
           const datePrefix = postDate.toISOString().substring(0, 10);
           const folderSlug = (updateData.title || post.title) ? slugify(updateData.title || post.title) : 'moment';
-          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`);
+          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
           updateData.googleDriveFolderId = folderId;
         }
 

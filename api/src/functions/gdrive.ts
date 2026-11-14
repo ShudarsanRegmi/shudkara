@@ -65,37 +65,134 @@ export async function executeDriveAction<T>(actionFn: (drive: any) => Promise<T>
   }
 }
 
-// Cache valid parent folder ID status in-memory
-let cachedValidFolderId: string | null | undefined = undefined;
+// ── Bucket Architecture: StorageBuckets / ShudkaraBucket / <Subapp> ──
+export type SubappBucketName = 'Timeline' | 'Streaks' | 'Inventory' | 'Pastebin';
 
-export async function getValidParentFolderId(drive: any): Promise<string | null> {
-  if (cachedValidFolderId !== undefined) {
-    return cachedValidFolderId;
-  }
-  const folderId = getFolderId();
-  if (!folderId) {
-    cachedValidFolderId = null;
-    return null;
-  }
-  try {
-    await drive.files.get({ fileId: folderId, fields: 'id', supportsAllDrives: true });
-    cachedValidFolderId = folderId;
-    return folderId;
-  } catch (err: any) {
-    console.warn(`[GDrive] GOOGLE_DRIVE_FOLDER_ID (${folderId}) is not accessible or not shared (${err.message}). Falling back to root drive.`);
-    cachedValidFolderId = null;
-    return null;
-  }
+export interface BucketRegistry {
+  storageBucketsId: string;
+  shudkaraBucketId: string;
+  subapps: Record<SubappBucketName, string>;
 }
 
-// ── 1. Create a subfolder for a post ──
-export async function createFolderInDrive(folderName: string): Promise<string> {
+let cachedBucketRegistry: BucketRegistry | null = null;
+
+export async function ensureShudkaraBucketHierarchy(drive: any): Promise<BucketRegistry> {
+  if (cachedBucketRegistry) {
+    return cachedBucketRegistry;
+  }
+
+  // 1. Try reading from MongoDB active_buckets cache
+  try {
+    const { connectToMongo } = await import('./db');
+    const db = await connectToMongo();
+    const doc: any = await db.collection('gdrive_buckets').findOne({ _id: 'active_buckets' as any });
+    if (doc && doc.storageBucketsId && doc.shudkaraBucketId && doc.subapps?.Timeline) {
+      cachedBucketRegistry = {
+        storageBucketsId: doc.storageBucketsId,
+        shudkaraBucketId: doc.shudkaraBucketId,
+        subapps: doc.subapps
+      };
+      return cachedBucketRegistry;
+    }
+  } catch (e) {
+    // MongoDB unavailable or offline, proceed to Drive discovery
+  }
+
+  // 2. Discover or create in Google Drive
+  // A. StorageBuckets in root
+  let storageBucketsId = '';
+  const sbRes = await drive.files.list({
+    q: "'root' in parents and name = 'StorageBuckets' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+    fields: 'files(id, name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
+  });
+  if (sbRes.data.files && sbRes.data.files.length > 0) {
+    storageBucketsId = sbRes.data.files[0].id!;
+  } else {
+    const created = await drive.files.create({
+      requestBody: { name: 'StorageBuckets', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+      supportsAllDrives: true,
+      fields: 'id'
+    });
+    storageBucketsId = created.data.id!;
+  }
+
+  // B. ShudkaraBucket inside StorageBuckets
+  let shudkaraBucketId = '';
+  const shRes = await drive.files.list({
+    q: `'${storageBucketsId}' in parents and name = 'ShudkaraBucket' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: 'files(id, name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
+  });
+  if (shRes.data.files && shRes.data.files.length > 0) {
+    shudkaraBucketId = shRes.data.files[0].id!;
+  } else {
+    const created = await drive.files.create({
+      requestBody: { name: 'ShudkaraBucket', mimeType: 'application/vnd.google-apps.folder', parents: [storageBucketsId] },
+      supportsAllDrives: true,
+      fields: 'id'
+    });
+    shudkaraBucketId = created.data.id!;
+  }
+
+  // C. Subapps inside ShudkaraBucket
+  const subapps: SubappBucketName[] = ['Timeline', 'Streaks', 'Inventory', 'Pastebin'];
+  const subappMap: Record<string, string> = {};
+
+  for (const sub of subapps) {
+    const subRes = await drive.files.list({
+      q: `'${shudkaraBucketId}' in parents and name = '${sub}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true
+    });
+    if (subRes.data.files && subRes.data.files.length > 0) {
+      subappMap[sub] = subRes.data.files[0].id!;
+    } else {
+      const created = await drive.files.create({
+        requestBody: { name: sub, mimeType: 'application/vnd.google-apps.folder', parents: [shudkaraBucketId] },
+        supportsAllDrives: true,
+        fields: 'id'
+      });
+      subappMap[sub] = created.data.id!;
+    }
+  }
+
+  cachedBucketRegistry = {
+    storageBucketsId,
+    shudkaraBucketId,
+    subapps: subappMap as Record<SubappBucketName, string>
+  };
+
+  // Persist to MongoDB
+  try {
+    const { connectToMongo } = await import('./db');
+    const db = await connectToMongo();
+    await db.collection('gdrive_buckets').updateOne(
+      { _id: 'active_buckets' as any },
+      { $set: { ...cachedBucketRegistry, updatedAt: new Date().toISOString() } },
+      { upsert: true }
+    );
+  } catch (e) {}
+
+  return cachedBucketRegistry;
+}
+
+export async function getSubappBucketId(drive: any, subapp: SubappBucketName = 'Timeline'): Promise<string> {
+  const registry = await ensureShudkaraBucketHierarchy(drive);
+  return registry.subapps[subapp] || registry.shudkaraBucketId;
+}
+
+// ── 1. Create a subfolder inside ShudkaraBucket/<subapp>/ ──
+export async function createFolderInDrive(folderName: string, subapp: SubappBucketName = 'Timeline'): Promise<string> {
   return executeDriveAction(async (drive) => {
-    const parentId = await getValidParentFolderId(drive);
+    const parentId = await getSubappBucketId(drive, subapp);
     const fileMetadata: any = {
       name: folderName,
       mimeType: 'application/vnd.google-apps.folder',
-      parents: parentId ? [parentId] : []
+      parents: [parentId]
     };
 
     const folder = await drive.files.create({
@@ -105,7 +202,7 @@ export async function createFolderInDrive(folderName: string): Promise<string> {
     });
 
     if (!folder.data.id) {
-      throw new Error('Failed to create folder in Google Drive');
+      throw new Error(`Failed to create folder ${folderName} inside ${subapp} bucket in Google Drive`);
     }
     return folder.data.id;
   });
@@ -174,13 +271,11 @@ export async function uploadToFolder(
   });
 }
 
-// ── 3. List all subfolders in the root or parent folder ──
-export async function listSubFolders(): Promise<{ id: string; name: string }[]> {
+// ── 3. List all subfolders in the subapp folder (default: Timeline) ──
+export async function listSubFolders(subapp: SubappBucketName = 'Timeline'): Promise<{ id: string; name: string }[]> {
   return executeDriveAction(async (drive) => {
-    const parentId = await getValidParentFolderId(drive);
-    const query = parentId 
-      ? `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
-      : `mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const parentId = await getSubappBucketId(drive, subapp);
+    const query = `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
 
     const res = await drive.files.list({
       q: query,

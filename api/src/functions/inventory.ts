@@ -2,43 +2,20 @@ import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/fu
 import { ObjectId } from 'mongodb';
 import { connectToMongo, verifySession, extractToken } from './db';
 import { 
-  getAuthClient, getFolderId, createFolderInDrive, uploadToFolder, ensureFilePublic, trashFileOrFolderInDrive 
+  getSubappBucketId, executeDriveAction, uploadToFolder, ensureFilePublic, trashFileOrFolderInDrive 
 } from './gdrive';
-import { google } from 'googleapis';
 
 // Cache for Inventory parent folder ID in Google Drive
 let inventoryParentFolderId: string | null = null;
 
-// Ensure "Inventory" folder exists under main GOOGLE_DRIVE_FOLDER_ID
+// Ensure "Inventory" folder exists under StorageBuckets/ShudkaraBucket/Inventory
 async function getOrCreateInventoryFolderId(): Promise<string> {
   if (inventoryParentFolderId) return inventoryParentFolderId;
 
-  const auth = getAuthClient();
-  const drive = google.drive({ version: 'v3', auth });
-
-  // Search if "Inventory" folder already exists
-  const parentFolderId = getFolderId();
-  const query = parentFolderId 
-    ? `'${parentFolderId}' in parents and name = 'Inventory' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`
-    : `name = 'Inventory' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
-
-  const res = await drive.files.list({
-    q: query,
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-    fields: 'files(id, name)',
-    pageSize: 1
-  });
-
-  if (res.data.files && res.data.files.length > 0) {
-    inventoryParentFolderId = res.data.files[0].id!;
+  return executeDriveAction(async (drive) => {
+    inventoryParentFolderId = await getSubappBucketId(drive, 'Inventory');
     return inventoryParentFolderId;
-  }
-
-  // Create "Inventory" subfolder under main GOOGLE_DRIVE_FOLDER_ID
-  const folderId = await createFolderInDrive('Inventory');
-  inventoryParentFolderId = folderId;
-  return inventoryParentFolderId;
+  });
 }
 
 export async function inventoryHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
