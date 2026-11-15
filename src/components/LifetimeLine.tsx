@@ -256,23 +256,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             const mediaItems = await loadMediaFromDb(draftId);
             if (mediaItems && mediaItems.length > 0) {
               for (const file of mediaItems) {
-                const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-Session-Token': authToken || ''
-                  },
-                  body: JSON.stringify({
-                    name: file.name,
-                    type: file.type,
-                    base64: file.base64
-                  })
-                });
-                if (!mediaRes.ok) {
-                  const errJson = await mediaRes.json().catch(() => ({}));
-                  mediaError = errJson.error || `Failed to upload "${file.name}"`;
-                  break;
-                }
+                await uploadMediaFileWithProgress(postId, file, authToken || '');
               }
             }
           } catch (err: any) {
@@ -435,6 +419,155 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }, 3000);
   };
 
+  // Helper to convert DraftMediaItem into a binary Blob
+  const getBlobFromDraftMedia = async (file: DraftMediaItem): Promise<Blob> => {
+    if ((file as any).rawFile instanceof Blob) {
+      return (file as any).rawFile;
+    }
+    if (file.base64 && file.base64.startsWith('data:')) {
+      try {
+        const res = await fetch(file.base64);
+        return await res.blob();
+      } catch {
+        // Fallback to manual atob if fetch fails
+      }
+    }
+    const base64Content = file.base64 ? file.base64.split(';base64,').pop() || file.base64 : '';
+    const binaryString = atob(base64Content);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: file.type || 'image/jpeg' });
+  };
+
+  // Upload helper: uses single-request for small files (< 8MB), and 4MB chunked resumable upload for larger files (videos)
+  const uploadMediaFileWithProgress = async (
+    postId: string,
+    file: DraftMediaItem,
+    token: string,
+    onProgress?: (chunkPercent: number, stepText: string) => void
+  ): Promise<any> => {
+    const blob = await getBlobFromDraftMedia(file);
+    const size = blob.size;
+    const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
+
+    // Fast single-request upload for small images
+    if (size < CHUNK_THRESHOLD) {
+      const res = await fetch(`/api/timeline/${postId}/media`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Token': token
+        },
+        body: JSON.stringify({
+          name: file.name,
+          type: file.type,
+          base64: file.base64
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Failed to upload "${file.name}"`);
+      }
+      const data = await res.json();
+      return data.mediaItem;
+    }
+
+    // Resumable Chunked Upload (4 MB slices to completely prevent HTTP 413)
+    onProgress?.(5, `Starting chunked upload for ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
+
+    const initRes = await fetch(`/api/timeline/${postId}/media/init-chunked`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': token
+      },
+      body: JSON.stringify({
+        name: file.name,
+        type: file.type,
+        size
+      })
+    });
+
+    if (!initRes.ok) {
+      const errData = await initRes.json().catch(() => ({}));
+      throw new Error(errData.error || `Failed to initialize chunked upload for "${file.name}"`);
+    }
+
+    const { uploadId, chunkSize = 4 * 1024 * 1024 } = await initRes.json();
+    const totalChunks = Math.ceil(size / chunkSize);
+    let finalMediaItem: any = null;
+
+    for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+      const startByte = chunkIdx * chunkSize;
+      const endByte = Math.min(startByte + chunkSize - 1, size - 1);
+      const chunkSlice = blob.slice(startByte, endByte + 1);
+
+      const chunkBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(chunkSlice);
+      });
+
+      const chunkPercent = Math.round(((chunkIdx + 1) / totalChunks) * 100);
+      onProgress?.(
+        chunkPercent,
+        `Uploading ${file.name}: chunk ${chunkIdx + 1} of ${totalChunks} (${(endByte / (1024 * 1024)).toFixed(1)} / ${(size / (1024 * 1024)).toFixed(1)} MB)...`
+      );
+
+      let success = false;
+      let lastError = '';
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const chunkRes = await fetch(`/api/timeline/${postId}/media/upload-chunk`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Session-Token': token
+            },
+            body: JSON.stringify({
+              uploadId,
+              chunkBase64,
+              startByte,
+              endByte,
+              totalBytes: size
+            })
+          });
+
+          if (!chunkRes.ok) {
+            const errData = await chunkRes.json().catch(() => ({}));
+            throw new Error(errData.error || `HTTP ${chunkRes.status}`);
+          }
+
+          const chunkData = await chunkRes.json();
+          if (chunkIdx === totalChunks - 1) {
+            if (!chunkData.complete) {
+              throw new Error('Google Drive upload incomplete on final chunk.');
+            }
+            finalMediaItem = chunkData.mediaItem;
+          }
+          success = true;
+          break;
+        } catch (attemptErr: any) {
+          lastError = attemptErr.message || 'Network error';
+          if (attempt < 3) {
+            await new Promise(r => setTimeout(r, 1200));
+          }
+        }
+      }
+
+      if (!success) {
+        throw new Error(`Failed to upload chunk ${chunkIdx + 1}/${totalChunks} of "${file.name}": ${lastError}`);
+      }
+    }
+
+    return finalMediaItem;
+  };
+
   // Submit new post from Social Wizard with background queueing, single-file uploads & floating progress
   const handleWizardSubmit = async (postData: {
     draftId: string;
@@ -546,34 +679,27 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       if (totalMedia > 0) {
         for (let i = 0; i < totalMedia; i++) {
           const file = postData.mediaFiles[i];
-          const percent = Math.round(((i + 1) / (totalMedia + 1)) * 100);
+          const baseFilePercent = Math.round((i / totalMedia) * 100);
 
           setActiveUpload(prev => prev ? {
             ...prev,
             createdPostId: postId,
             currentIndex: i + 1,
-            progressPercent: percent,
+            progressPercent: baseFilePercent,
             stepText: `Uploading file ${i + 1} of ${totalMedia}: ${file.name}...`
           } : null);
 
           try {
-            const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'X-Session-Token': authToken
-              },
-              body: JSON.stringify({
-                name: file.name,
-                type: file.type,
-                base64: file.base64
-              })
+            await uploadMediaFileWithProgress(postId, file, authToken, (chunkPercent, stepText) => {
+              const fileSliceProgress = Math.round(baseFilePercent + (chunkPercent / totalMedia));
+              setActiveUpload(prev => prev ? {
+                ...prev,
+                createdPostId: postId,
+                currentIndex: i + 1,
+                progressPercent: Math.min(99, fileSliceProgress),
+                stepText: `[File ${i + 1}/${totalMedia}] ${stepText}`
+              } : null);
             });
-
-            if (!mediaRes.ok) {
-              const errData = await mediaRes.json().catch(() => ({}));
-              throw new Error(errData.error || `Failed to upload "${file.name}"`);
-            }
           } catch (fileErr: any) {
             mediaGlitch = true;
             mediaGlitchMsg = fileErr.message || `Failed to upload "${file.name}"`;
@@ -703,6 +829,14 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
     setIsSavingEdit(true);
     try {
+      let allExisting = [...editExistingMedia];
+      if (editNewMedia.length > 0) {
+        for (const file of editNewMedia) {
+          const item = await uploadMediaFileWithProgress(id, file, authToken);
+          if (item) allExisting.push(item);
+        }
+      }
+
       const res = await fetch(`/api/timeline/${id}`, {
         method: 'PUT',
         headers: {
@@ -715,9 +849,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           category: editCategory.trim(),
           tags: editRawTags.split(',').map(t => t.trim()).filter(Boolean),
           timestamp: new Date(editTimestamp).toISOString(),
-          newMediaFiles: editNewMedia,
+          newMediaFiles: [],
           removedMediaIds: editRemovedMediaIds,
-          reorderedMedia: editExistingMedia
+          reorderedMedia: allExisting
         })
       });
 

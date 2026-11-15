@@ -15,6 +15,7 @@ export interface DraftMediaItem {
   name: string;
   type: string;
   base64: string;
+  rawFile?: File;
 }
 
 export interface TimelineDraftMeta {
@@ -444,7 +445,7 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string });
+      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file });
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
@@ -497,7 +498,7 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   // Default raw reader
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string });
+    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file });
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });

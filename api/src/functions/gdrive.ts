@@ -49,17 +49,17 @@ export function getAuthClient(useServiceAccount = false) {
 /**
  * Executes a Drive API call using OAuth2 primary credentials, with automatic Service Account retry fallback if invalid_grant occurs.
  */
-export async function executeDriveAction<T>(actionFn: (drive: any) => Promise<T>): Promise<T> {
+export async function executeDriveAction<T>(actionFn: (drive: any, auth: any) => Promise<T>): Promise<T> {
   const primaryAuth = getAuthClient(false);
   const primaryDrive = google.drive({ version: 'v3', auth: primaryAuth });
   try {
-    return await actionFn(primaryDrive);
+    return await actionFn(primaryDrive, primaryAuth);
   } catch (err: any) {
     if (err.message?.includes('invalid_grant') || err.message?.includes('Token has been expired') || err.response?.data?.error === 'invalid_grant') {
       console.warn('[GDrive] OAuth Refresh Token expired (invalid_grant). Retrying with Service Account fallback...');
       const fallbackAuth = getServiceAccountAuthClient();
       const fallbackDrive = google.drive({ version: 'v3', auth: fallbackAuth });
-      return await actionFn(fallbackDrive);
+      return await actionFn(fallbackDrive, fallbackAuth);
     }
     throw err;
   }
@@ -272,6 +272,71 @@ export async function uploadToFolder(
       streamUrl: `https://drive.google.com/uc?export=download&id=${fileId}`
     };
   });
+}
+
+// ── 2b. Initiate Google Drive Resumable Upload Session ──
+export async function initiateResumableSession(
+  folderId: string,
+  fileName: string,
+  mimeType: string,
+  totalBytes: number
+): Promise<string> {
+  return executeDriveAction(async (_drive, auth) => {
+    const res = await auth.request({
+      url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': mimeType || 'application/octet-stream',
+        'X-Upload-Content-Length': totalBytes ? totalBytes.toString() : '0'
+      },
+      data: {
+        name: fileName,
+        parents: [folderId]
+      }
+    });
+
+    const location = (res.headers && (res.headers.location || (res.headers as any).Location)) as string | undefined;
+    if (!location) {
+      throw new Error(`Google Drive failed to create resumable upload session: missing location header`);
+    }
+    return location;
+  });
+}
+
+// ── 2c. Upload a single chunk to Google Drive Resumable Session ──
+export async function uploadChunkToSession(
+  sessionUrl: string,
+  chunkBuffer: Buffer,
+  startByte: number,
+  endByte: number,
+  totalBytes: number,
+  mimeType: string
+): Promise<{ complete: boolean; fileId?: string; fileData?: any }> {
+  const rangeHeader = `bytes ${startByte}-${endByte}/${totalBytes}`;
+  const response = await fetch(sessionUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Length': chunkBuffer.length.toString(),
+      'Content-Range': rangeHeader,
+      'Content-Type': mimeType || 'application/octet-stream'
+    },
+    body: new Uint8Array(chunkBuffer)
+  });
+
+  if (response.status === 308) {
+    // 308 Resume Incomplete: Chunk successfully received by Google Drive
+    return { complete: false };
+  }
+
+  if (response.status === 200 || response.status === 201) {
+    // Last chunk complete!
+    const fileData: any = await response.json();
+    return { complete: true, fileId: fileData.id, fileData };
+  }
+
+  const errText = await response.text().catch(() => '');
+  throw new Error(`Google Drive chunk upload failed with HTTP ${response.status}: ${errText}`);
 }
 
 // ── 3. List all subfolders in the subapp folder (default: Timeline) ──
