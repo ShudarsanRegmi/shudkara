@@ -114,6 +114,16 @@ class MainActivity : ComponentActivity() {
         handleDeepLink(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Automatically pull & schedule pending hardware alarms and reminders from cloud
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                api.syncPendingDeviceAlarms()
+            } catch (_: Exception) { }
+        }
+    }
+
     private fun handleDeepLink(intent: Intent?) {
         val uri = intent?.data ?: return
         if (uri.scheme == "shudkara") {

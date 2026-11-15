@@ -16,6 +16,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
@@ -102,6 +103,16 @@
         <receiver
             android:name=".service.ReminderAlarmReceiver"
             android:exported="false" />
+
+        <!-- Proactive Cloud Alarm Background Sync Receiver -->
+        <receiver
+            android:name=".service.AlarmSyncReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.shudkara.companion.ACTION_POLL_ALARM_SYNC" />
+            </intent-filter>
+        </receiver>
 
         <!-- Full-Screen Reminder / Urgent Alarm Prompt Activity -->
         <activity

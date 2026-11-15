@@ -4,9 +4,6 @@ import android.app.KeyguardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.media.AudioAttributes
-import android.media.Ringtone
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -21,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Alarm
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shudkara.companion.service.AlarmRingtoneManager
 import com.shudkara.companion.service.ReminderScheduler
 import com.shudkara.companion.ui.theme.*
 import java.text.SimpleDateFormat
@@ -48,20 +45,17 @@ class ReminderAlertActivity : ComponentActivity() {
         const val EXTRA_MESSAGE = "extra_message"
     }
 
-    private var ringtone: Ringtone? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Ensure activity wakes device and displays even on lockscreen
         turnScreenOnAndUnlock()
 
         val reminderId = intent.getStringExtra(EXTRA_REMINDER_ID) ?: ""
         val title = intent.getStringExtra(EXTRA_TITLE) ?: "Reminder"
         val message = intent.getStringExtra(EXTRA_MESSAGE) ?: ""
 
-        // Play alarm ringtone
-        startAlarmAudio()
+        // Ensure alarm sound is ringing if not already started
+        AlarmRingtoneManager.startAlarmSound(this, reminderId)
 
         setContent {
             ShudkaraTheme {
@@ -69,12 +63,12 @@ class ReminderAlertActivity : ComponentActivity() {
                     title = title,
                     message = message,
                     onDismiss = {
-                        stopAlarmAudio()
+                        AlarmRingtoneManager.stopAlarmSound(this@ReminderAlertActivity)
                         dismissNotification(reminderId)
                         finish()
                     },
                     onSnooze = {
-                        stopAlarmAudio()
+                        AlarmRingtoneManager.stopAlarmSound(this@ReminderAlertActivity)
                         dismissNotification(reminderId)
                         val snoozeMillis = System.currentTimeMillis() + 5 * 60 * 1000L
                         ReminderScheduler.scheduleExactReminder(
@@ -88,10 +82,11 @@ class ReminderAlertActivity : ComponentActivity() {
                         finish()
                     },
                     onOpenApp = {
-                        stopAlarmAudio()
+                        AlarmRingtoneManager.stopAlarmSound(this@ReminderAlertActivity)
                         dismissNotification(reminderId)
                         val appIntent = Intent(this@ReminderAlertActivity, MainActivity::class.java).apply {
                             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            putExtra("extra_tab", 3)
                         }
                         startActivity(appIntent)
                         finish()
@@ -102,6 +97,8 @@ class ReminderAlertActivity : ComponentActivity() {
     }
 
     private fun turnScreenOnAndUnlock() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -112,38 +109,8 @@ class ReminderAlertActivity : ComponentActivity() {
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
-        }
-    }
-
-    private fun startAlarmAudio() {
-        try {
-            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-
-            val r = RingtoneManager.getRingtone(this, alertUri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                r.audioAttributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            }
-            r.play()
-            ringtone = r
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun stopAlarmAudio() {
-        try {
-            ringtone?.stop()
-            ringtone = null
-        } catch (e: Exception) {
-            e.printStackTrace()
         }
     }
 
@@ -155,7 +122,7 @@ class ReminderAlertActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopAlarmAudio()
+        AlarmRingtoneManager.stopAlarmSound(this)
     }
 }
 
@@ -171,7 +138,6 @@ fun ReminderAlertContent(
         SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date())
     }
 
-    // Pulsing circle animation
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 0.95f,

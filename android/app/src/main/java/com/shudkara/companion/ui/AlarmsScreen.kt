@@ -1,6 +1,10 @@
 package com.shudkara.companion.ui
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -57,8 +61,14 @@ fun AlarmsScreen(
     }
 
     LaunchedEffect(Unit) {
-        refreshCloudAlarms()
+        // Automatically sync pending cloud hardware alarms without manual button press
+        coroutineScope.launch {
+            api.syncPendingDeviceAlarms()
+            refreshCloudAlarms()
+        }
     }
+
+    val hasExactAlarmPermission = remember { ReminderScheduler.canScheduleExactAlarms(context) }
 
     LazyColumn(
         modifier = Modifier
@@ -66,6 +76,45 @@ fun AlarmsScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        if (!hasExactAlarmPermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Red50),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Warning, contentDescription = null, tint = Red600, modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Exact Alarm Permission Required", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Red600)
+                        }
+                        Text(
+                            text = "To ring at the exact second even when your screen is locked or in battery Doze mode, Android 12+ requires exact alarm permission.",
+                            fontSize = 11.sp,
+                            color = Slate600
+                        )
+                        Button(
+                            onClick = {
+                                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                }
+                                context.startActivity(intent)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Red600),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Grant Exact Alarm Permission", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+
         // 1. Header Card
         item {
             Card(
