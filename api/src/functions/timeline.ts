@@ -1,11 +1,75 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import { ObjectId } from 'mongodb';
+import * as crypto from 'crypto';
+import * as speakeasy from 'speakeasy';
 import { connectToMongo, verifySession, extractToken, logAppError } from './db';
 import { 
   createFolderInDrive, uploadToFolder, listSubFolders, 
   getFilesInFolder, getFileContent, ensureFilePublic, deleteFolderFromDrive,
   initiateResumableSession, uploadChunkToSession
 } from './gdrive';
+
+// ── Steganographic Clearance Levels & Cryptic Sanskrit Nomenclature ──
+export type ClearanceTier = 'prakata' | 'guhya' | 'nigudha';
+
+export const CLEARANCE_TIERS: Record<ClearanceTier, number> = {
+  prakata: 0,
+  guhya: 1,
+  nigudha: 2
+};
+
+export const CLEARANCE_LEVELS: Record<number, ClearanceTier> = {
+  0: 'prakata',
+  1: 'guhya',
+  2: 'nigudha'
+};
+
+export function parseClearanceLevel(val: any): number {
+  if (typeof val === 'number' && [0, 1, 2].includes(val)) {
+    return val;
+  }
+  if (typeof val === 'string') {
+    const lower = val.toLowerCase().trim() as ClearanceTier;
+    if (CLEARANCE_TIERS[lower] !== undefined) {
+      return CLEARANCE_TIERS[lower];
+    }
+    const num = parseInt(val, 10);
+    if (!isNaN(num) && [0, 1, 2].includes(num)) {
+      return num;
+    }
+  }
+  return 0; // Default: prakata (Level 0)
+}
+
+export function extractClearanceToken(request: HttpRequest): string | null {
+  const header = request.headers.get('x-clearance-token') || request.headers.get('x-clearance');
+  if (header) return header.trim();
+  const url = new URL(request.url);
+  return url.searchParams.get('clearanceToken');
+}
+
+export async function getValidatedClearance(request: HttpRequest, db: any): Promise<{ level: number; tier: ClearanceTier; expiresAt: Date | null }> {
+  const token = extractClearanceToken(request);
+  if (!token) {
+    return { level: 0, tier: 'prakata', expiresAt: null };
+  }
+
+  const clearanceDoc = await db.collection('timeline_clearances').findOne({
+    token,
+    expiresAt: { $gt: new Date() }
+  });
+
+  if (!clearanceDoc) {
+    return { level: 0, tier: 'prakata', expiresAt: null };
+  }
+
+  const level = parseClearanceLevel(clearanceDoc.level);
+  return {
+    level,
+    tier: CLEARANCE_LEVELS[level] || 'prakata',
+    expiresAt: clearanceDoc.expiresAt
+  };
+}
 
 // Helper to create clean directory slugs
 function slugify(text: string): string {
@@ -40,7 +104,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       const post = await col.findOne({ _id: new ObjectId(publicId) });
-      if (!post) {
+      if (!post || (post.clearanceLevel && post.clearanceLevel > 0)) {
         return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found or has been removed.' } };
       }
 
@@ -159,6 +223,248 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       return { status: 401, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Unauthorized.' } };
     }
 
+    const { level: activeClearance, tier: activeTier, expiresAt: clearanceExpiresAt } = await getValidatedClearance(request, db);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 0.5 CLEARANCE CONTROL & ELEVATION ENDPOINTS (/api/timeline/clearance/*)
+    // ─────────────────────────────────────────────────────────────────────────
+    if (pathParts[0] === 'clearance') {
+      const clearanceAction = pathParts[1];
+
+      // 0.5.1 GET /api/timeline/clearance/status (Get current lease status)
+      if (method === 'GET' && (!clearanceAction || clearanceAction === 'status')) {
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            active: activeClearance > 0,
+            level: activeClearance,
+            tier: activeTier,
+            expiresAt: clearanceExpiresAt ? clearanceExpiresAt.toISOString() : null
+          }
+        };
+      }
+
+      // 0.5.2 POST /api/timeline/clearance/verify-totp (Unlock Guhya / Level 1)
+      if (method === 'POST' && clearanceAction === 'verify-totp') {
+        let body: any;
+        try { body = await request.json(); }
+        catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+        const { code } = body;
+        if (!code || typeof code !== 'string') {
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'TOTP code is required.' } };
+        }
+
+        const authConfig = await db.collection('auth').findOne({ key: 'totp' });
+        if (!authConfig?.secret) {
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'TOTP is not configured on this system yet.' } };
+        }
+
+        const verified = speakeasy.totp.verify({
+          secret: authConfig.secret,
+          encoding: 'base32',
+          token: code.trim(),
+          window: 1
+        });
+
+        if (!verified) {
+          return { status: 401, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid verification code.' } };
+        }
+
+        // Generate 15-minute lease token for Guhya (Level 1)
+        const clearanceToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 Minutes
+        await db.collection('timeline_clearances').insertOne({
+          token: clearanceToken,
+          level: 1,
+          tier: 'guhya',
+          createdAt: new Date(),
+          expiresAt
+        });
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            clearanceToken,
+            level: 1,
+            tier: 'guhya',
+            expiresAt: expiresAt.toISOString()
+          }
+        };
+      }
+
+      // 0.5.3 POST /api/timeline/clearance/biometric/register-challenge (WebAuthn setup challenge)
+      if (method === 'POST' && clearanceAction === 'biometric' && pathParts[2] === 'register-challenge') {
+        const challenge = crypto.randomBytes(32).toString('base64url');
+        await db.collection('timeline_webauthn_challenges').insertOne({
+          challenge,
+          type: 'register',
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+        });
+
+        const rpId = url.hostname === 'localhost' || url.hostname === '127.0.0.1' ? 'localhost' : url.hostname;
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            challenge,
+            rp: { name: 'Shudkara Timeline', id: rpId },
+            user: {
+              id: Buffer.from('shudkara-owner').toString('base64url'),
+              name: 'shudkara-owner',
+              displayName: 'Shudkara Owner'
+            },
+            pubKeyCredParams: [
+              { alg: -7, type: 'public-key' },  // ES256
+              { alg: -257, type: 'public-key' } // RS256
+            ],
+            authenticatorSelection: {
+              userVerification: 'preferred',
+              residentKey: 'preferred'
+            },
+            timeout: 60000
+          }
+        };
+      }
+
+      // 0.5.4 POST /api/timeline/clearance/biometric/verify-registration (Store passkey public key)
+      if (method === 'POST' && clearanceAction === 'biometric' && pathParts[2] === 'verify-registration') {
+        let body: any;
+        try { body = await request.json(); }
+        catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+        const { id, rawId, type, response } = body;
+        if (!id) {
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Credential ID is required.' } };
+        }
+
+        await db.collection('timeline_passkeys').updateOne(
+          { credentialId: id },
+          {
+            $set: {
+              credentialId: id,
+              rawId: rawId || id,
+              type: type || 'public-key',
+              publicKey: response?.publicKey || '',
+              transports: response?.transports || ['hybrid', 'internal'],
+              createdAt: new Date()
+            }
+          },
+          { upsert: true }
+        );
+
+        // Grant Nigudha (Level 2) clearance immediately on successful registration
+        const clearanceToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+        await db.collection('timeline_clearances').insertOne({
+          token: clearanceToken,
+          level: 2,
+          tier: 'nigudha',
+          createdAt: new Date(),
+          expiresAt
+        });
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            clearanceToken,
+            level: 2,
+            tier: 'nigudha',
+            expiresAt: expiresAt.toISOString()
+          }
+        };
+      }
+
+      // 0.5.5 POST /api/timeline/clearance/biometric/auth-challenge (WebAuthn auth challenge)
+      if (method === 'POST' && clearanceAction === 'biometric' && pathParts[2] === 'auth-challenge') {
+        const passkeys = await db.collection('timeline_passkeys').find({}).toArray();
+        const challenge = crypto.randomBytes(32).toString('base64url');
+        await db.collection('timeline_webauthn_challenges').insertOne({
+          challenge,
+          type: 'auth',
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+        });
+
+        const rpId = url.hostname === 'localhost' || url.hostname === '127.0.0.1' ? 'localhost' : url.hostname;
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            challenge,
+            rpId,
+            allowCredentials: passkeys.map((p: any) => ({
+              id: p.credentialId,
+              type: 'public-key',
+              transports: p.transports || ['hybrid', 'internal']
+            })),
+            hasRegisteredPasskeys: passkeys.length > 0,
+            timeout: 60000
+          }
+        };
+      }
+
+      // 0.5.6 POST /api/timeline/clearance/biometric/verify-auth (Unlock Nigudha / Level 2)
+      if (method === 'POST' && clearanceAction === 'biometric' && pathParts[2] === 'verify-auth') {
+        let body: any;
+        try { body = await request.json(); }
+        catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+        const { id } = body;
+        const passkeysCount = await db.collection('timeline_passkeys').countDocuments();
+        if (passkeysCount > 0) {
+          const passkey = await db.collection('timeline_passkeys').findOne({ credentialId: id });
+          if (!passkey) {
+            return { status: 401, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Unknown passkey credential.' } };
+          }
+        }
+
+        // Issue Nigudha (Level 2) clearance lease token
+        const clearanceToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+        await db.collection('timeline_clearances').insertOne({
+          token: clearanceToken,
+          level: 2,
+          tier: 'nigudha',
+          createdAt: new Date(),
+          expiresAt
+        });
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            clearanceToken,
+            level: 2,
+            tier: 'nigudha',
+            expiresAt: expiresAt.toISOString()
+          }
+        };
+      }
+
+      // 0.5.7 POST /api/timeline/clearance/lock (Panic Conceal / Reset to Prakata)
+      if (method === 'POST' && clearanceAction === 'lock') {
+        const tokenToRevoke = extractClearanceToken(request);
+        if (tokenToRevoke) {
+          await db.collection('timeline_clearances').deleteMany({ token: tokenToRevoke });
+        }
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { success: true, level: 0, tier: 'prakata', message: 'Clearance concealed.' }
+        };
+      }
+
+      return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Clearance route not found.' } };
+    }
+
     // ── 1. POST /api/timeline/sync-drive (Scan Google Drive for offline folders) ──
     if (method === 'POST' && pathParts[0] === 'sync-drive') {
       context.log('Starting Google Drive timeline sync operation...');
@@ -181,7 +487,8 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           content: 'No content description in post.json',
           category: 'General',
           tags: [],
-          timestamp: new Date()
+          timestamp: new Date(),
+          clearanceLevel: 0
         };
 
         // If post.json exists, download and parse it
@@ -194,7 +501,8 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
               content: parsed.content || metadata.content,
               category: parsed.category || metadata.category,
               tags: Array.isArray(parsed.tags) ? parsed.tags : [],
-              timestamp: parsed.timestamp ? new Date(parsed.timestamp) : new Date()
+              timestamp: parsed.timestamp ? new Date(parsed.timestamp) : new Date(),
+              clearanceLevel: parseClearanceLevel(parsed.clearanceLevel ?? parsed.clearanceTier)
             };
           } catch (jsonErr: any) {
             context.error(`Failed to parse post.json in folder ${folder.name}:`, jsonErr.message);
@@ -224,11 +532,14 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         }
 
         // Insert post document
+        const postClearance = parseClearanceLevel(metadata.clearanceLevel);
         const newPost = {
           title: metadata.title.trim(),
           content: metadata.content.trim(),
           timestamp: metadata.timestamp,
           createdAt: new Date(),
+          clearanceLevel: postClearance,
+          clearanceTier: CLEARANCE_LEVELS[postClearance],
           category: metadata.category.trim(),
           tags: metadata.tags.map((t: string) => t.trim().toLowerCase()).filter(Boolean),
           googleDriveFolderId: folder.id,
@@ -250,8 +561,12 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
 
     // ── 2. GET /api/timeline/tags (Aggregate all tags and categories) ──
     if (method === 'GET' && pathParts[0] === 'tags') {
-      const categories = await col.distinct('category');
-      const tags = await col.distinct('tags');
+      const clearanceCondition = activeClearance === 0 
+        ? { $or: [{ clearanceLevel: 0 }, { clearanceLevel: { $exists: false } }] }
+        : { $or: [{ clearanceLevel: { $lte: activeClearance } }, { clearanceLevel: { $exists: false } }] };
+
+      const categories = await col.distinct('category', clearanceCondition);
+      const tags = await col.distinct('tags', clearanceCondition);
       return {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -285,7 +600,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       const post = await col.findOne({ _id: new ObjectId(postId) });
-      if (!post) {
+      if (!post || parseClearanceLevel(post.clearanceLevel) > activeClearance) {
         return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found.' } };
       }
 
@@ -455,7 +770,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       const post = await col.findOne({ _id: new ObjectId(postId) });
-      if (!post) {
+      if (!post || parseClearanceLevel(post.clearanceLevel) > activeClearance) {
         return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found.' } };
       }
 
@@ -528,18 +843,33 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         ];
       }
 
-      const posts = await col.find(filter)
+      // Steganographic Clearance Filter: cumulative visibility (prakata <= guhya <= nigudha)
+      // Posts without clearanceLevel default to 0 (prakata)
+      const clearanceCondition = activeClearance === 0 
+        ? { $or: [{ clearanceLevel: 0 }, { clearanceLevel: { $exists: false } }] }
+        : { $or: [{ clearanceLevel: { $lte: activeClearance } }, { clearanceLevel: { $exists: false } }] };
+
+      let combinedFilter: any;
+      if (Object.keys(filter).length === 0) {
+        combinedFilter = clearanceCondition;
+      } else if (filter.$or) {
+        combinedFilter = { $and: [clearanceCondition, filter] };
+      } else {
+        combinedFilter = { ...filter, ...clearanceCondition };
+      }
+
+      const posts = await col.find(combinedFilter)
         .sort({ timestamp: -1, createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .toArray();
 
-      const total = await col.countDocuments(filter);
+      const total = await col.countDocuments(combinedFilter);
 
       return {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-        jsonBody: { posts, total }
+        jsonBody: { posts, total, activeClearance: { level: activeClearance, tier: activeTier } }
       };
     }
 
@@ -553,6 +883,15 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       
       if (!content?.trim()) {
         return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Content is required.' } };
+      }
+
+      const requestedClearance = parseClearanceLevel(body.clearanceLevel ?? body.clearanceTier);
+      if (requestedClearance > activeClearance) {
+        return {
+          status: 403,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Insufficient clearance to publish under tier ${CLEARANCE_LEVELS[requestedClearance]}.` }
+        };
       }
 
       const rawDate = timestamp ? new Date(timestamp) : new Date();
@@ -575,7 +914,9 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         content: content.trim(),
         category: (category || 'General').trim(),
         tags: Array.isArray(tags) ? tags.map((t: string) => t.trim().toLowerCase()).filter(Boolean) : [],
-        timestamp: postDate.toISOString()
+        timestamp: postDate.toISOString(),
+        clearanceLevel: requestedClearance,
+        clearanceTier: CLEARANCE_LEVELS[requestedClearance]
       };
       
       if (folderId) {
@@ -618,6 +959,8 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         content: metadataPayload.content,
         timestamp: postDate,
         createdAt: new Date(),
+        clearanceLevel: requestedClearance,
+        clearanceTier: CLEARANCE_LEVELS[requestedClearance],
         category: metadataPayload.category,
         tags: metadataPayload.tags,
         googleDriveFolderId: folderId,
@@ -657,8 +1000,21 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       const post = await col.findOne({ _id: new ObjectId(idParam) });
-      if (!post) {
+      if (!post || parseClearanceLevel(post.clearanceLevel) > activeClearance) {
         return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found.' } };
+      }
+
+      if (body.clearanceLevel !== undefined || body.clearanceTier !== undefined) {
+        const newClearance = parseClearanceLevel(body.clearanceLevel ?? body.clearanceTier);
+        if (newClearance > activeClearance) {
+          return {
+            status: 403,
+            headers: { 'Content-Type': 'application/json' },
+            jsonBody: { error: `Insufficient clearance to elevate post to ${CLEARANCE_LEVELS[newClearance]}.` }
+          };
+        }
+        updateData.clearanceLevel = newClearance;
+        updateData.clearanceTier = CLEARANCE_LEVELS[newClearance];
       }
 
       // Handle media removals from Google Drive & post
@@ -728,7 +1084,9 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
             content: updateData.content !== undefined ? updateData.content : post.content,
             category: updateData.category !== undefined ? updateData.category : post.category,
             tags: updateData.tags !== undefined ? updateData.tags : post.tags,
-            timestamp: updateData.timestamp !== undefined ? updateData.timestamp.toISOString() : new Date(post.timestamp).toISOString()
+            timestamp: updateData.timestamp !== undefined ? updateData.timestamp.toISOString() : new Date(post.timestamp).toISOString(),
+            clearanceLevel: updateData.clearanceLevel !== undefined ? updateData.clearanceLevel : (post.clearanceLevel || 0),
+            clearanceTier: updateData.clearanceTier !== undefined ? updateData.clearanceTier : (post.clearanceTier || 'prakata')
           };
 
           const metadataBase64 = Buffer.from(JSON.stringify(updatedPayload, null, 2)).toString('base64');
@@ -748,7 +1106,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
     // ── 7. DELETE /api/timeline/{id} (Delete post + delete folder recursively) ──
     if (method === 'DELETE' && idParam && ObjectId.isValid(idParam)) {
       const post = await col.findOne({ _id: new ObjectId(idParam) });
-      if (!post) {
+      if (!post || parseClearanceLevel(post.clearanceLevel) > activeClearance) {
         return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found.' } };
       }
 
