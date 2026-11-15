@@ -32,7 +32,8 @@ import {
   Flame,
   Wallet,
   Hourglass,
-  Shield
+  Shield,
+  Bell
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -146,6 +147,17 @@ export const ALL_APPS: AppDefinition[] = [
     colorBg: 'bg-pink-50',
     colorText: 'text-pink-700',
     colorBorder: 'border-pink-200'
+  },
+  {
+    id: 'alarms',
+    label: 'Alarms',
+    description: 'System alarms & auditory reminders with Android companion sync',
+    icon: Bell,
+    category: 'Tools & Utilities',
+    requiresLogin: false,
+    colorBg: 'bg-amber-50',
+    colorText: 'text-amber-700',
+    colorBorder: 'border-amber-200'
   },
   {
     id: 'timers',

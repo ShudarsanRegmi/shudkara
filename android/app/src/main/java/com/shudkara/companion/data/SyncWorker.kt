@@ -13,6 +13,10 @@ class SyncWorker(
         val queueManager = OfflineQueueManager(applicationContext)
         val (synced, failed) = queueManager.syncAll()
 
+        // Also pull pending system alarms and reminders from Shudkara cloud
+        val api = ShudkaraApi(applicationContext)
+        api.syncPendingDeviceAlarms()
+
         return if (failed == 0) {
             Result.success()
         } else {

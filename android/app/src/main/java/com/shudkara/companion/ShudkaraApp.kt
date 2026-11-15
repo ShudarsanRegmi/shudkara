@@ -14,6 +14,7 @@ class ShudkaraApp : Application() {
         const val CHANNEL_CAPTURE = "shudkara_capture_channel"
         const val CHANNEL_SYNC = "shudkara_sync_channel"
         const val CHANNEL_FINANCE_SMS = "shudkara_finance_sms"
+        const val CHANNEL_ALARMS_REMINDERS = "shudkara_alarms_channel"
         lateinit var instance: ShudkaraApp
             private set
     }
@@ -54,9 +55,20 @@ class ShudkaraApp : Application() {
                 enableVibration(true)
             }
 
+            val alarmsChannel = NotificationChannel(
+                CHANNEL_ALARMS_REMINDERS,
+                "Alarms & Reminders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Full-screen alarms and urgent scheduled reminders from Shudkara"
+                enableVibration(true)
+                vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+            }
+
             notificationManager.createNotificationChannel(captureChannel)
             notificationManager.createNotificationChannel(syncChannel)
             notificationManager.createNotificationChannel(financeChannel)
+            notificationManager.createNotificationChannel(alarmsChannel)
         }
     }
 

@@ -9,6 +9,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import com.shudkara.companion.service.ReminderScheduler
+import com.shudkara.companion.service.SystemAlarmHelper
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -78,6 +80,25 @@ data class BankBacklogItem(
     val counterpartyAccount: String = "",
     val upiRef: String = "",
     val status: String = "pending" // "pending", "reconciled", "rotated_ignored"
+)
+
+data class AlarmItemDto(
+    val id: String,
+    val type: String, // "alarm" or "reminder"
+    val title: String,
+    val label: String? = null,
+    val message: String? = null,
+    val hour: Int? = null,
+    val minutes: Int? = null,
+    val days: List<Int>? = null,
+    val targetDate: String? = null,
+    val priority: String = "normal",
+    val notificationStyle: String = "clock_alarm",
+    val isEnabled: Boolean = true,
+    val vibrate: Boolean = true,
+    val skipUi: Boolean = true,
+    val syncToDevice: Boolean = true,
+    val deviceSyncStatus: String = "pending"
 )
 
 class ShudkaraApi(private val context: Context) {
@@ -709,5 +730,200 @@ class ShudkaraApi(private val context: Context) {
             }
         }
         return streak
+    }
+
+    suspend fun fetchAlarms(pendingDeviceSyncOnly: Boolean = false): Result<List<AlarmItemDto>> = withContext(Dispatchers.IO) {
+        try {
+            val queryParam = if (pendingDeviceSyncOnly) "?pending_device_sync=true" else ""
+            executeWithFallback("/api/alarms$queryParam") { it.get() }.use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP ${response.code}: ${response.message}"))
+                }
+                val bodyStr = response.body?.string() ?: "{}"
+                val json = JSONObject(bodyStr)
+                val alarmsArr = json.optJSONArray("alarms") ?: JSONArray()
+                val list = mutableListOf<AlarmItemDto>()
+
+                for (i in 0 until alarmsArr.length()) {
+                    val a = alarmsArr.getJSONObject(i)
+                    val daysList = mutableListOf<Int>()
+                    val daysArr = a.optJSONArray("days")
+                    if (daysArr != null) {
+                        for (d in 0 until daysArr.length()) {
+                            daysList.add(daysArr.getInt(d))
+                        }
+                    }
+
+                    list.add(
+                        AlarmItemDto(
+                            id = a.optString("id", ""),
+                            type = a.optString("type", "alarm"),
+                            title = a.optString("title", "Alarm"),
+                            label = if (a.has("label")) a.optString("label") else null,
+                            message = if (a.has("message")) a.optString("message") else null,
+                            hour = if (a.has("hour") && !a.isNull("hour")) a.getInt("hour") else null,
+                            minutes = if (a.has("minutes") && !a.isNull("minutes")) a.getInt("minutes") else null,
+                            days = if (daysList.isNotEmpty()) daysList else null,
+                            targetDate = if (a.has("targetDate") && !a.isNull("targetDate")) a.optString("targetDate") else null,
+                            priority = a.optString("priority", "normal"),
+                            notificationStyle = a.optString("notificationStyle", "clock_alarm"),
+                            isEnabled = a.optBoolean("isEnabled", true),
+                            vibrate = a.optBoolean("vibrate", true),
+                            skipUi = a.optBoolean("skipUi", true),
+                            syncToDevice = a.optBoolean("syncToDevice", true),
+                            deviceSyncStatus = a.optString("deviceSyncStatus", "pending")
+                        )
+                    )
+                }
+                Result.success(list)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun acknowledgeAlarmSync(alarmId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/alarms/$alarmId/sync-ack") { it.post("{}".toRequestBody(jsonMediaType)) }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(Exception("Sync ack failed with HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createAlarm(
+        title: String,
+        hour: Int,
+        minutes: Int,
+        days: List<Int> = emptyList(),
+        message: String? = null,
+        vibrate: Boolean = true,
+        syncToDevice: Boolean = true
+    ): Result<AlarmItemDto> = withContext(Dispatchers.IO) {
+        try {
+            val json = JSONObject().apply {
+                put("type", "alarm")
+                put("title", title)
+                put("label", title)
+                if (!message.isNullOrBlank()) put("message", message)
+                put("hour", hour)
+                put("minutes", minutes)
+                val daysArr = JSONArray()
+                days.forEach { daysArr.put(it) }
+                put("days", daysArr)
+                put("vibrate", vibrate)
+                put("skipUi", true)
+                put("syncToDevice", syncToDevice)
+                put("isEnabled", true)
+            }
+            val body = json.toString().toRequestBody(jsonMediaType)
+            executeWithFallback("/api/alarms") { it.post(body) }.use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(Exception("HTTP ${response.code}"))
+                }
+                val bodyStr = response.body?.string() ?: "{}"
+                val resObj = JSONObject(bodyStr)
+                val a = resObj.optJSONObject("alarm") ?: JSONObject()
+                Result.success(
+                    AlarmItemDto(
+                        id = a.optString("id", ""),
+                        type = a.optString("type", "alarm"),
+                        title = a.optString("title", title),
+                        hour = hour,
+                        minutes = minutes,
+                        days = days,
+                        isEnabled = true
+                    )
+                )
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteAlarm(alarmId: String): Result<Boolean> = withContext(Dispatchers.IO) {
+        try {
+            executeWithFallback("/api/alarms/$alarmId") { it.delete() }.use { response ->
+                if (response.isSuccessful) {
+                    Result.success(true)
+                } else {
+                    Result.failure(Exception("Delete failed with HTTP ${response.code}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Pulls all alarms and reminders flagged with syncToDevice: true from Shudkara cloud,
+     * registers them into the device's Clock app or exact in-app reminder scheduler,
+     * and sends back an acknowledgment to the cloud.
+     */
+    suspend fun syncPendingDeviceAlarms(): Result<Int> = withContext(Dispatchers.IO) {
+        try {
+            val fetchRes = fetchAlarms(pendingDeviceSyncOnly = true)
+            if (fetchRes.isFailure) {
+                return@withContext Result.failure(fetchRes.exceptionOrNull() ?: Exception("Failed to fetch pending alarms"))
+            }
+
+            val pendingList = fetchRes.getOrNull() ?: emptyList()
+            var syncedCount = 0
+
+            for (item in pendingList) {
+                var scheduledSuccessfully = false
+
+                if (item.type == "alarm" && item.hour != null && item.minutes != null) {
+                    // Set System Clock Alarm
+                    scheduledSuccessfully = SystemAlarmHelper.setSystemClockAlarm(
+                        context = context,
+                        hour = item.hour,
+                        minutes = item.minutes,
+                        message = item.label ?: item.title,
+                        days = item.days,
+                        vibrate = item.vibrate,
+                        skipUi = item.skipUi
+                    )
+                } else if (item.type == "reminder" && !item.targetDate.isNullOrBlank()) {
+                    // Schedule Exact In-App Reminder
+                    try {
+                        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault())
+                        val cleanDate = item.targetDate.replace(".000Z", "").replace("Z", "")
+                        val date = sdf.parse(cleanDate)
+                        val triggerTime = date?.time ?: System.currentTimeMillis()
+
+                        if (triggerTime > System.currentTimeMillis()) {
+                            scheduledSuccessfully = ReminderScheduler.scheduleExactReminder(
+                                context = context,
+                                id = item.id,
+                                title = item.title,
+                                message = item.message,
+                                triggerTimeMillis = triggerTime,
+                                priority = item.priority
+                            )
+                        } else {
+                            // Target date is already past, mark as synced to prevent infinite loop
+                            scheduledSuccessfully = true
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
+                if (scheduledSuccessfully) {
+                    acknowledgeAlarmSync(item.id)
+                    syncedCount++
+                }
+            }
+
+            Result.success(syncedCount)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 }

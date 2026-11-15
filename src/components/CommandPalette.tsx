@@ -7,6 +7,7 @@ import {
   Workflow,
   FileCode,
   Clock,
+  Bell,
   Package,
   CheckSquare,
   ListOrdered,
@@ -209,6 +210,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       badge: 'Protected',
       action: () => {
         setActiveTab('timeline');
+        onClose();
+      }
+    },
+    {
+      id: 'app-alarms',
+      title: 'Alarms & Reminders',
+      subtitle: 'Schedule system alarms, phone sync & in-app auditory reminders',
+      category: 'Applications',
+      icon: Bell,
+      colorBg: 'bg-amber-50',
+      colorText: 'text-amber-600',
+      badge: 'New',
+      action: () => {
+        setActiveTab('alarms');
         onClose();
       }
     },

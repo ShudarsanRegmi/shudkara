@@ -272,6 +272,17 @@ fun MainScreen(
                             }
                         }
                     )
+                    Tab(
+                        selected = selectedTab == 3,
+                        onClick = { selectedTab = 3 },
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Alarm, contentDescription = null, modifier = Modifier.size(16.dp), tint = if (selectedTab == 3) Amber600 else Slate400)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Alarms", fontWeight = FontWeight.Bold, color = if (selectedTab == 3) Amber600 else Slate600)
+                            }
+                        }
+                    )
                 }
 
                 // Tab Content View
@@ -305,6 +316,10 @@ fun MainScreen(
                             onSuccess = {
                                 pendingCount = queueManager.getQueue().size
                             }
+                        )
+                        3 -> AlarmsScreen(
+                            api = api,
+                            context = context
                         )
                     }
                 }

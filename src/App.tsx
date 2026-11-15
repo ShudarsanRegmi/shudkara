@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
-  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, FileCode, Workflow,
+  ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, Bell, FileCode, Workflow,
   Flame, Search, Wallet, Hourglass, Shield
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
@@ -21,6 +21,7 @@ import { Todos, type TodoItem } from './components/Todos';
 import { Lists, type ListCategory } from './components/Lists';
 import { Inventory } from './components/Inventory';
 import { Timers } from './components/Timers';
+import { Alarms } from './components/Alarms';
 import { Pastebin } from './components/Pastebin';
 import { ConcurrencyManager } from './components/ConcurrencyManager';
 import { SavePost } from './components/SavePost';
@@ -40,6 +41,7 @@ const NAV_GROUPS = [
     category: 'Tools & Utilities',
     icon: Wrench,
     items: [
+      { key: 'alarms', label: 'Alarms', description: 'System alarms & in-app auditory reminders', icon: Bell, requiresLogin: false },
       { key: 'concurrency', label: 'Concurrency', description: 'Parallel workstreams & context manager', icon: Workflow, requiresLogin: false },
       { key: 'pastebin', label: 'Pastebin', description: 'Ephemeral & persistent code pastes', icon: FileCode, requiresLogin: false },
       { key: 'timers', label: 'Timers', description: 'Countdown timers & whiteboard canvas', icon: Clock, requiresLogin: false },
@@ -81,6 +83,7 @@ const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: 
   concurrency: { requiresLogin: false, label: 'Concurrency', icon: Workflow },
   pastebin: { requiresLogin: false, label: 'Pastebin', icon: FileCode },
   timers: { requiresLogin: false, label: 'Timers', icon: Clock },
+  alarms: { requiresLogin: false, label: 'Alarms', icon: Bell },
   inventory: { requiresLogin: true, label: 'Inventory', icon: Package },
   todos: { requiresLogin: false, label: 'Todos', icon: CheckSquare },
   lists: { requiresLogin: false, label: 'Lists', icon: ListOrdered },
@@ -446,6 +449,8 @@ function App() {
         return <Pastebin authToken={authToken} initialPasteId={urlPasteId} />;
       case 'timers':
         return <Timers authToken={authToken} initialTimerId={urlTimerId} />;
+      case 'alarms':
+        return <Alarms authToken={authToken} />;
       case 'inventory':
         return <Inventory authToken={authToken} />;
       case 'todos':
