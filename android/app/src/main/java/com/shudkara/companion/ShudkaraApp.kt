@@ -1,11 +1,15 @@
 package com.shudkara.companion
 
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import androidx.work.*
 import com.shudkara.companion.data.SyncWorker
+import com.shudkara.companion.service.AlarmSyncScheduler
 import java.util.concurrent.TimeUnit
 
 class ShudkaraApp : Application() {
@@ -14,7 +18,7 @@ class ShudkaraApp : Application() {
         const val CHANNEL_CAPTURE = "shudkara_capture_channel"
         const val CHANNEL_SYNC = "shudkara_sync_channel"
         const val CHANNEL_FINANCE_SMS = "shudkara_finance_sms"
-        const val CHANNEL_ALARMS_REMINDERS = "shudkara_alarms_channel"
+        const val CHANNEL_ALARMS_REMINDERS = "shudkara_alarms_channel_v2"
         lateinit var instance: ShudkaraApp
             private set
     }
@@ -24,6 +28,8 @@ class ShudkaraApp : Application() {
         instance = this
         createNotificationChannels()
         schedulePeriodicSync()
+        AlarmSyncScheduler.scheduleAutoSync(this)
+        AlarmSyncScheduler.triggerImmediateSync(this)
     }
 
     private fun createNotificationChannels() {
@@ -55,6 +61,13 @@ class ShudkaraApp : Application() {
                 enableVibration(true)
             }
 
+            val alarmSoundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             val alarmsChannel = NotificationChannel(
                 CHANNEL_ALARMS_REMINDERS,
                 "Alarms & Reminders",
@@ -62,7 +75,10 @@ class ShudkaraApp : Application() {
             ).apply {
                 description = "Full-screen alarms and urgent scheduled reminders from Shudkara"
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+                vibrationPattern = longArrayOf(0, 800, 300, 800, 300, 800)
+                setSound(alarmSoundUri, audioAttributes)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
             }
 
             notificationManager.createNotificationChannel(captureChannel)

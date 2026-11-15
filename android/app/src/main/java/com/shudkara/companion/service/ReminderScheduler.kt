@@ -5,15 +5,28 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
+import com.shudkara.companion.ui.MainActivity
 
 object ReminderScheduler {
 
     private const val TAG = "ReminderScheduler"
 
     /**
-     * Schedules an exact in-app reminder that wakes the device from Doze mode
-     * and shows a heads-up / full-screen alert dialog with audio.
+     * Checks if the app has permission to schedule exact alarms (Android 12+).
+     */
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+            return alarmManager?.canScheduleExactAlarms() ?: false
+        }
+        return true
+    }
+
+    /**
+     * Schedules an exact alarm/reminder that wakes the device from Doze mode,
+     * sounds high-priority alarm audio, and displays a heads-up pop-up alert dialog.
      */
     fun scheduleExactReminder(
         context: Context,
@@ -24,8 +37,6 @@ object ReminderScheduler {
         priority: String = "important"
     ): Boolean {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager ?: return false
-
-        // Generate stable request code from id hash
         val requestCode = (id.hashCode() and 0x7FFFFFFF) % 1000000
 
         val intent = Intent(context, ReminderAlarmReceiver::class.java).apply {
@@ -42,35 +53,51 @@ object ReminderScheduler {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        // Show intent for AlarmClockInfo: clicking status bar alarm icon opens MainActivity
+        val showIntent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("extra_tab", 3)
+        }
+        val showPendingIntent = PendingIntent.getActivity(
+            context,
+            requestCode,
+            showIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                // Allows wakeup even in battery Doze mode
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTimeMillis,
-                    pendingIntent
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerTimeMillis,
-                    pendingIntent
-                )
-            }
-            Log.d(TAG, "Scheduled exact reminder '$title' for $triggerTimeMillis (reqCode: $requestCode)")
+            // Priority 1: setAlarmClock (bypasses all Doze battery restrictions & shows system alarm clock icon)
+            val alarmClockInfo = AlarmManager.AlarmClockInfo(triggerTimeMillis, showPendingIntent)
+            alarmManager.setAlarmClock(alarmClockInfo, pendingIntent)
+            Log.d(TAG, "Scheduled exact alarm via setAlarmClock for '$title' at $triggerTimeMillis (reqCode: $requestCode)")
             true
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Exact alarm permission restricted, falling back to inexact window", e)
+        } catch (e: Exception) {
+            Log.w(TAG, "setAlarmClock failed, falling back to setExactAndAllowWhileIdle", e)
             try {
-                alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTimeMillis,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExact(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerTimeMillis,
+                        pendingIntent
+                    )
+                }
                 true
             } catch (ex: Exception) {
-                Log.e(TAG, "Failed to schedule reminder fallback", ex)
-                false
+                Log.e(TAG, "All exact alarm scheduling attempts failed", ex)
+                try {
+                    alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTimeMillis, pendingIntent)
+                    true
+                } catch (fallbackEx: Exception) {
+                    Log.e(TAG, "Final fallback failed", fallbackEx)
+                    false
+                }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to schedule reminder", e)
-            false
         }
     }
 

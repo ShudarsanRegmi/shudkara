@@ -184,15 +184,14 @@ export async function alarmsHandler(request: HttpRequest, context: InvocationCon
 
       await col.insertOne(newAlarm as any);
 
-      // If user also requested immediate push dispatch
-      if (body.dispatchPush) {
-        sendPushNotificationToAll({
-          title: `⏰ ${newAlarm.title}`,
-          body: newAlarm.message || (newAlarm.type === 'alarm' ? `Alarm set for ${newAlarm.hour}:${String(newAlarm.minutes).padStart(2, '0')}` : 'Scheduled reminder'),
-          url: '/?tab=alarms',
-          tag: `alarm-${id}`
-        }).catch(err => context.error('Error dispatching push for alarm:', err));
-      }
+      // Dispatch Web Push notification to all subscribed devices
+      sendPushNotificationToAll({
+        title: `⏰ ${newAlarm.title}`,
+        body: newAlarm.message || (newAlarm.type === 'alarm' ? `Alarm scheduled for ${newAlarm.hour}:${String(newAlarm.minutes).padStart(2, '0')}` : 'Scheduled reminder'),
+        url: '/?tab=alarms',
+        tag: `alarm-${id}`,
+        data: { alarmId: id, type: newAlarm.type }
+      }).catch(err => context.error('Error dispatching push for alarm:', err));
 
       return {
         status: 201,
