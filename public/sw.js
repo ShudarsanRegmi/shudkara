@@ -200,3 +200,57 @@ self.addEventListener('fetch', (e) => {
     })
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. Web Push Notification Handlers
+// ─────────────────────────────────────────────────────────────────────────────
+self.addEventListener('push', (e) => {
+  let data = {};
+  if (e.data) {
+    try {
+      data = e.data.json();
+    } catch {
+      data = { title: 'Shudkara Alert', body: e.data.text() };
+    }
+  }
+
+  const title = data.title || 'Shudkara Notification';
+  const options = {
+    body: data.body || 'You have an update from Shudkara.',
+    icon: data.icon || '/icon-192.png',
+    badge: data.badge || '/favicon.svg',
+    tag: data.tag || 'shudkara-alert',
+    renotify: true,
+    data: {
+      url: (data.data && data.data.url) || data.url || '/',
+      timestamp: Date.now()
+    },
+    vibrate: [200, 100, 200, 100, 200]
+  };
+
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const targetUrl = (e.notification.data && e.notification.data.url) || '/';
+
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // If a window is already open, focus it and navigate
+      for (const client of clientList) {
+        if ('focus' in client) {
+          if ('navigate' in client && targetUrl !== '/') {
+            client.navigate(targetUrl);
+          }
+          return client.focus();
+        }
+      }
+      // If no window is currently open, open a new browser/PWA window
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
+

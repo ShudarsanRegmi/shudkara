@@ -28,6 +28,7 @@ const { imgDropHandler } = require('./dist/src/functions/imgdrop');
 const { timelineHandler } = require('./dist/src/functions/timeline');
 const { shortcutsHandler } = require('./dist/src/functions/shortcuts');
 const { streaksHandler } = require('./dist/src/functions/streaks');
+const { notificationsHandler } = require('./dist/src/functions/notifications');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -76,6 +77,8 @@ const server = http.createServer(async (req, res) => {
     handlerToUse = shortcutsHandler;
   } else if (resource === 'streaks') {
     handlerToUse = streaksHandler;
+  } else if (resource === 'notifications') {
+    handlerToUse = notificationsHandler;
   }
 
   if (!handlerToUse) {

@@ -13,6 +13,20 @@ export async function caretakerCronHandler(
     context.log(
       `Caretaker audit finished. Status: ${result.analysis.status}. Headline: "${result.analysis.headline}". Email dispatched: ${result.emailSent}.`
     );
+
+    // Dispatch native system push notification to all registered PWA devices
+    try {
+      const { sendPushNotificationToAll } = await import('./notifications');
+      const pushRes = await sendPushNotificationToAll({
+        title: `🤖 Caretaker Audit (${result.analysis.status.replace('_', ' ').toUpperCase()})`,
+        body: result.analysis.headline || 'Your autonomous briefing is ready.',
+        url: '/?tab=caretaker',
+        tag: 'caretaker-audit'
+      });
+      context.log(`Caretaker push notification sent to ${pushRes.sent} device(s).`);
+    } catch (pushErr: any) {
+      context.warn('Failed to dispatch Caretaker push notification:', pushErr?.message || pushErr);
+    }
   } catch (err: any) {
     context.error('Caretaker Cron Error:', err);
   }

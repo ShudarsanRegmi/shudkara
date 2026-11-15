@@ -28,6 +28,13 @@ import {
 } from 'lucide-react';
 import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
+import {
+  showLocalNotification,
+  subscribeToPushNotifications,
+  unsubscribeFromPushNotifications,
+  triggerServerTestPush,
+  getPushSubscriptionState
+} from '../utils/pushNotifications';
 
 export interface StreakCheckIn {
   id: string;
@@ -206,6 +213,10 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
   // Notification testing states
   const [sendingTestEmail, setSendingTestEmail] = useState(false);
   const [testEmailResult, setTestEmailResult] = useState<string | null>(null);
+  const [isPushSubscribed, setIsPushSubscribed] = useState(false);
+  const [pushChecking, setPushChecking] = useState(false);
+  const [sendingServerPush, setSendingServerPush] = useState(false);
+  const [serverPushMsg, setServerPushMsg] = useState<string | null>(null);
 
   // Load data
   const fetchStreaks = async () => {
@@ -240,14 +251,12 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
     };
   }, []);
 
-  // Request browser notification permission if enabled
+  // Check push subscription state on mount and when settings change
   useEffect(() => {
-    if (notificationSettings.browserNotificationsEnabled && 'Notification' in window) {
-      if (Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
-    }
-  }, [notificationSettings.browserNotificationsEnabled]);
+    getPushSubscriptionState().then(state => {
+      setIsPushSubscribed(state.subscribed);
+    });
+  }, []);
 
   // Streak Calculation Engine (robust & loop-safe)
   const calculateStreakStats = (streak: StreakItem) => {
@@ -419,9 +428,9 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
 
           if (notificationSettings.browserNotificationsEnabled && 'Notification' in window && Notification.permission === 'granted') {
             if (stats.minutesLeft === 30 || (stats.isOverdue && now.getMinutes() === 0)) {
-              new Notification(`Streak in Danger: ${s.title}`, {
+              showLocalNotification(`Streak in Danger: ${s.title}`, {
                 body: `Only ${stats.minutesLeft > 0 ? stats.minutesLeft + ' mins left' : 'CRITICAL OVERDUE'}! Upload photo proof to save your ${stats.currentStreak}-day streak!`,
-                icon: '/favicon.ico'
+                icon: '/icon-192.png'
               });
             }
           }
@@ -687,36 +696,75 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
     }
   };
 
-  // Test System / Browser Notification
-  const handleTestSystemNotification = () => {
-    if (!('Notification' in window)) {
-      alert('Desktop notifications are not supported on this device/browser.');
-      return;
-    }
+  // Toggle Web Push Subscription
+  const handleTogglePushNotifications = async (enabled: boolean) => {
+    setNotificationSettings(prev => ({
+      ...prev,
+      browserNotificationsEnabled: enabled
+    }));
 
-    if (Notification.permission !== 'granted') {
-      Notification.requestPermission().then(permission => {
-        if (permission === 'granted') {
-          showNativeTestNotification();
-        } else {
-          alert('Notification permission was denied. Please allow notifications in your browser address bar.');
-        }
-      });
+    const token = authToken || localStorage.getItem('shudkara_token') || '';
+    setPushChecking(true);
+    if (enabled) {
+      try {
+        await subscribeToPushNotifications(token);
+        setIsPushSubscribed(true);
+        await showLocalNotification('🌟 Push Notifications Active', {
+          body: 'Your device is now connected to Shudkara system alerts.'
+        });
+      } catch (err: any) {
+        alert('Could not enable push notifications: ' + (err?.message || err));
+        setIsPushSubscribed(false);
+      } finally {
+        setPushChecking(false);
+      }
     } else {
-      showNativeTestNotification();
+      try {
+        await unsubscribeFromPushNotifications(token);
+        setIsPushSubscribed(false);
+      } catch (err: any) {
+        console.warn('Unsubscribe error:', err);
+      } finally {
+        setPushChecking(false);
+      }
     }
   };
 
-  const showNativeTestNotification = () => {
+  // Immediate Local Notification Test
+  const handleTestSystemNotification = async () => {
     try {
-      new Notification('Shudkara Streaks Alert Test', {
-        body: 'Streaks notifications are active! You will be alerted before your streak deadline.',
-        icon: '/favicon.ico'
+      await showLocalNotification('🌟 Shudkara Local Alert Test', {
+        body: 'Local notifications are active! You will be alerted before deadlines expire.',
+        icon: '/icon-192.png'
       });
       setTestNotificationSent(true);
       setTimeout(() => setTestNotificationSent(false), 4000);
     } catch (e: any) {
       alert('Failed to show notification: ' + e.message);
+    }
+  };
+
+  // Real Background Server Push Notification Test
+  const handleTestServerPush = async () => {
+    setSendingServerPush(true);
+    setServerPushMsg(null);
+    try {
+      const token = authToken || localStorage.getItem('shudkara_token') || '';
+      if (!isPushSubscribed) {
+        await subscribeToPushNotifications(token);
+        setIsPushSubscribed(true);
+      }
+      const res = await triggerServerTestPush(
+        token,
+        '🌟 Shudkara System Push Connected',
+        'Your PWA received a real background push notification from the server!'
+      );
+      setServerPushMsg(`Server push sent! (${res.sent} active device(s) notified)`);
+      setTimeout(() => setServerPushMsg(null), 5000);
+    } catch (err: any) {
+      setServerPushMsg(`Push failed: ${err.message}`);
+    } finally {
+      setSendingServerPush(false);
     }
   };
 
@@ -2357,47 +2405,71 @@ export const Streaks: React.FC<StreaksProps> = ({ authToken }) => {
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <span className="text-xs font-bold text-slate-800 block">
-                      Phone / Browser System Notifications
+                      System Web Push Notifications
                     </span>
                     <span className="text-[11px] text-slate-500 block">
-                      Alerts on your screen when streak deadline is near
+                      Wakes up your device even when PWA is closed
                     </span>
                   </div>
                   <input
                     type="checkbox"
+                    disabled={pushChecking}
                     checked={notificationSettings.browserNotificationsEnabled}
-                    onChange={e =>
-                      setNotificationSettings(prev => ({
-                        ...prev,
-                        browserNotificationsEnabled: e.target.checked
-                      }))
-                    }
-                    className="w-5 h-5 accent-orange-600 rounded cursor-pointer"
+                    onChange={e => handleTogglePushNotifications(e.target.checked)}
+                    className="w-5 h-5 accent-orange-600 rounded cursor-pointer disabled:opacity-50"
                   />
                 </div>
 
-                <div className="flex items-center justify-between pt-2 border-t border-slate-200/60">
-                  <span className="text-[11px] text-slate-600 font-medium">
-                    Status:{' '}
-                    <strong className={
-                      typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
-                        ? 'text-emerald-600'
-                        : 'text-amber-600'
-                    }>
-                      {typeof window !== 'undefined' && 'Notification' in window
-                        ? Notification.permission.toUpperCase()
-                        : 'UNSUPPORTED'}
-                    </strong>
+                <div className="flex items-center justify-between pt-2 border-t border-slate-200/60 text-[11px]">
+                  <span className="text-slate-600 font-medium">
+                    Push Connection:{' '}
+                    {isPushSubscribed ? (
+                      <span className="text-emerald-700 font-bold inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Connected
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 font-bold">
+                        {typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied'
+                          ? 'Blocked in Browser'
+                          : 'Not Connected'}
+                      </span>
+                    )}
                   </span>
+                  <span className="text-slate-500 font-mono text-[10px]">
+                    {typeof window !== 'undefined' && 'Notification' in window ? Notification.permission.toUpperCase() : 'NO-NOTIF'}
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/60">
                   <button
                     type="button"
                     onClick={handleTestSystemNotification}
-                    className="px-3 py-1.5 bg-orange-100 hover:bg-orange-200 text-orange-800 text-[11px] font-bold rounded-lg transition flex items-center gap-1.5"
+                    className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 text-[11px] font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Bell className="w-3 h-3" />
-                    <span>{testNotificationSent ? 'Notification Sent!' : 'Test System Notification Now'}</span>
+                    <Bell className="w-3 h-3 text-slate-600" />
+                    <span>{testNotificationSent ? 'Local Alert Fired!' : 'Test Local Alert'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={sendingServerPush}
+                    onClick={handleTestServerPush}
+                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-sm"
+                  >
+                    {sendingServerPush ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Send className="w-3 h-3" />
+                    )}
+                    <span>{sendingServerPush ? 'Dispatching...' : 'Send Real Push from Server'}</span>
                   </button>
                 </div>
+
+                {serverPushMsg && (
+                  <p className="text-[11px] font-semibold text-orange-700 bg-orange-50 p-2 rounded-lg border border-orange-200">
+                    {serverPushMsg}
+                  </p>
+                )}
               </div>
 
               <div className="space-y-3 p-3.5 bg-slate-50 border border-slate-200 rounded-2xl">
