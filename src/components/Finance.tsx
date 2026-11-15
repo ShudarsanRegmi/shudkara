@@ -2,10 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Wallet, Plus, Calendar, ArrowUpRight, ArrowDownLeft,
   RefreshCw, Clock, AlertTriangle, Filter,
-  Trash2, X, DollarSign, Layers, ChevronRight,
+  Trash2, X, DollarSign, Layers, ChevronRight, ChevronDown, ChevronUp,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
   Users, CheckCircle2, Edit2, Tag, Bell, BellRing, Send,
-  Settings, Gift, Sliders, CheckSquare, Square
+  Settings, Gift, Sliders, CheckSquare, Square, Loader2
 } from 'lucide-react';
 
 export interface SplitParticipant {
@@ -34,11 +34,14 @@ export interface FinanceSettings {
     INR: number;
     USD: number;
     EUR: number;
+    [key: string]: number;
   };
   defaultPaymentMethod: string;
   defaultCompanion: string;
+  defaultExpenseGroup?: string;
   defaultCategory: string;
-  defaultDateOption: 'today' | 'yesterday' | 'keep_last';
+  defaultDateOption: 'today' | 'yesterday' | 'custom' | 'keep_last';
+  customDefaultDate?: string;
   defaultSplitMode: 'none' | '50_50' | 'group' | 'custom';
   updatedAt?: string;
 }
@@ -67,8 +70,10 @@ const DEFAULT_SETTINGS: FinanceSettings = {
   },
   defaultPaymentMethod: 'Bank / Card',
   defaultCompanion: '',
+  defaultExpenseGroup: '',
   defaultCategory: 'Food & Dining',
   defaultDateOption: 'today',
+  customDefaultDate: '',
   defaultSplitMode: 'none'
 };
 
@@ -134,6 +139,9 @@ export interface RepaymentRecord {
 
 export interface LendItem {
   id: string;
+  sourceExpenseId?: string | null;
+  expenseSetId?: string | null;
+  groupId?: string | null;
   personName: string;
   contact?: string;
   amount: number;
@@ -153,6 +161,9 @@ export interface LendItem {
 
 export interface BorrowItem {
   id: string;
+  sourceExpenseId?: string | null;
+  expenseSetId?: string | null;
+  groupId?: string | null;
   personName: string;
   contact?: string;
   amount: number;
@@ -224,6 +235,8 @@ export interface ParticipantItem {
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories' | 'settings'>('overview');
   const [peopleViewMode, setPeopleViewMode] = useState<'people' | 'groups'>('people');
+  const [lendsViewMode, setLendsViewMode] = useState<'consolidated' | 'individual'>('consolidated');
+  const [expandedConsolidatedKeys, setExpandedConsolidatedKeys] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
 
   // Settings state (offline-first with cache)
@@ -245,6 +258,19 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const [groups, setGroups] = useState<ExpenseGroup[]>([]);
   const [backlog, setBacklog] = useState<BankBacklogItem[]>([]);
   const [categories, setCategories] = useState<FinanceCategory[]>([]);
+
+  // Async Button Feedback States
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [settingsSavedSuccess, setSettingsSavedSuccess] = useState(false);
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const [isSavingGroup, setIsSavingGroup] = useState(false);
+  const [isSavingSet, setIsSavingSet] = useState(false);
+  const [isSavingLend, setIsSavingLend] = useState(false);
+  const [isSavingBorrow, setIsSavingBorrow] = useState(false);
+  const [isSavingPerson, setIsSavingPerson] = useState(false);
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const [isSavingRepay, setIsSavingRepay] = useState(false);
+  const [isSavingReconcile, setIsSavingReconcile] = useState(false);
 
   // Filter states for expenses
   const [filterSetId, setFilterSetId] = useState<string>('all');
@@ -545,6 +571,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     const newName = categoryForm.name.trim();
     if (!newName) return;
 
+    setIsSavingCategory(true);
     try {
       const res = await fetch(
         categoryForm.id ? `/api/finance/categories/${categoryForm.id}` : '/api/finance/categories',
@@ -570,6 +597,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     } catch (err: any) {
       console.error('Save category error:', err);
       alert(err.message || 'Error saving category');
+    } finally {
+      setIsSavingCategory(false);
     }
   };
 
@@ -593,30 +622,62 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
-  // Reset Expense Form applying settings defaults
-  const resetExpenseForm = () => {
-    const defCompanion = settings.defaultCompanion || people.find(p => p.isDefault)?.name || (people[0]?.name || '');
+  // Reset Expense Form applying settings defaults and custom dates/groups
+  const resetExpenseForm = (overrideSetId?: string, overrideGroupId?: string) => {
     const today = new Date().toISOString().slice(0, 10);
     const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().slice(0, 10); })();
-    const initialDate = settings.defaultDateOption === 'yesterday' ? yesterday : today;
+    const initialDate = settings.defaultDateOption === 'yesterday'
+      ? yesterday
+      : settings.defaultDateOption === 'custom' && settings.customDefaultDate
+      ? settings.customDefaultDate
+      : today;
+
+    const targetGroupId = overrideGroupId || (settings.defaultSplitMode === 'group' ? settings.defaultExpenseGroup : '') || '';
+    const selectedGroup = targetGroupId ? groups.find(g => g.id === targetGroupId) : null;
+    const defCompanion = settings.defaultCompanion || people.find(p => p.isDefault)?.name || (people[0]?.name || '');
+
+    let splitOption: 'none' | 'split' | 'paid_by_other' = 'none';
+    let splitMode: '50_50' | 'equal' | 'custom' | '100_them' = 'equal';
+    let participants: ParticipantItem[] = [];
+
+    if (overrideGroupId || settings.defaultSplitMode === 'group') {
+      splitOption = 'split';
+      splitMode = selectedGroup?.defaultSplitMode === 'custom' ? 'custom' : 'equal';
+      if (selectedGroup) {
+        participants = selectedGroup.members.map(m => ({
+          name: m,
+          included: true,
+          isSponsored: false,
+          customAmount: ''
+        }));
+      } else if (defCompanion) {
+        participants = [{ name: defCompanion, included: true, isSponsored: false, customAmount: '' }];
+      }
+    } else if (settings.defaultSplitMode === '50_50') {
+      splitOption = 'split';
+      splitMode = '50_50';
+      if (defCompanion) {
+        participants = [{ name: defCompanion, included: true, isSponsored: false, customAmount: '' }];
+      }
+    }
 
     setExpenseForm({
       id: '',
       amount: '',
       currency: settings.defaultCurrency || 'NPR',
-      description: '',
+      description: selectedGroup ? `Outing with ${selectedGroup.name}` : '',
       category: settings.defaultCategory || effectiveCategories[0] || 'Food & Dining',
-      expenseSetId: '',
-      groupId: '',
+      expenseSetId: overrideSetId || '',
+      groupId: selectedGroup?.id || '',
       paymentMethod: settings.defaultPaymentMethod || PAYMENT_METHODS[0],
       isRotation: false,
       rotationNote: '',
       date: initialDate,
       time: new Date().toTimeString().slice(0, 5),
-      splitOption: settings.defaultSplitMode === 'group' || settings.defaultSplitMode === '50_50' ? 'split' : 'none',
+      splitOption,
       splitPersonName: defCompanion,
-      splitMode: settings.defaultSplitMode === '50_50' ? '50_50' : 'equal',
-      participants: defCompanion ? [{ name: defCompanion, included: true, isSponsored: false, customAmount: '' }] : [],
+      splitMode,
+      participants,
       newParticipantInput: '',
       customMyShare: '',
       customTheirShare: '',
@@ -624,6 +685,66 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       expectedReturnDate: ''
     });
   };
+
+  // Memoized consolidated lends grouped by person & expense set
+  const consolidatedLends = useMemo(() => {
+    const map = new Map<string, {
+      groupKey: string;
+      personName: string;
+      contact?: string;
+      expenseSetId?: string | null;
+      setName: string;
+      items: LendItem[];
+      totalAmount: number;
+      totalRepaid: number;
+      remaining: number;
+      latestDate: string;
+      allComplete: boolean;
+      hasReminderSent: boolean;
+    }>();
+
+    for (const item of lends) {
+      const key = `${(item.personName || '').trim().toLowerCase()}___${item.expenseSetId || 'general'}`;
+      const totalRepaidItem = (item.repayments || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+      const remainingItem = Math.max(0, item.amount - totalRepaidItem);
+
+      const setName = item.expenseSetId
+        ? (expenseSets.find(s => s.id === item.expenseSetId)?.name || 'Expense Set')
+        : 'Standalone / Direct Lends';
+
+      if (!map.has(key)) {
+        map.set(key, {
+          groupKey: key,
+          personName: item.personName,
+          contact: item.contact,
+          expenseSetId: item.expenseSetId,
+          setName,
+          items: [item],
+          totalAmount: item.amount,
+          totalRepaid: totalRepaidItem,
+          remaining: remainingItem,
+          latestDate: item.lentDate,
+          allComplete: item.status === 'returned',
+          hasReminderSent: Boolean(item.reminderSent)
+        });
+      } else {
+        const grp = map.get(key)!;
+        grp.items.push(item);
+        grp.totalAmount += item.amount;
+        grp.totalRepaid += totalRepaidItem;
+        grp.remaining += remainingItem;
+        if (item.lentDate > grp.latestDate) grp.latestDate = item.lentDate;
+        if (item.status !== 'returned') grp.allComplete = false;
+        if (item.reminderSent) grp.hasReminderSent = true;
+        if (!grp.contact && item.contact) grp.contact = item.contact;
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (a.allComplete !== b.allComplete) return a.allComplete ? 1 : -1;
+      return b.latestDate.localeCompare(a.latestDate);
+    });
+  }, [lends, expenseSets]);
 
   // Open Expense Wizard pre-populated with a specific Expense Group
   const openExpenseWithGroup = (group: ExpenseGroup) => {
@@ -806,6 +927,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       expectedReturnDate: expenseForm.expectedReturnDate || undefined
     };
 
+    setIsSavingExpense(true);
     try {
       const res = await fetch(
         expenseForm.id ? `/api/finance/expenses/${expenseForm.id}` : '/api/finance/expenses',
@@ -822,6 +944,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save expense error:', err);
+    } finally {
+      setIsSavingExpense(false);
     }
   };
 
@@ -836,6 +960,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       members: groupForm.members
     };
 
+    setIsSavingGroup(true);
     try {
       const res = await fetch(
         groupForm.id ? `/api/finance/groups/${groupForm.id}` : '/api/finance/groups',
@@ -856,6 +981,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     } catch (err: any) {
       console.error('Save group error:', err);
       alert(err.message || 'Error saving group');
+    } finally {
+      setIsSavingGroup(false);
     }
   };
 
@@ -873,6 +1000,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   // Handle Save Settings
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSavingSettings(true);
     try {
       setSettings(settingsForm);
       try {
@@ -885,6 +1013,14 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         body: JSON.stringify(settingsForm)
       });
       if (res.ok) {
+        const saved = await res.json();
+        setSettings(saved);
+        setSettingsForm(saved);
+        try {
+          localStorage.setItem('shudkara_finance_settings', JSON.stringify(saved));
+        } catch {}
+        setSettingsSavedSuccess(true);
+        setTimeout(() => setSettingsSavedSuccess(false), 3000);
         setNotiBannerMsg('Finance default variables & currency exchange rates saved successfully!');
         setTimeout(() => setNotiBannerMsg(null), 3500);
       } else {
@@ -892,6 +1028,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save settings error:', err);
+    } finally {
+      setIsSavingSettings(false);
     }
   };
 
@@ -900,6 +1038,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     e.preventDefault();
     if (!personForm.name.trim()) return;
 
+    setIsSavingPerson(true);
     try {
       const res = await fetch(
         personForm.id ? `/api/finance/people/${personForm.id}` : '/api/finance/people',
@@ -925,6 +1064,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     } catch (err: any) {
       console.error('Save person error:', err);
       alert(err.message || 'Error saving person');
+    } finally {
+      setIsSavingPerson(false);
     }
   };
 
@@ -985,6 +1126,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       myAmount = Math.max(0, parseFloat((reconcileTarget.amount - theirAmount).toFixed(2)));
     }
 
+    setIsSavingReconcile(true);
     try {
       const res = await fetch(`/api/finance/backlog/${reconcileTarget.id}/reconcile`, {
         method: 'POST',
@@ -1005,6 +1147,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Reconcile backlog error:', err);
+    } finally {
+      setIsSavingReconcile(false);
     }
   };
 
@@ -1046,7 +1190,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
   // Handle Delete Expense
   const handleDeleteExpense = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this expense?')) return;
+    if (!confirm('Are you sure you want to delete this expense? Any linked lending/split records will also be removed.')) return;
     try {
       const res = await fetch(`/api/finance/expenses/${id}`, { method: 'DELETE', headers: authHeaders });
       if (res.ok) fetchAllData();
@@ -1069,6 +1213,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       notes: setForm.notes.trim()
     };
 
+    setIsSavingSet(true);
     try {
       const res = await fetch(
         setForm.id ? `/api/finance/expense-sets/${setForm.id}` : '/api/finance/expense-sets',
@@ -1085,6 +1230,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save set error:', err);
+    } finally {
+      setIsSavingSet(false);
     }
   };
 
@@ -1122,6 +1269,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       notes: lendForm.notes.trim()
     };
 
+    setIsSavingLend(true);
     try {
       const res = await fetch('/api/finance/lends', {
         method: 'POST',
@@ -1135,6 +1283,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save lend error:', err);
+    } finally {
+      setIsSavingLend(false);
     }
   };
 
@@ -1161,6 +1311,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       notes: borrowForm.notes.trim()
     };
 
+    setIsSavingBorrow(true);
     try {
       const res = await fetch('/api/finance/borrows', {
         method: 'POST',
@@ -1174,6 +1325,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Save borrow error:', err);
+    } finally {
+      setIsSavingBorrow(false);
     }
   };
 
@@ -1231,6 +1384,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       ? `/api/finance/lends/${repayTarget.item.id}/repay`
       : `/api/finance/borrows/${repayTarget.item.id}/repay`;
 
+    setIsSavingRepay(true);
     try {
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -1249,6 +1403,30 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       }
     } catch (err) {
       console.error('Record repayment error:', err);
+    } finally {
+      setIsSavingRepay(false);
+    }
+  };
+
+  // Handle Delete Lend Entry
+  const handleDeleteLend = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this lend entry?')) return;
+    try {
+      const res = await fetch(`/api/finance/lends/${id}`, { method: 'DELETE', headers: authHeaders });
+      if (res.ok) fetchAllData();
+    } catch (err) {
+      console.error('Delete lend error:', err);
+    }
+  };
+
+  // Handle Delete Borrow Entry
+  const handleDeleteBorrow = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this borrow entry?')) return;
+    try {
+      const res = await fetch(`/api/finance/borrows/${id}`, { method: 'DELETE', headers: authHeaders });
+      if (res.ok) fetchAllData();
+    } catch (err) {
+      console.error('Delete borrow error:', err);
     }
   };
 
@@ -1716,7 +1894,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         <span className="text-slate-500">{set.entryCount || 0} entries</span>
                         <button
                           onClick={() => {
-                            setExpenseForm(prev => ({ ...prev, expenseSetId: set.id }));
+                            resetExpenseForm(set.id);
                             setIsExpenseModalOpen(true);
                           }}
                           className="font-bold text-indigo-600 hover:text-indigo-700"
@@ -2023,7 +2201,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => {
-                          setExpenseForm(prev => ({ ...prev, expenseSetId: set.id }));
+                          resetExpenseForm(set.id);
                           setIsExpenseModalOpen(true);
                         }}
                         className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg transition"
@@ -2050,133 +2228,361 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'lends' && (
         <div className="space-y-4">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 className="text-sm font-bold text-slate-900">Lends Tracker (Money Given Out)</h2>
-              <p className="text-[11px] text-slate-500">Keep track of who took money, when they return, and reminders</p>
+              <p className="text-[11px] text-slate-500">Keep track of who took money, trip splits, and consolidated settlements</p>
             </div>
-            <button
-              onClick={() => setIsLendModalOpen(true)}
-              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-            >
-              <Plus className="w-4 h-4" /> Log Money Lent
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* View Switcher: Consolidated vs Individual */}
+              <div className="flex bg-slate-100 p-0.5 rounded-xl text-xs font-bold border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setLendsViewMode('consolidated')}
+                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+                    lendsViewMode === 'consolidated'
+                      ? 'bg-white text-emerald-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  Consolidated by Trip / Person
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLendsViewMode('individual')}
+                  className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+                    lendsViewMode === 'individual'
+                      ? 'bg-white text-emerald-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  All Individual Entries ({lends.length})
+                </button>
+              </div>
+
+              <button
+                onClick={() => setIsLendModalOpen(true)}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Log Money Lent
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {lends.length === 0 ? (
-              <div className="col-span-full bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500">
-                No active lends registered.
-              </div>
-            ) : (
-              lends.map(item => {
-                const totalRepaid = (item.repayments || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
-                const remaining = Math.max(0, item.amount - totalRepaid);
-                const isComplete = item.status === 'returned';
-
-                return (
-                  <div key={item.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="font-bold text-slate-900 text-base flex items-center gap-1.5">
-                            <User className="w-4 h-4 text-emerald-600" />
-                            {item.personName}
+          {/* Consolidated View */}
+          {lendsViewMode === 'consolidated' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {consolidatedLends.length === 0 ? (
+                <div className="col-span-full bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500">
+                  No active lends registered.
+                </div>
+              ) : (
+                consolidatedLends.map(grp => {
+                  const isExpanded = Boolean(expandedConsolidatedKeys[grp.groupKey]);
+                  return (
+                    <div key={grp.groupKey} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="font-bold text-slate-900 text-base flex items-center gap-1.5">
+                              <User className="w-4 h-4 text-emerald-600" />
+                              {grp.personName}
+                            </div>
+                            {grp.contact && (
+                              <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                                <Phone className="w-3 h-3" /> {grp.contact}
+                              </span>
+                            )}
                           </div>
-                          {item.contact && (
-                            <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-                              <Phone className="w-3 h-3" /> {item.contact}
+                          <div className="flex flex-col items-end gap-1">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              grp.allComplete ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            }`}>
+                              {grp.allComplete ? 'All Settled' : 'Active'}
+                            </span>
+                            <span className="text-[10px] font-semibold text-slate-500">
+                              {grp.items.length} {grp.items.length === 1 ? 'entry' : 'entries'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Expense Set / Trip Badge */}
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 ${
+                            grp.expenseSetId
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}>
+                            <Layers className="w-3 h-3" />
+                            {grp.setName}
+                          </span>
+                        </div>
+
+                        {/* Amounts Display */}
+                        <div className="pt-1 flex justify-between items-baseline">
+                          <div>
+                            <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining Balance</span>
+                            <div className="text-xl font-black text-emerald-600">
+                              Rs. {grp.remaining.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Total Lent</span>
+                            <div className="text-xs font-bold text-slate-700">
+                              Rs. {grp.totalAmount.toLocaleString()}
+                            </div>
+                            {grp.totalRepaid > 0 && (
+                              <div className="text-[10px] text-slate-400">
+                                Repaid: Rs. {grp.totalRepaid.toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Expand / Collapse Sub-entries */}
+                        <button
+                          type="button"
+                          onClick={() => setExpandedConsolidatedKeys(prev => ({ ...prev, [grp.groupKey]: !prev[grp.groupKey] }))}
+                          className="w-full py-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
+                        >
+                          <span>{isExpanded ? 'Hide Individual Splits' : `View ${grp.items.length} Consolidated ${grp.items.length === 1 ? 'Split' : 'Splits'}`}</span>
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+
+                        {/* Expanded Sub-items List */}
+                        {isExpanded && (
+                          <div className="space-y-2 pt-1 border-t border-slate-100 animate-fade-in text-xs">
+                            {grp.items.map(subItem => {
+                              const subRepaid = (subItem.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                              const subRemaining = Math.max(0, subItem.amount - subRepaid);
+                              return (
+                                <div key={subItem.id} className="p-2.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-1">
+                                  <div className="flex items-center justify-between font-bold text-slate-800">
+                                    <span className="truncate max-w-[200px]" title={subItem.notes || ''}>
+                                      {subItem.notes || `Lend on ${subItem.lentDate}`}
+                                    </span>
+                                    <span className="text-emerald-700 whitespace-nowrap">Rs. {subItem.amount.toLocaleString()}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between text-[11px] text-slate-500">
+                                    <span>Date: {subItem.lentDate}</span>
+                                    <span>Remaining: Rs. {subRemaining.toLocaleString()}</span>
+                                  </div>
+                                  <div className="flex items-center justify-end gap-2 pt-1">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRepayTarget({ type: 'lend', item: subItem });
+                                        setRepayAmount(subRemaining.toString());
+                                      }}
+                                      className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
+                                    >
+                                      Record Repayment
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteLend(subItem.id)}
+                                      className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer"
+                                      title="Delete this entry"
+                                    >
+                                      <Trash2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      {!grp.allComplete && (
+                        <div className="pt-3 border-t border-slate-100 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const firstUnpaid = grp.items.find(it => {
+                                  const rep = (it.repayments || []).reduce((s, r) => s + r.amount, 0);
+                                  return it.amount > rep;
+                                }) || grp.items[0];
+                                const rem = Math.max(0, firstUnpaid.amount - (firstUnpaid.repayments || []).reduce((s, r) => s + r.amount, 0));
+                                setRepayTarget({ type: 'lend', item: firstUnpaid });
+                                setRepayAmount(rem > 0 ? rem.toString() : grp.remaining.toString());
+                              }}
+                              className="flex-1 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1 active:scale-[0.98] cursor-pointer"
+                            >
+                              <ArrowDownLeft className="w-3.5 h-3.5" />
+                              Record Repayment
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const person = people.find(p => p.name.toLowerCase() === grp.personName.toLowerCase());
+                                const phone = person?.contact || grp.contact || '';
+                                const cleanPhone = phone.replace(/[^\d+]/g, '');
+                                const reminderText = `Hi ${grp.personName}, friendly reminder regarding the Rs. ${grp.remaining.toLocaleString()} balance for ${grp.setName} (${grp.items.length} shared entries).`;
+
+                                for (const item of grp.items) {
+                                  if (!item.reminderSent) {
+                                    await handleToggleReminder({ ...item, reminderSent: false });
+                                  }
+                                }
+
+                                if (cleanPhone) {
+                                  const waUrl = `https://wa.me/${cleanPhone.replace('+', '')}?text=${encodeURIComponent(reminderText)}`;
+                                  window.open(waUrl, '_blank');
+                                } else {
+                                  if (navigator.clipboard) {
+                                    await navigator.clipboard.writeText(reminderText);
+                                    alert(`Copied consolidated reminder for ${grp.personName} to clipboard:\n"${reminderText}"\n(Marked as reminded ✓)`);
+                                  } else {
+                                    alert(`Consolidated reminder for ${grp.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
+                                  }
+                                }
+                              }}
+                              className="py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center gap-1 active:scale-[0.98] cursor-pointer"
+                              title="Send consolidated reminder"
+                            >
+                              <Send className="w-3 h-3" />
+                              Reminder
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
+            /* Individual Entries View */
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {lends.length === 0 ? (
+                <div className="col-span-full bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500">
+                  No active lends registered.
+                </div>
+              ) : (
+                lends.map(item => {
+                  const totalRepaid = (item.repayments || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+                  const remaining = Math.max(0, item.amount - totalRepaid);
+                  const isComplete = item.status === 'returned';
+
+                  return (
+                    <div key={item.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="font-bold text-slate-900 text-base flex items-center gap-1.5">
+                              <User className="w-4 h-4 text-emerald-600" />
+                              {item.personName}
+                            </div>
+                            {item.contact && (
+                              <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                                <Phone className="w-3 h-3" /> {item.contact}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              isComplete ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            }`}>
+                              {item.status.replace('_', ' ')}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteLend(item.id)}
+                              className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                              title="Delete Lend Record"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 flex justify-between items-baseline">
+                          <div>
+                            <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining</span>
+                            <div className="text-xl font-black text-emerald-600">
+                              Rs. {remaining.toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Initial</span>
+                            <div className="text-xs font-bold text-slate-700">
+                              Rs. {item.amount.toLocaleString()}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="text-xs text-slate-500 space-y-1 pt-1">
+                          <div>Lent on: <span className="font-semibold text-slate-700">{item.lentDate}</span></div>
+                          {item.expectedReturnDate && (
+                            <div className="flex items-center gap-2">
+                              <span>Return: <span className="font-semibold text-slate-700">{item.expectedReturnDate}</span></span>
+                              {!isComplete && getDaysRemainingBadge(item.expectedReturnDate)}
+                            </div>
+                          )}
+                          {item.isRotation && (
+                            <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200 mt-1">
+                              Short-term Rotation / Temp Lend
                             </span>
                           )}
-                        </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isComplete ? 'bg-slate-100 text-slate-500' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        }`}>
-                          {item.status.replace('_', ' ')}
-                        </span>
-                      </div>
-
-                      <div className="pt-2 flex justify-between items-baseline">
-                        <div>
-                          <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining</span>
-                          <div className="text-xl font-black text-emerald-600">
-                            Rs. {remaining.toLocaleString()}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Initial</span>
-                          <div className="text-xs font-bold text-slate-700">
-                            Rs. {item.amount.toLocaleString()}
-                          </div>
+                          {item.notes && <p className="text-[11px] text-slate-600 italic mt-1">{item.notes}</p>}
                         </div>
                       </div>
 
-                      <div className="text-xs text-slate-500 space-y-1 pt-1">
-                        <div>Lent on: <span className="font-semibold text-slate-700">{item.lentDate}</span></div>
-                        {item.expectedReturnDate && (
-                          <div className="flex items-center gap-2">
-                            <span>Return: <span className="font-semibold text-slate-700">{item.expectedReturnDate}</span></span>
-                            {!isComplete && getDaysRemainingBadge(item.expectedReturnDate)}
+                      {!isComplete && (
+                        <div className="pt-3 border-t border-slate-100 space-y-2">
+                          {/* Reminder Controls */}
+                          <div className="flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => handleToggleReminder(item, e)}
+                              className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition ${
+                                item.reminderSent
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                              }`}
+                              title="Toggle reminder checkmark"
+                            >
+                              <span className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition ${
+                                item.reminderSent ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'
+                              }`}>
+                                {item.reminderSent && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                              </span>
+                              {item.reminderSent ? 'Reminder Sent' : 'Mark Reminded'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleSendReminderPrompt(item)}
+                              className="py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center gap-1 shadow-xs"
+                              title="Open WhatsApp or copy polite reminder text"
+                            >
+                              <Send className="w-3 h-3" />
+                              Send Reminder
+                            </button>
                           </div>
-                        )}
-                        {item.isRotation && (
-                          <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold border border-indigo-200 mt-1">
-                            Short-term Rotation / Temp Lend
-                          </span>
-                        )}
-                        {item.notes && <p className="text-[11px] text-slate-600 italic mt-1">{item.notes}</p>}
-                      </div>
+
+                          <button
+                            onClick={() => {
+                              setRepayTarget({ type: 'lend', item });
+                              setRepayAmount(remaining.toString());
+                            }}
+                            className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-[0.98]"
+                          >
+                            <Check className="w-3.5 h-3.5" /> Record Repayment
+                          </button>
+                        </div>
+                      )}
                     </div>
-
-                    {!isComplete && (
-                      <div className="pt-3 border-t border-slate-100 space-y-2">
-                        {/* Reminder Controls */}
-                        <div className="flex items-center justify-between gap-2">
-                          <button
-                            type="button"
-                            onClick={(e) => handleToggleReminder(item, e)}
-                            className={`flex-1 py-1.5 px-2.5 rounded-xl text-xs font-bold border flex items-center justify-center gap-1.5 transition ${
-                              item.reminderSent
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                            }`}
-                            title="Toggle reminder checkmark"
-                          >
-                            <span className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition ${
-                              item.reminderSent ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 bg-white'
-                            }`}>
-                              {item.reminderSent && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            </span>
-                            {item.reminderSent ? 'Reminder Sent' : 'Mark Reminded'}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => handleSendReminderPrompt(item)}
-                            className="py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center gap-1 shadow-xs"
-                            title="Open WhatsApp or copy polite reminder text"
-                          >
-                            <Send className="w-3 h-3" />
-                            Send Reminder
-                          </button>
-                        </div>
-
-                        <button
-                          onClick={() => {
-                            setRepayTarget({ type: 'lend', item });
-                            setRepayAmount(remaining.toString());
-                          }}
-                          className="w-full py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
-                        >
-                          <Check className="w-3.5 h-3.5" /> Record Repayment
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -2224,11 +2630,21 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </span>
                           )}
                         </div>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isComplete ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700 border border-amber-200'
-                        }`}>
-                          {item.status.replace('_', ' ')}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            isComplete ? 'bg-slate-100 text-slate-500' : 'bg-amber-50 text-amber-700 border border-amber-200'
+                          }`}>
+                            {item.status.replace('_', ' ')}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteBorrow(item.id)}
+                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                            title="Delete Borrow Record"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
 
                       <div className="pt-2 flex justify-between items-baseline">
@@ -2519,6 +2935,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             ) : (
               people.map(p => {
                 const balance = p.netBalance || 0;
+                const pSponsored = expenses.flatMap(exp => {
+                  return (exp.splits || []).filter(s =>
+                    (s.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase() && s.isSponsored
+                  );
+                });
+                const totalSponsored = pSponsored.reduce((acc, s) => acc + (s.amount || 0), 0);
                 return (
                   <div
                     key={p.id}
@@ -2594,6 +3016,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           {p.activeLendsCount || 0} active lend(s) • {p.activeBorrowsCount || 0} active borrow(s)
                         </div>
                       </div>
+
+                      {totalSponsored > 0 && (
+                        <div className="text-[10px] text-indigo-700 bg-indigo-50/80 border border-indigo-200/60 rounded-xl px-2.5 py-1.5 flex items-center justify-between font-bold">
+                          <span className="flex items-center gap-1">🎁 Treats / Sponsored:</span>
+                          <span className="font-black text-indigo-900">Rs. {Math.round(totalSponsored).toLocaleString()}</span>
+                        </div>
+                      )}
 
                       {p.notes && (
                         <p className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
@@ -2867,15 +3296,31 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   Default Companion & Split Preferences
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  Set who is automatically pre-selected when creating new shared expenses or splitting bills.
+                  Set who and which friend group is automatically pre-selected when creating new shared expenses.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Default Split Behavior</label>
+                  <select
+                    value={settingsForm.defaultSplitMode || 'none'}
+                    onChange={e => setSettingsForm(prev => ({ ...prev, defaultSplitMode: e.target.value as any }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="none">Only Me (Personal expense by default)</option>
+                    <option value="50_50">50 / 50 Equal Split with Companion</option>
+                    <option value="group">Split with Group / Friends</option>
+                  </select>
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    Initial split mode opened in the new expense wizard.
+                  </span>
+                </div>
+
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Default Companion Partner</label>
                   <select
-                    value={settingsForm.defaultCompanion}
+                    value={settingsForm.defaultCompanion || ''}
                     onChange={e => setSettingsForm(prev => ({ ...prev, defaultCompanion: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
@@ -2887,23 +3332,26 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     ))}
                   </select>
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    Pre-populates as companion when logging split expenses.
+                    Pre-populates companion when logging split expenses.
                   </span>
                 </div>
 
                 <div>
-                  <label className="block font-bold text-slate-700 mb-1">Default Split Behavior</label>
+                  <label className="block font-bold text-slate-700 mb-1">Default Expense Group</label>
                   <select
-                    value={settingsForm.defaultSplitMode}
-                    onChange={e => setSettingsForm(prev => ({ ...prev, defaultSplitMode: e.target.value as any }))}
+                    value={settingsForm.defaultExpenseGroup || ''}
+                    onChange={e => setSettingsForm(prev => ({ ...prev, defaultExpenseGroup: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="none">Only Me (Personal expense by default)</option>
-                    <option value="50_50">50 / 50 Equal Split with Companion</option>
-                    <option value="group">Split with Group / Friends</option>
+                    <option value="">None (Choose per expense)</option>
+                    {groups.map(g => (
+                      <option key={g.id} value={g.id}>
+                        {g.name} ({g.members?.length || 0} members)
+                      </option>
+                    ))}
                   </select>
                   <span className="text-[10px] text-slate-400 mt-1 block">
-                    Initial split mode opened in the new expense wizard.
+                    Pre-populates group & members in new expense wizard.
                   </span>
                 </div>
               </div>
@@ -2925,7 +3373,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Default Payment Method</label>
                   <select
-                    value={settingsForm.defaultPaymentMethod}
+                    value={settingsForm.defaultPaymentMethod || 'Bank / Card'}
                     onChange={e => setSettingsForm(prev => ({ ...prev, defaultPaymentMethod: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
@@ -2938,7 +3386,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Default Category</label>
                   <select
-                    value={settingsForm.defaultCategory}
+                    value={settingsForm.defaultCategory || effectiveCategories[0] || 'Food & Dining'}
                     onChange={e => setSettingsForm(prev => ({ ...prev, defaultCategory: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
@@ -2951,13 +3399,26 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Default Date Pre-fill</label>
                   <select
-                    value={settingsForm.defaultDateOption}
+                    value={settingsForm.defaultDateOption || 'today'}
                     onChange={e => setSettingsForm(prev => ({ ...prev, defaultDateOption: e.target.value as any }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
                     <option value="today">Today's Date</option>
                     <option value="yesterday">Yesterday's Date</option>
+                    <option value="custom">Fixed / Custom Date</option>
                   </select>
+                  {settingsForm.defaultDateOption === 'custom' && (
+                    <div className="mt-2">
+                      <label className="block font-semibold text-slate-600 text-[10px] mb-1">Custom Pre-fill Date</label>
+                      <input
+                        type="date"
+                        required
+                        value={settingsForm.customDefaultDate || ''}
+                        onChange={e => setSettingsForm(prev => ({ ...prev, customDefaultDate: e.target.value }))}
+                        className="w-full px-3 py-1.5 border border-slate-200 rounded-xl bg-white font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2966,10 +3427,25 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             <div className="flex justify-end pt-2">
               <button
                 type="submit"
-                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-md shadow-indigo-600/20 transition"
+                disabled={isSavingSettings}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-2 shadow-md shadow-indigo-600/20 transition disabled:opacity-60 cursor-pointer"
               >
-                <Check className="w-4 h-4" />
-                Save System Defaults
+                {isSavingSettings ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Saving Defaults...</span>
+                  </>
+                ) : settingsSavedSuccess ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-300" />
+                    <span>Defaults Saved!</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Save System Defaults</span>
+                  </>
+                )}
               </button>
             </div>
           </form>
@@ -3140,10 +3616,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  disabled={groupForm.members.length === 0}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition disabled:opacity-50"
+                  disabled={groupForm.members.length === 0 || isSavingGroup}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  Save Group
+                  {isSavingGroup ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving Group...
+                    </>
+                  ) : (
+                    'Save Group'
+                  )}
                 </button>
               </div>
             </form>
@@ -3863,10 +4346,20 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     </button>
                     <button
                       type="submit"
-                      className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5"
+                      disabled={isSavingExpense}
+                      className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                     >
-                      <Check className="w-4 h-4" />
-                      {expenseForm.id ? 'Update Expense' : 'Save Expense'}
+                      {isSavingExpense ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Saving Expense...
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-4 h-4" />
+                          {expenseForm.id ? 'Update Expense' : 'Save Expense'}
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -3973,9 +4466,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                  disabled={isSavingSet}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Create Set
+                  {isSavingSet ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Creating Set...
+                    </>
+                  ) : (
+                    'Create Set'
+                  )}
                 </button>
               </div>
             </form>
@@ -4142,9 +4643,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20"
+                  disabled={isSavingLend}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Save Lend Record
+                  {isSavingLend ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving Record...
+                    </>
+                  ) : (
+                    'Save Lend Record'
+                  )}
                 </button>
               </div>
             </form>
@@ -4311,9 +4820,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md shadow-amber-600/20"
+                  disabled={isSavingBorrow}
+                  className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl shadow-md shadow-amber-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Save Borrow Record
+                  {isSavingBorrow ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving Record...
+                    </>
+                  ) : (
+                    'Save Borrow Record'
+                  )}
                 </button>
               </div>
             </form>
@@ -4380,9 +4897,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                  disabled={isSavingRepay}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Confirm Repayment
+                  {isSavingRepay ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Recording...
+                    </>
+                  ) : (
+                    'Confirm Repayment'
+                  )}
                 </button>
               </div>
             </form>
@@ -4466,9 +4991,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                  disabled={isSavingPerson}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Save Person
+                  {isSavingPerson ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving Person...
+                    </>
+                  ) : (
+                    'Save Person'
+                  )}
                 </button>
               </div>
             </form>
@@ -4697,9 +5230,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                    disabled={isSavingReconcile}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                   >
-                    Save & Reconcile
+                    {isSavingReconcile ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Reconciling...
+                      </>
+                    ) : (
+                      'Save & Reconcile'
+                    )}
                   </button>
                 </div>
               </div>
@@ -4777,9 +5318,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20"
+                  disabled={isSavingCategory}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-md shadow-indigo-600/20 transition flex items-center gap-1.5 disabled:opacity-60"
                 >
-                  Save Category
+                  {isSavingCategory ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Saving Category...
+                    </>
+                  ) : (
+                    'Save Category'
+                  )}
                 </button>
               </div>
             </form>
@@ -4798,6 +5347,23 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         const pSplits = expenses.filter(e => (e.splitPersonName || '').toLowerCase() === normName);
         const pPaidForMe = expenses.filter(e => (e.paidByPersonName || '').toLowerCase() === normName);
 
+        // Find all sponsored items for this person (absorbed by user as treat/gift, 0 debt to return)
+        const pSponsored = expenses.flatMap(e => {
+          const matchingSplits = (e.splits || []).filter(s =>
+            (s.personName || '').trim().toLowerCase() === normName && s.isSponsored
+          );
+          return matchingSplits.map(s => ({
+            expenseId: e.id,
+            expenseDescription: e.description,
+            date: e.date,
+            category: e.category,
+            amount: s.amount,
+            currency: e.currency,
+            originalAmount: s.originalAmount
+          }));
+        });
+        const totalSponsored = pSponsored.reduce((sum, item) => sum + (item.amount || 0), 0);
+
         const totalLent = pLends.reduce((s, l) => s + (l.amount || 0), 0);
         const totalLentRepaid = pLends.reduce((s, l) => s + (l.repayments || []).reduce((rSum, r) => rSum + (r.amount || 0), 0), 0);
         const outstandingLent = Math.max(0, totalLent - totalLentRepaid);
@@ -4812,9 +5378,9 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         const netLedger = (outstandingLent + totalSplitForThem) - (outstandingBorrowed + totalPaidByThem);
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
-            <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full p-6 shadow-xl space-y-4 max-h-[90vh] flex flex-col">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-xl overflow-hidden">
+              <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0 bg-slate-50/50">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
                     <User className="w-5 h-5" />
@@ -4835,161 +5401,217 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     )}
                   </div>
                 </div>
-                <button onClick={() => setSelectedPersonLedger(null)} className="text-slate-400 hover:text-slate-600">
+                <button onClick={() => setSelectedPersonLedger(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Ledger Summary Cards */}
-              <div className="grid grid-cols-3 gap-2.5 text-xs">
-                <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
-                  <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Owed To You</div>
-                  <div className="text-base font-black text-emerald-700 mt-0.5">
-                    Rs. {(outstandingLent + totalSplitForThem).toLocaleString()}
+              <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4 text-xs">
+                {/* Ledger Summary Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                  <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
+                    <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Owed To You</div>
+                    <div className="text-base font-black text-emerald-700 mt-0.5">
+                      Rs. {(outstandingLent + totalSplitForThem).toLocaleString()}
+                    </div>
+                    <div className="text-[9px] text-emerald-600 mt-0.5">
+                      Lent: Rs. {outstandingLent.toLocaleString()} • Splits: Rs. {totalSplitForThem.toLocaleString()}
+                    </div>
                   </div>
-                  <div className="text-[9px] text-emerald-600 mt-0.5">
-                    Lent: Rs. {outstandingLent.toLocaleString()} • Splits: Rs. {totalSplitForThem.toLocaleString()}
-                  </div>
-                </div>
 
-                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3">
-                  <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">You Owe</div>
-                  <div className="text-base font-black text-amber-700 mt-0.5">
-                    Rs. {(outstandingBorrowed + totalPaidByThem).toLocaleString()}
+                  <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3">
+                    <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">You Owe</div>
+                    <div className="text-base font-black text-amber-700 mt-0.5">
+                      Rs. {(outstandingBorrowed + totalPaidByThem).toLocaleString()}
+                    </div>
+                    <div className="text-[9px] text-amber-600 mt-0.5">
+                      Borrow: Rs. {outstandingBorrowed.toLocaleString()} • Paid: Rs. {totalPaidByThem.toLocaleString()}
+                    </div>
                   </div>
-                  <div className="text-[9px] text-amber-600 mt-0.5">
-                    Borrow: Rs. {outstandingBorrowed.toLocaleString()} • Paid for you: Rs. {totalPaidByThem.toLocaleString()}
-                  </div>
-                </div>
 
-                <div className={`border rounded-xl p-3 ${
-                  netLedger > 0 ? 'bg-emerald-100/50 border-emerald-300' : netLedger < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'
-                }`}>
-                  <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Net Position</div>
-                  <div className={`text-base font-black mt-0.5 ${
-                    netLedger > 0 ? 'text-emerald-700' : netLedger < 0 ? 'text-rose-600' : 'text-slate-700'
+                  <div className={`border rounded-xl p-3 ${
+                    netLedger > 0 ? 'bg-emerald-100/50 border-emerald-300' : netLedger < 0 ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'
                   }`}>
-                    {netLedger > 0 ? `+ Rs. ${netLedger.toLocaleString()}` : netLedger < 0 ? `- Rs. ${Math.abs(netLedger).toLocaleString()}` : 'Rs. 0 (All Settled)'}
+                    <div className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">Net Position</div>
+                    <div className={`text-base font-black mt-0.5 ${
+                      netLedger > 0 ? 'text-emerald-700' : netLedger < 0 ? 'text-rose-600' : 'text-slate-700'
+                    }`}>
+                      {netLedger > 0 ? `+ Rs. ${netLedger.toLocaleString()}` : netLedger < 0 ? `- Rs. ${Math.abs(netLedger).toLocaleString()}` : 'Rs. 0'}
+                    </div>
+                    <div className="text-[9px] text-slate-500 mt-0.5">
+                      {netLedger > 0 ? `${p.name} owes you` : netLedger < 0 ? `You owe ${p.name}` : 'Settled'}
+                    </div>
                   </div>
-                  <div className="text-[9px] text-slate-500 mt-0.5">
-                    {netLedger > 0 ? `${p.name} owes you` : netLedger < 0 ? `You owe ${p.name}` : 'Settled'}
+
+                  <div className="bg-purple-50/70 border border-purple-200 rounded-xl p-3">
+                    <div className="text-[10px] font-bold text-purple-800 uppercase tracking-wider flex items-center gap-1">
+                      <Gift className="w-3 h-3 text-purple-600" />
+                      Sponsored / Treats
+                    </div>
+                    <div className="text-base font-black text-purple-700 mt-0.5">
+                      Rs. {totalSponsored.toLocaleString()}
+                    </div>
+                    <div className="text-[9px] text-purple-600 mt-0.5">
+                      Treated by you • No return needed
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Transactions List */}
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1 text-xs">
-                <div className="font-bold text-slate-700 text-xs">Transaction & Ledger Entries</div>
-
-                {pLends.length === 0 && pBorrows.length === 0 && pSplits.length === 0 && pPaidForMe.length === 0 ? (
-                  <p className="text-slate-400 text-center py-6">No transaction history recorded with {p.name} yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {/* Lends */}
-                    {pLends.map(l => (
-                      <div key={l.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
-                            <ArrowUpRight className="w-3.5 h-3.5" />
-                          </span>
-                          <div>
-                            <div className="font-bold text-slate-800">Lent to {p.name}</div>
-                            <div className="text-[10px] text-slate-400">Date: {l.lentDate} • Status: {l.status}</div>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-black text-emerald-700">Rs. {l.amount.toLocaleString()}</div>
-                          {l.repayments?.length > 0 && (
-                            <div className="text-[10px] text-slate-500">
-                              Returned: Rs. {l.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                {/* Sponsored / Treats Given Section */}
+                {pSponsored.length > 0 && (
+                  <div className="p-3 bg-purple-50/60 border border-purple-200/80 rounded-xl space-y-2">
+                    <div className="font-bold text-purple-950 text-xs flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Gift className="w-3.5 h-3.5 text-purple-600" />
+                        Sponsored & Treats Given (Not a Debt • You Paid)
+                      </span>
+                      <span className="text-[11px] font-black text-purple-700">
+                        Total: Rs. {totalSponsored.toLocaleString()}
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {pSponsored.map((sp, idx) => (
+                        <div key={idx} className="p-2.5 bg-white border border-purple-100 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 bg-purple-100 text-purple-700 rounded-lg">
+                              <Gift className="w-3.5 h-3.5" />
+                            </span>
+                            <div>
+                              <div className="font-bold text-slate-800">{sp.expenseDescription}</div>
+                              <div className="text-[10px] text-slate-500">Date: {sp.date} • {sp.category}</div>
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-
-                    {/* Borrows */}
-                    {pBorrows.map(b => (
-                      <div key={b.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
-                            <ArrowDownLeft className="w-3.5 h-3.5" />
-                          </span>
-                          <div>
-                            <div className="font-bold text-slate-800">Borrowed from {p.name}</div>
-                            <div className="text-[10px] text-slate-400">Date: {b.borrowedDate} • Status: {b.status}</div>
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-black text-amber-700">Rs. {b.amount.toLocaleString()}</div>
-                          {b.repayments?.length > 0 && (
-                            <div className="text-[10px] text-slate-500">
-                              Repaid: Rs. {b.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                          <div className="text-right">
+                            <div className="font-black text-purple-800">
+                              Rs. {sp.amount.toLocaleString()}
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-
-                    {/* Splits */}
-                    {pSplits.map(e => (
-                      <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
-                            <Users className="w-3.5 h-3.5" />
-                          </span>
-                          <div>
-                            <div className="font-bold text-slate-800">Split Outing: {e.description}</div>
-                            <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
+                            <span className="text-[9px] px-1.5 py-0.2 rounded font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                              Gift / Treat
+                            </span>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="font-black text-emerald-700">+ Rs. {(e.splitAmount || 0).toLocaleString()}</div>
-                          <div className="text-[10px] text-slate-400">Total Bill: Rs. {e.amount.toLocaleString()}</div>
-                        </div>
-                      </div>
-                    ))}
-
-                    {/* Paid by them */}
-                    {pPaidForMe.map(e => (
-                      <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
-                            <CreditCard className="w-3.5 h-3.5" />
-                          </span>
-                          <div>
-                            <div className="font-bold text-slate-800">{p.name} paid for: {e.description}</div>
-                            <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-black text-rose-600">- Rs. {e.amount.toLocaleString()}</div>
-                          <div className="text-[10px] text-slate-400">You owe {p.name}</div>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
+
+                {/* Transactions List */}
+                <div className="space-y-2">
+                  <div className="font-bold text-slate-700 text-xs">Lend & Borrow Ledger Entries</div>
+
+                  {pLends.length === 0 && pBorrows.length === 0 && pSplits.length === 0 && pPaidForMe.length === 0 ? (
+                    <p className="text-slate-400 text-center py-6">No transaction history recorded with {p.name} yet.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {/* Lends */}
+                      {pLends.map(l => (
+                        <div key={l.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg">
+                              <ArrowUpRight className="w-3.5 h-3.5" />
+                            </span>
+                            <div>
+                              <div className="font-bold text-slate-800">Lent to {p.name}</div>
+                              <div className="text-[10px] text-slate-400">Date: {l.lentDate} • Status: {l.status}</div>
+                              {l.notes && <div className="text-[10px] text-slate-500 italic mt-0.5">{l.notes}</div>}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-black text-emerald-700">Rs. {l.amount.toLocaleString()}</div>
+                            {l.repayments?.length > 0 && (
+                              <div className="text-[10px] text-slate-500">
+                                Returned: Rs. {l.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Borrows */}
+                      {pBorrows.map(b => (
+                        <div key={b.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
+                              <ArrowDownLeft className="w-3.5 h-3.5" />
+                            </span>
+                            <div>
+                              <div className="font-bold text-slate-800">Borrowed from {p.name}</div>
+                              <div className="text-[10px] text-slate-400">Date: {b.borrowedDate} • Status: {b.status}</div>
+                              {b.notes && <div className="text-[10px] text-slate-500 italic mt-0.5">{b.notes}</div>}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-black text-amber-700">Rs. {b.amount.toLocaleString()}</div>
+                            {b.repayments?.length > 0 && (
+                              <div className="text-[10px] text-slate-500">
+                                Repaid: Rs. {b.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Splits */}
+                      {pSplits.map(e => (
+                        <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
+                              <Users className="w-3.5 h-3.5" />
+                            </span>
+                            <div>
+                              <div className="font-bold text-slate-800">Split Outing: {e.description}</div>
+                              <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-black text-emerald-700">+ Rs. {(e.splitAmount || 0).toLocaleString()}</div>
+                            <div className="text-[10px] text-slate-400">Total Bill: Rs. {e.amount.toLocaleString()}</div>
+                          </div>
+                        </div>
+                      ))}
+
+                      {/* Paid by them */}
+                      {pPaidForMe.map(e => (
+                        <div key={e.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="p-1.5 bg-amber-100 text-amber-700 rounded-lg">
+                              <CreditCard className="w-3.5 h-3.5" />
+                            </span>
+                            <div>
+                              <div className="font-bold text-slate-800">{p.name} paid for: {e.description}</div>
+                              <div className="text-[10px] text-slate-400">Date: {e.date} • Category: {e.category}</div>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-black text-rose-600">- Rs. {e.amount.toLocaleString()}</div>
+                            <div className="text-[10px] text-slate-400">You owe {p.name}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+              <div className="border-t border-slate-100 p-3 sm:p-4 bg-slate-50 flex items-center justify-between gap-2 flex-shrink-0">
                 <button
                   type="button"
                   onClick={() => handleSettlePerson(p)}
                   className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
                     netLedger !== 0
-                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 active:scale-[0.98]'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   }`}
                   disabled={netLedger === 0}
                 >
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  Settle Balance
+                  <Check className="w-3.5 h-3.5" />
+                  Mark Debt as Settled
                 </button>
+
                 <button
                   type="button"
                   onClick={() => setSelectedPersonLedger(null)}
-                  className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 text-xs"
+                  className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-100"
                 >
                   Close
                 </button>

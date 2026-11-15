@@ -40,11 +40,14 @@ export interface FinanceSettings {
     INR: number;
     USD: number;
     EUR: number;
+    [key: string]: number;
   };
   defaultPaymentMethod: string;
   defaultCompanion: string;
+  defaultExpenseGroup?: string;
   defaultCategory: string;
-  defaultDateOption: 'today' | 'yesterday' | 'keep_last';
+  defaultDateOption: 'today' | 'yesterday' | 'custom' | 'keep_last';
+  customDefaultDate?: string;
   defaultSplitMode: 'none' | '50_50' | 'group' | 'custom';
   updatedAt?: string;
 }
@@ -123,6 +126,9 @@ export interface RepaymentRecord {
 
 export interface LendItem {
   id: string;
+  sourceExpenseId?: string | null;
+  expenseSetId?: string | null;
+  groupId?: string | null;
   personName: string;
   contact?: string;
   amount: number;
@@ -142,6 +148,9 @@ export interface LendItem {
 
 export interface BorrowItem {
   id: string;
+  sourceExpenseId?: string | null;
+  expenseSetId?: string | null;
+  groupId?: string | null;
   personName: string;
   contact?: string;
   amount: number;
@@ -298,6 +307,48 @@ async function migratePeopleAndCategories(db: any) {
       });
       existingCatNames.add(lowerCat);
     }
+  }
+
+  // Backfill links between split lends and expenses
+  await backfillLendsAssociation(db);
+}
+
+async function backfillLendsAssociation(db: any) {
+  try {
+    const lendsCol = db.collection('finance_lends');
+    const expensesCol = db.collection('finance_expenses');
+    const unlinkedLends = await lendsCol.find({
+      $or: [
+        { sourceExpenseId: { $exists: false } },
+        { sourceExpenseId: null },
+        { expenseSetId: { $exists: false } }
+      ],
+      notes: { $regex: /^Split from:/i }
+    }).toArray();
+
+    for (const lend of unlinkedLends) {
+      const match = (lend.notes || '').match(/^Split from:\s*([^(]+?)(?:\s*\([^)]*\))?$/);
+      const desc = match ? match[1].trim() : (lend.notes || '').replace(/^Split from:\s*/i, '').trim();
+      if (desc) {
+        const exp = await expensesCol.findOne({
+          description: { $regex: new RegExp(`^${escapeRegex(desc)}$`, 'i') }
+        });
+        if (exp) {
+          await lendsCol.updateOne(
+            { _id: lend._id },
+            {
+              $set: {
+                sourceExpenseId: exp.id,
+                expenseSetId: exp.expenseSetId || null,
+                groupId: exp.groupId || null
+              }
+            }
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Backfill lends warning:', err);
   }
 }
 
@@ -573,6 +624,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
               }
               const autoLend: LendItem = {
                 id: crypto.randomUUID(),
+                sourceExpenseId: newExpense?.id || null,
+                expenseSetId: newExpense?.expenseSetId || null,
+                groupId: newExpense?.groupId || null,
                 personName: pName,
                 contact: '',
                 amount: sAmount,
@@ -597,6 +651,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           }
           const autoLend: LendItem = {
             id: crypto.randomUUID(),
+            sourceExpenseId: newExpense?.id || null,
+            expenseSetId: newExpense?.expenseSetId || null,
+            groupId: newExpense?.groupId || null,
             personName: legacySplitPerson,
             contact: '',
             amount: legacySplitAmount,
@@ -622,6 +679,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           }
           const autoBorrow: BorrowItem = {
             id: crypto.randomUUID(),
+            sourceExpenseId: newExpense?.id || null,
+            expenseSetId: newExpense?.expenseSetId || null,
+            groupId: newExpense?.groupId || null,
             personName: paidByPersonName,
             contact: '',
             amount,
@@ -665,10 +725,79 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
 
         await expensesCol.updateOne({ id: resourceId }, { $set: updates });
         const updated = await expensesCol.findOne({ id: resourceId });
+
+        // If splits are provided on update, re-sync auto-created lends
+        if (body.splits !== undefined) {
+          await lendsCol.deleteMany({ sourceExpenseId: resourceId });
+          const newSplits: SplitParticipant[] = body.splits || [];
+          for (const s of newSplits) {
+            const sAmount = Number(s.amount);
+            if (!s.isSponsored && sAmount > 0) {
+              const pName = s.personName.trim();
+              const pExists = await peopleCol.findOne({ name: { $regex: new RegExp(`^${escapeRegex(pName)}$`, 'i') } });
+              if (!pExists) {
+                await peopleCol.insertOne({ id: crypto.randomUUID(), name: pName, contact: '', isDefault: false, notes: 'Added via split expense', createdAt: now, updatedAt: now });
+              }
+              const autoLend: LendItem = {
+                id: crypto.randomUUID(),
+                sourceExpenseId: resourceId,
+                expenseSetId: body.expenseSetId !== undefined ? (body.expenseSetId || null) : (updated?.expenseSetId || null),
+                groupId: body.groupId !== undefined ? (body.groupId || null) : (updated?.groupId || null),
+                personName: pName,
+                contact: '',
+                amount: sAmount,
+                currency: body.currency || updated?.currency || 'NPR',
+                originalAmount: s.originalAmount !== undefined ? Number(s.originalAmount) : sAmount,
+                lentDate: body.date || updated?.date || now.slice(0, 10),
+                expectedReturnDate: body.expectedReturnDate || '',
+                isRotation: false,
+                status: 'active',
+                notes: `Split from: ${(body.description || updated?.description || 'Expense')} (${pName}'s share)`,
+                repayments: [],
+                createdAt: now,
+                updatedAt: now
+              };
+              await lendsCol.insertOne(autoLend);
+            }
+          }
+        } else if (body.expenseSetId !== undefined) {
+          // If expenseSetId changed, sync existing child lends
+          await lendsCol.updateMany(
+            { sourceExpenseId: resourceId },
+            { $set: { expenseSetId: body.expenseSetId || null } }
+          );
+        }
+
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
       }
 
       if (method === 'DELETE' && resourceId) {
+        const expenseToDelete = await expensesCol.findOne({ id: resourceId });
+
+        // 1. Cascading delete of lends and borrows created by this root expense
+        await lendsCol.deleteMany({ sourceExpenseId: resourceId });
+        await borrowsCol.deleteMany({ sourceExpenseId: resourceId });
+
+        // 2. Fallback cleanup for legacy lends without sourceExpenseId
+        if (expenseToDelete) {
+          const descRegex = new RegExp(`^Split from:\\s*${escapeRegex(expenseToDelete.description)}`, 'i');
+          await lendsCol.deleteMany({
+            sourceExpenseId: { $in: [null, undefined] },
+            notes: { $regex: descRegex }
+          });
+          const borrowDescRegex = new RegExp(`Paid by.*for\\s*${escapeRegex(expenseToDelete.description)}`, 'i');
+          await borrowsCol.deleteMany({
+            sourceExpenseId: { $in: [null, undefined] },
+            notes: { $regex: borrowDescRegex }
+          });
+        }
+
+        // 3. Reset any backlog references
+        await backlogCol.updateMany(
+          { reconciledExpenseId: resourceId },
+          { $set: { status: 'pending', reconciledExpenseId: null, reconciledLendId: null } }
+        );
+
         await expensesCol.deleteOne({ id: resourceId });
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, id: resourceId } };
       }
@@ -679,6 +808,7 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
     // ─────────────────────────────────────────────────────────────────────────
     if (resource === 'lends') {
       if (method === 'GET') {
+        await backfillLendsAssociation(db);
         const items = await lendsCol.find({}).sort({ lentDate: -1, createdAt: -1 }).toArray();
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: items };
       }
@@ -1411,8 +1541,10 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         },
         defaultPaymentMethod: 'Bank / Card',
         defaultCompanion: '',
+        defaultExpenseGroup: '',
         defaultCategory: 'Food & Dining',
         defaultDateOption: 'today',
+        customDefaultDate: '',
         defaultSplitMode: 'none'
       };
 
@@ -1437,9 +1569,11 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
             EUR: Number(body.exchangeRates?.EUR) || 142.0
           },
           defaultPaymentMethod: body.defaultPaymentMethod || 'Bank / Card',
-          defaultCompanion: body.defaultCompanion || '',
+          defaultCompanion: body.defaultCompanion !== undefined ? body.defaultCompanion : '',
+          defaultExpenseGroup: body.defaultExpenseGroup !== undefined ? body.defaultExpenseGroup : '',
           defaultCategory: body.defaultCategory || 'Food & Dining',
           defaultDateOption: body.defaultDateOption || 'today',
+          customDefaultDate: body.customDefaultDate !== undefined ? body.customDefaultDate : '',
           defaultSplitMode: body.defaultSplitMode || 'none',
           updatedAt: now
         };
