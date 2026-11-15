@@ -1,6 +1,19 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
+import * as nodemailer from 'nodemailer';
 import { connectToMongo, verifySession, extractToken } from './db';
+
+const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
+
+function createEmailTransporter() {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: OWNER_EMAIL,
+      pass: process.env.GMAIL_APP_PASSWORD || ''
+    }
+  });
+}
 
 export interface ExpenseSet {
   id: string;
@@ -82,6 +95,7 @@ export interface Person {
   id: string;
   name: string;
   contact?: string;
+  email?: string;
   isDefault?: boolean;
   notes?: string;
   createdAt: string;
@@ -1154,9 +1168,10 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         const newPerson: Person = {
           id: body.id || crypto.randomUUID(),
           name,
-          contact: body.contact || '',
+          contact: body.contact ? body.contact.trim() : '',
+          email: body.email ? body.email.trim() : '',
           isDefault: Boolean(body.isDefault),
-          notes: body.notes || '',
+          notes: body.notes ? body.notes.trim() : '',
           createdAt: now,
           updatedAt: now
         };
@@ -1204,6 +1219,7 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           );
         }
         if (body.contact !== undefined) updates.contact = body.contact;
+        if (body.email !== undefined) updates.email = body.email ? body.email.trim() : '';
         if (body.isDefault !== undefined) updates.isDefault = Boolean(body.isDefault);
         if (body.notes !== undefined) updates.notes = body.notes;
 
@@ -1587,6 +1603,211 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           { upsert: true }
         );
         return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: updated };
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 9. SEND SETTLEMENT & REMINDER EMAIL: POST /api/finance/send-reminder-email
+    // ─────────────────────────────────────────────────────────────────────────
+    if (method === 'POST' && (resource === 'send-reminder-email' || resource === 'remind-email')) {
+      const body: any = await request.json().catch(() => ({}));
+      const {
+        personName,
+        email,
+        setName,
+        totalReceivable = 0,
+        totalSponsored = 0,
+        items = [],
+        sponsoredItems = [],
+        customMessage = '',
+        lendIds = []
+      } = body;
+
+      if (!email || !email.includes('@')) {
+        return { status: 400, jsonBody: { error: 'Valid recipient email address is required.' } };
+      }
+
+      if (!personName) {
+        return { status: 400, jsonBody: { error: 'Person name is required.' } };
+      }
+
+      // Check if GMAIL_APP_PASSWORD is set
+      if (!process.env.GMAIL_APP_PASSWORD) {
+        return {
+          status: 500,
+          jsonBody: { error: 'Email service not configured on server (missing GMAIL_APP_PASSWORD).' }
+        };
+      }
+
+      // If person has no email in database yet, save it
+      try {
+        await peopleCol.updateOne(
+          { name: { $regex: new RegExp(`^${escapeRegex(personName.trim())}$`, 'i') }, $or: [{ email: '' }, { email: { $exists: false } }] },
+          { $set: { email: email.trim(), updatedAt: new Date().toISOString() } }
+        );
+      } catch {}
+
+      // Format clean responsive HTML email
+      const safePerson = personName.trim();
+      const safeSet = (setName || '').trim();
+      const subject = safeSet
+        ? `Expense & Settlement Summary: ${safeSet} • Shudkara`
+        : `Payment Settlement Summary • Shudkara`;
+
+      const itemsHtml = items.length > 0
+        ? `
+          <h4 style="margin: 20px 0 8px; font-size: 14px; font-weight: 700; color: #1e293b;">Shared Expenses / Balance to Settle</h4>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px;">
+            <thead>
+              <tr style="background: #f8fafc; border-bottom: 2px solid #e2e8f0; text-align: left; color: #64748b;">
+                <th style="padding: 8px 10px;">Date</th>
+                <th style="padding: 8px 10px;">Description</th>
+                <th style="padding: 8px 10px; text-align: right;">Amount (Rs.)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map((it: any) => `
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                  <td style="padding: 8px 10px; color: #64748b; white-space: nowrap;">${it.date || '—'}</td>
+                  <td style="padding: 8px 10px; color: #334155; font-weight: 500;">
+                    ${it.description || it.notes || 'Trip split expense'}
+                  </td>
+                  <td style="padding: 8px 10px; text-align: right; font-weight: 700; color: #047857;">
+                    Rs. ${Number(it.amount || 0).toLocaleString()}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `
+        : '';
+
+      const sponsoredHtml = sponsoredItems.length > 0
+        ? `
+          <h4 style="margin: 20px 0 8px; font-size: 14px; font-weight: 700; color: #4338ca;">🎁 Sponsored / Covered by Shudarsan (Gifted • No return required)</h4>
+          <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px;">
+            <thead>
+              <tr style="background: #eef2ff; border-bottom: 2px solid #c7d2fe; text-align: left; color: #4338ca;">
+                <th style="padding: 8px 10px;">Date</th>
+                <th style="padding: 8px 10px;">Treated Item</th>
+                <th style="padding: 8px 10px; text-align: right;">Covered Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sponsoredItems.map((sp: any) => `
+                <tr style="border-bottom: 1px solid #e0e7ff;">
+                  <td style="padding: 8px 10px; color: #6366f1; white-space: nowrap;">${sp.date || '—'}</td>
+                  <td style="padding: 8px 10px; color: #3730a3; font-weight: 500;">
+                    ${sp.description || 'Sponsored treat'}
+                  </td>
+                  <td style="padding: 8px 10px; text-align: right; font-weight: 700; color: #4338ca;">
+                    Rs. ${Number(sp.amount || 0).toLocaleString()}
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `
+        : '';
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        </head>
+        <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; padding: 24px; margin: 0; color: #1e293b;">
+          <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+            <!-- Header -->
+            <div style="background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%); padding: 24px 28px; color: #ffffff;">
+              <h2 style="margin: 0 0 6px 0; font-size: 20px; font-weight: 800; letter-spacing: -0.02em;">Shudkara Finance</h2>
+              <p style="margin: 0; font-size: 13px; opacity: 0.9;">
+                ${safeSet ? `Settlement details for ${safeSet}` : 'Expense & Settlement Reminder'}
+              </p>
+            </div>
+
+            <!-- Body -->
+            <div style="padding: 24px 28px;">
+              <p style="font-size: 15px; margin: 0 0 16px; color: #0f172a;">
+                Hi <strong>${safePerson}</strong>,
+              </p>
+              <p style="font-size: 13px; line-height: 1.5; color: #475569; margin: 0 0 20px;">
+                ${customMessage || `Here is a consolidated breakdown of our shared expenses and settlement for <strong>${safeSet || 'our recent outings'}</strong>.`}
+              </p>
+
+              <!-- Net Summary Banner -->
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; display: flex; justify-content: space-between;">
+                <div>
+                  <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: 0.05em;">Remaining to Settle</div>
+                  <div style="font-size: 24px; font-weight: 900; color: #047857; margin-top: 2px;">
+                    Rs. ${Number(totalReceivable).toLocaleString()}
+                  </div>
+                </div>
+                ${totalSponsored > 0 ? `
+                  <div style="text-align: right;">
+                    <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: #6366f1; letter-spacing: 0.05em;">🎁 Sponsored / Gifted</div>
+                    <div style="font-size: 18px; font-weight: 800; color: #4338ca; margin-top: 4px;">
+                      Rs. ${Number(totalSponsored).toLocaleString()}
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+
+              ${itemsHtml}
+              ${sponsoredHtml}
+
+              <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #64748b; line-height: 1.5;">
+                Whenever you get a moment, you can settle the remaining balance via your preferred payment app (eSewa / Khalti / Bank transfer). Thank you!
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div style="background: #f8fafc; padding: 14px 28px; text-align: center; border-top: 1px solid #f1f5f9; font-size: 11px; color: #94a3b8;">
+              Sent automatically from Shudkara Finance System
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+
+      try {
+        const transporter = createEmailTransporter();
+        await transporter.sendMail({
+          from: `"Shudkara Finance" <${OWNER_EMAIL}>`,
+          to: email.trim(),
+          subject,
+          html: htmlContent
+        });
+
+        // Mark associated lends as reminded
+        const now = new Date().toISOString();
+        if (Array.isArray(lendIds) && lendIds.length > 0) {
+          await lendsCol.updateMany(
+            { id: { $in: lendIds } },
+            { $set: { reminderSent: true, reminderSentAt: now, updatedAt: now } }
+          );
+        } else if (safePerson) {
+          const query: any = {
+            personName: { $regex: new RegExp(`^${escapeRegex(safePerson)}$`, 'i') },
+            status: { $in: ['active', 'partially_returned'] }
+          };
+          if (body.expenseSetId) query.expenseSetId = body.expenseSetId;
+          await lendsCol.updateMany(query, { $set: { reminderSent: true, reminderSentAt: now, updatedAt: now } });
+        }
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { success: true, message: `Settlement email successfully sent to ${email.trim()}` }
+        };
+      } catch (err: any) {
+        context.error('Error sending reminder email:', err);
+        return {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: 'Failed to send reminder email.', details: err.message }
+        };
       }
     }
 

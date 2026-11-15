@@ -5,7 +5,7 @@ import {
   Trash2, X, DollarSign, Layers, ChevronRight, ChevronDown, ChevronUp,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
   Users, CheckCircle2, Edit2, Tag, Bell, BellRing, Send,
-  Settings, Gift, Sliders, CheckSquare, Square, Loader2
+  Settings, Gift, Sliders, CheckSquare, Square, Loader2, Mail, Copy
 } from 'lucide-react';
 
 export interface SplitParticipant {
@@ -183,6 +183,7 @@ export interface Person {
   id: string;
   name: string;
   contact?: string;
+  email?: string;
   isDefault?: boolean;
   notes?: string;
   netReceivable?: number;
@@ -233,10 +234,23 @@ export interface ParticipantItem {
 }
 
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories' | 'settings'>('overview');
-  const [peopleViewMode, setPeopleViewMode] = useState<'people' | 'groups'>('people');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'groups' | 'categories' | 'settings'>('overview');
   const [lendsViewMode, setLendsViewMode] = useState<'consolidated' | 'individual'>('consolidated');
   const [expandedConsolidatedKeys, setExpandedConsolidatedKeys] = useState<Record<string, boolean>>({});
+  const [expandedPersonTxIds, setExpandedPersonTxIds] = useState<Record<string, boolean>>({});
+  const [emailReminderTarget, setEmailReminderTarget] = useState<{
+    personName: string;
+    email: string;
+    setName: string;
+    expenseSetId?: string | null;
+    totalReceivable: number;
+    totalSponsored: number;
+    items: Array<{ id?: string; description: string; date: string; amount: number }>;
+    sponsoredItems: Array<{ description: string; date: string; amount: number }>;
+    lendIds: string[];
+    customMessage: string;
+  } | null>(null);
+  const [isSendingEmailReminder, setIsSendingEmailReminder] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Settings state (offline-first with cache)
@@ -376,6 +390,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     id: '',
     name: '',
     contact: '',
+    email: '',
     isDefault: false,
     notes: ''
   });
@@ -688,23 +703,33 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     });
   };
 
-  // Memoized consolidated lends grouped by person & expense set
+  // Memoized consolidated lends grouped by person & expense set (including sponsored treats)
   const consolidatedLends = useMemo(() => {
     const map = new Map<string, {
       groupKey: string;
       personName: string;
       contact?: string;
+      email?: string;
       expenseSetId?: string | null;
       setName: string;
       items: LendItem[];
+      sponsoredItems: Array<{
+        id: string;
+        expenseId: string;
+        description: string;
+        amount: number;
+        date: string;
+      }>;
       totalAmount: number;
       totalRepaid: number;
       remaining: number;
+      totalSponsored: number;
       latestDate: string;
       allComplete: boolean;
       hasReminderSent: boolean;
     }>();
 
+    // 1. Process all lend items
     for (const item of lends) {
       const key = `${(item.personName || '').trim().toLowerCase()}___${item.expenseSetId || 'general'}`;
       const totalRepaidItem = (item.repayments || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
@@ -714,17 +739,22 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         ? (expenseSets.find(s => s.id === item.expenseSetId)?.name || 'Expense Set')
         : 'Standalone / Direct Lends';
 
+      const personObj = people.find(p => p.name.toLowerCase() === item.personName.trim().toLowerCase());
+
       if (!map.has(key)) {
         map.set(key, {
           groupKey: key,
           personName: item.personName,
-          contact: item.contact,
+          contact: item.contact || personObj?.contact,
+          email: personObj?.email,
           expenseSetId: item.expenseSetId,
           setName,
           items: [item],
+          sponsoredItems: [],
           totalAmount: item.amount,
           totalRepaid: totalRepaidItem,
           remaining: remainingItem,
+          totalSponsored: 0,
           latestDate: item.lentDate,
           allComplete: item.status === 'returned',
           hasReminderSent: Boolean(item.reminderSent)
@@ -738,7 +768,59 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         if (item.lentDate > grp.latestDate) grp.latestDate = item.lentDate;
         if (item.status !== 'returned') grp.allComplete = false;
         if (item.reminderSent) grp.hasReminderSent = true;
-        if (!grp.contact && item.contact) grp.contact = item.contact;
+        if (!grp.contact && (item.contact || personObj?.contact)) grp.contact = item.contact || personObj?.contact;
+        if (!grp.email && personObj?.email) grp.email = personObj.email;
+      }
+    }
+
+    // 2. Process all sponsored items from expenses for this expense set & person
+    for (const exp of expenses) {
+      if (!exp.splits || exp.splits.length === 0) continue;
+      for (const sp of exp.splits) {
+        if (!sp.isSponsored) continue;
+        const pName = (sp.personName || '').trim();
+        if (!pName) continue;
+        const key = `${pName.toLowerCase()}___${exp.expenseSetId || 'general'}`;
+        const setName = exp.expenseSetId
+          ? (expenseSets.find(s => s.id === exp.expenseSetId)?.name || 'Expense Set')
+          : 'Standalone / Direct Lends';
+
+        const spItem = {
+          id: `${exp.id}_${pName}`,
+          expenseId: exp.id,
+          description: exp.description || 'Sponsored treat',
+          amount: sp.amount || 0,
+          date: exp.date
+        };
+
+        const personObj = people.find(p => p.name.toLowerCase() === pName.toLowerCase());
+
+        if (!map.has(key)) {
+          map.set(key, {
+            groupKey: key,
+            personName: pName,
+            contact: personObj?.contact,
+            email: personObj?.email,
+            expenseSetId: exp.expenseSetId,
+            setName,
+            items: [],
+            sponsoredItems: [spItem],
+            totalAmount: 0,
+            totalRepaid: 0,
+            remaining: 0,
+            totalSponsored: spItem.amount,
+            latestDate: exp.date,
+            allComplete: true,
+            hasReminderSent: false
+          });
+        } else {
+          const grp = map.get(key)!;
+          if (!grp.sponsoredItems) grp.sponsoredItems = [];
+          grp.sponsoredItems.push(spItem);
+          grp.totalSponsored = (grp.totalSponsored || 0) + spItem.amount;
+          if (exp.date > grp.latestDate) grp.latestDate = exp.date;
+          if (!grp.email && personObj?.email) grp.email = personObj.email;
+        }
       }
     }
 
@@ -746,7 +828,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       if (a.allComplete !== b.allComplete) return a.allComplete ? 1 : -1;
       return b.latestDate.localeCompare(a.latestDate);
     });
-  }, [lends, expenseSets]);
+  }, [lends, expenseSets, expenses, people]);
 
   // Open Expense Wizard pre-populated with a specific Expense Group
   const openExpenseWithGroup = (group: ExpenseGroup) => {
@@ -1050,6 +1132,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           body: JSON.stringify({
             name: personForm.name.trim(),
             contact: personForm.contact.trim(),
+            email: personForm.email.trim(),
             isDefault: personForm.isDefault,
             notes: personForm.notes.trim()
           })
@@ -1057,7 +1140,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       );
       if (res.ok) {
         setIsPersonModalOpen(false);
-        setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+        setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
         fetchAllData();
       } else {
         const errData = await res.json();
@@ -1471,27 +1554,144 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
+  // Open Reminder / Settlement Modal for an individual lend
+  const handleOpenIndividualReminder = (item: LendItem) => {
+    const person = people.find(p => p.name.toLowerCase() === item.personName.toLowerCase());
+    const repaid = (item.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+    const remaining = Math.max(0, item.amount - repaid);
+
+    // Find any sponsored items for this person under the same expense set (if any)
+    const matchingSponsored = item.expenseSetId
+      ? expenses.flatMap(e => {
+          if (e.expenseSetId !== item.expenseSetId || !e.splits) return [];
+          return e.splits
+            .filter(s => (s.personName || '').toLowerCase() === item.personName.toLowerCase() && s.isSponsored)
+            .map(s => ({ description: e.description || 'Sponsored treat', date: e.date, amount: s.amount }));
+        })
+      : [];
+
+    const setName = item.expenseSetId
+      ? (expenseSets.find(s => s.id === item.expenseSetId)?.name || 'Expense Set')
+      : 'Direct Lend';
+
+    setEmailReminderTarget({
+      personName: item.personName,
+      email: person?.email || '',
+      setName,
+      expenseSetId: item.expenseSetId,
+      totalReceivable: remaining,
+      totalSponsored: matchingSponsored.reduce((s, it) => s + it.amount, 0),
+      items: [{ id: item.id, description: item.notes || `Lend on ${item.lentDate}`, date: item.lentDate, amount: remaining }],
+      sponsoredItems: matchingSponsored,
+      lendIds: [item.id],
+      customMessage: ''
+    });
+  };
+
+  // Open Reminder / Settlement Modal for a consolidated expense set & person
+  const handleOpenConsolidatedReminder = (grp: typeof consolidatedLends[0]) => {
+    const person = people.find(p => p.name.toLowerCase() === grp.personName.toLowerCase());
+    const items = grp.items.map(it => {
+      const repaid = (it.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      return {
+        id: it.id,
+        description: it.notes || `Lend on ${it.lentDate}`,
+        date: it.lentDate,
+        amount: Math.max(0, it.amount - repaid)
+      };
+    });
+    const sponsoredItems = (grp.sponsoredItems || []).map(sp => ({
+      description: sp.description,
+      date: sp.date,
+      amount: sp.amount
+    }));
+
+    setEmailReminderTarget({
+      personName: grp.personName,
+      email: person?.email || grp.email || '',
+      setName: grp.setName,
+      expenseSetId: grp.expenseSetId,
+      totalReceivable: grp.remaining,
+      totalSponsored: grp.totalSponsored || 0,
+      items,
+      sponsoredItems,
+      lendIds: grp.items.map(it => it.id),
+      customMessage: ''
+    });
+  };
+
+  // Send Settlement Email
+  const handleSendEmailReminder = async () => {
+    if (!emailReminderTarget) return;
+    if (!emailReminderTarget.email || !emailReminderTarget.email.includes('@')) {
+      alert('Please enter a valid recipient email address.');
+      return;
+    }
+
+    setIsSendingEmailReminder(true);
+    try {
+      const res = await fetch('/api/finance/send-reminder-email', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          personName: emailReminderTarget.personName,
+          email: emailReminderTarget.email.trim(),
+          setName: emailReminderTarget.setName,
+          expenseSetId: emailReminderTarget.expenseSetId,
+          totalReceivable: emailReminderTarget.totalReceivable,
+          totalSponsored: emailReminderTarget.totalSponsored,
+          items: emailReminderTarget.items,
+          sponsoredItems: emailReminderTarget.sponsoredItems,
+          lendIds: emailReminderTarget.lendIds,
+          customMessage: emailReminderTarget.customMessage
+        })
+      });
+
+      if (res.ok) {
+        setNotiBannerMsg(`Settlement reminder email successfully sent to ${emailReminderTarget.email}!`);
+        setTimeout(() => setNotiBannerMsg(null), 4000);
+        setEmailReminderTarget(null);
+        fetchAllData();
+      } else {
+        const errData = await res.json();
+        alert(errData.error || 'Failed to send reminder email');
+      }
+    } catch (err: any) {
+      console.error('Error sending reminder email:', err);
+      alert(err.message || 'Error sending reminder email');
+    } finally {
+      setIsSendingEmailReminder(false);
+    }
+  };
+
+  // Generate readable settlement text for WhatsApp or clipboard
+  const generateReminderText = (target: typeof emailReminderTarget) => {
+    if (!target) return '';
+    let txt = `Hi ${target.personName},\nHere is our shared expense summary for ${target.setName || 'our recent outing'}:\n\n`;
+    if (target.totalReceivable > 0) {
+      txt += `💰 Remaining to settle: Rs. ${target.totalReceivable.toLocaleString()}\n`;
+      if (target.items.length > 0) {
+        target.items.forEach(it => {
+          txt += `  • ${it.date}: ${it.description} - Rs. ${it.amount.toLocaleString()}\n`;
+        });
+      }
+    } else {
+      txt += `✅ Shared balance is all settled!\n`;
+    }
+    if (target.totalSponsored > 0) {
+      txt += `\n🎁 Sponsored / Treated by Shudarsan (No repayment required):\n`;
+      target.sponsoredItems.forEach(sp => {
+        txt += `  • ${sp.date}: ${sp.description} - Rs. ${sp.amount.toLocaleString()}\n`;
+      });
+      txt += `  Total Sponsored: Rs. ${target.totalSponsored.toLocaleString()}\n`;
+    }
+    txt += `\nThank you!`;
+    return txt;
+  };
+
   // Send Reminder Prompt (WhatsApp / SMS / Clipboard + Auto-check mark)
   const handleSendReminderPrompt = async (lend: LendItem) => {
-    const person = people.find(p => p.name.toLowerCase() === lend.personName.toLowerCase());
-    const phone = person?.contact || lend.contact || '';
-    const cleanPhone = phone.replace(/[^\d+]/g, '');
-    const reminderText = `Hi ${lend.personName}, friendly reminder regarding the Rs. ${lend.amount.toLocaleString()} return expected on ${lend.expectedReturnDate || 'soon'}.`;
-
-    // Automatically mark reminder as sent
-    await handleToggleReminder({ ...lend, reminderSent: false });
-
-    if (cleanPhone) {
-      const waUrl = `https://wa.me/${cleanPhone.replace('+', '')}?text=${encodeURIComponent(reminderText)}`;
-      window.open(waUrl, '_blank');
-    } else {
-      if (navigator.clipboard) {
-        await navigator.clipboard.writeText(reminderText);
-        alert(`Copied polite reminder message to clipboard for ${lend.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
-      } else {
-        alert(`Reminder message for ${lend.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
-      }
-    }
+    handleOpenIndividualReminder(lend);
   };
 
   // Handle Record Repayment
@@ -1639,7 +1839,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
           <button
             onClick={() => {
-              setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+              setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
               setIsPersonModalOpen(true);
             }}
             className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
@@ -1732,7 +1932,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
           { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
           { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
-          { key: 'people', label: 'People & Groups', icon: Users, count: people.length + groups.length },
+          { key: 'people', label: 'People', icon: User, count: people.length },
+          { key: 'groups', label: 'Expense Groups', icon: Users, count: groups.length },
           { key: 'categories', label: 'Categories', icon: Tag, count: categories.length },
           { key: 'settings', label: 'Settings', icon: Settings }
         ].map(tab => {
@@ -2474,7 +2675,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         </div>
 
                         {/* Expense Set / Trip Badge */}
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className={`text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 ${
                             grp.expenseSetId
                               ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
@@ -2483,6 +2684,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             <Layers className="w-3 h-3" />
                             {grp.setName}
                           </span>
+                          {grp.totalSponsored > 0 && (
+                            <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200">
+                              <Gift className="w-3 h-3 text-amber-600" />
+                              Sponsored: Rs. {grp.totalSponsored.toLocaleString()}
+                            </span>
+                          )}
                         </div>
 
                         {/* Amounts Display */}
@@ -2512,59 +2719,91 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           onClick={() => setExpandedConsolidatedKeys(prev => ({ ...prev, [grp.groupKey]: !prev[grp.groupKey] }))}
                           className="w-full py-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
                         >
-                          <span>{isExpanded ? 'Hide Individual Splits' : `View ${grp.items.length} Consolidated ${grp.items.length === 1 ? 'Split' : 'Splits'}`}</span>
+                          <span>
+                            {isExpanded
+                              ? 'Hide Breakdown'
+                              : `View Breakdown (${grp.items.length} ${grp.items.length === 1 ? 'entry' : 'entries'}${grp.totalSponsored > 0 ? ` • ${grp.sponsoredItems.length} sponsored` : ''})`}
+                          </span>
                           {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                         </button>
 
                         {/* Expanded Sub-items List */}
                         {isExpanded && (
-                          <div className="space-y-2 pt-1 border-t border-slate-100 animate-fade-in text-xs">
-                            {grp.items.map(subItem => {
-                              const subRepaid = (subItem.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-                              const subRemaining = Math.max(0, subItem.amount - subRepaid);
-                              return (
-                                <div key={subItem.id} className="p-2.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-1">
-                                  <div className="flex items-center justify-between font-bold text-slate-800">
-                                    <span className="truncate max-w-[200px]" title={subItem.notes || ''}>
-                                      {subItem.notes || `Lend on ${subItem.lentDate}`}
-                                    </span>
-                                    <span className="text-emerald-700 whitespace-nowrap">Rs. {subItem.amount.toLocaleString()}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between text-[11px] text-slate-500">
-                                    <span>Date: {subItem.lentDate}</span>
-                                    <span>Remaining: Rs. {subRemaining.toLocaleString()}</span>
-                                  </div>
-                                  <div className="flex items-center justify-end gap-2 pt-1">
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setRepayTarget({ type: 'lend', item: subItem });
-                                        setRepayAmount(subRemaining.toString());
-                                      }}
-                                      className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
-                                    >
-                                      Record Repayment
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleEditLend(subItem)}
-                                      className="text-slate-400 hover:text-emerald-600 p-0.5 cursor-pointer transition"
-                                      title="Edit this entry"
-                                    >
-                                      <Edit2 className="w-3 h-3" />
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteLend(subItem.id)}
-                                      className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer transition"
-                                      title="Delete this entry"
-                                    >
-                                      <Trash2 className="w-3 h-3" />
-                                    </button>
-                                  </div>
+                          <div className="space-y-3 pt-2 border-t border-slate-100 animate-fade-in text-xs">
+                            {grp.items.length > 0 && (
+                              <div className="space-y-2">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  Shared Entries to Return ({grp.items.length})
+                                </span>
+                                {grp.items.map(subItem => {
+                                  const subRepaid = (subItem.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                                  const subRemaining = Math.max(0, subItem.amount - subRepaid);
+                                  return (
+                                    <div key={subItem.id} className="p-2.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-1">
+                                      <div className="flex items-center justify-between font-bold text-slate-800">
+                                        <span className="truncate max-w-[200px]" title={subItem.notes || ''}>
+                                          {subItem.notes || `Lend on ${subItem.lentDate}`}
+                                        </span>
+                                        <span className="text-emerald-700 whitespace-nowrap">Rs. {subItem.amount.toLocaleString()}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                                        <span>Date: {subItem.lentDate}</span>
+                                        <span>Remaining: Rs. {subRemaining.toLocaleString()}</span>
+                                      </div>
+                                      <div className="flex items-center justify-end gap-2 pt-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setRepayTarget({ type: 'lend', item: subItem });
+                                            setRepayAmount(subRemaining.toString());
+                                          }}
+                                          className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
+                                        >
+                                          Record Repayment
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleEditLend(subItem)}
+                                          className="text-slate-400 hover:text-emerald-600 p-0.5 cursor-pointer transition"
+                                          title="Edit this entry"
+                                        >
+                                          <Edit2 className="w-3 h-3" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleDeleteLend(subItem.id)}
+                                          className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer transition"
+                                          title="Delete this entry"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+
+                            {grp.sponsoredItems && grp.sponsoredItems.length > 0 && (
+                              <div className="space-y-1.5 pt-1">
+                                <div className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1">
+                                  <Gift className="w-3 h-3" />
+                                  Treated / Sponsored by You ({grp.sponsoredItems.length})
                                 </div>
-                              );
-                            })}
+                                {grp.sponsoredItems.map(sp => (
+                                  <div key={sp.id} className="p-2.5 bg-indigo-50/70 border border-indigo-200/80 rounded-xl flex items-center justify-between">
+                                    <div>
+                                      <div className="font-bold text-slate-800 text-xs">{sp.description}</div>
+                                      <div className="text-[10px] text-slate-500">{sp.date} • Covered by Shudarsan</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <div className="font-bold text-indigo-700 text-xs">Rs. {sp.amount.toLocaleString()}</div>
+                                      <span className="text-[9px] font-semibold text-indigo-500">No return needed</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2579,9 +2818,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                                   const rep = (it.repayments || []).reduce((s, r) => s + r.amount, 0);
                                   return it.amount > rep;
                                 }) || grp.items[0];
-                                const rem = Math.max(0, firstUnpaid.amount - (firstUnpaid.repayments || []).reduce((s, r) => s + r.amount, 0));
-                                setRepayTarget({ type: 'lend', item: firstUnpaid });
-                                setRepayAmount(rem > 0 ? rem.toString() : grp.remaining.toString());
+                                const rem = firstUnpaid ? Math.max(0, firstUnpaid.amount - (firstUnpaid.repayments || []).reduce((s, r) => s + r.amount, 0)) : grp.remaining;
+                                if (firstUnpaid) {
+                                  setRepayTarget({ type: 'lend', item: firstUnpaid });
+                                  setRepayAmount(rem > 0 ? rem.toString() : grp.remaining.toString());
+                                }
                               }}
                               className="flex-1 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1 active:scale-[0.98] cursor-pointer"
                             >
@@ -2591,35 +2832,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
                             <button
                               type="button"
-                              onClick={async () => {
-                                const person = people.find(p => p.name.toLowerCase() === grp.personName.toLowerCase());
-                                const phone = person?.contact || grp.contact || '';
-                                const cleanPhone = phone.replace(/[^\d+]/g, '');
-                                const reminderText = `Hi ${grp.personName}, friendly reminder regarding the Rs. ${grp.remaining.toLocaleString()} balance for ${grp.setName} (${grp.items.length} shared entries).`;
-
-                                for (const item of grp.items) {
-                                  if (!item.reminderSent) {
-                                    await handleToggleReminder({ ...item, reminderSent: false });
-                                  }
-                                }
-
-                                if (cleanPhone) {
-                                  const waUrl = `https://wa.me/${cleanPhone.replace('+', '')}?text=${encodeURIComponent(reminderText)}`;
-                                  window.open(waUrl, '_blank');
-                                } else {
-                                  if (navigator.clipboard) {
-                                    await navigator.clipboard.writeText(reminderText);
-                                    alert(`Copied consolidated reminder for ${grp.personName} to clipboard:\n"${reminderText}"\n(Marked as reminded ✓)`);
-                                  } else {
-                                    alert(`Consolidated reminder for ${grp.personName}:\n"${reminderText}"\n(Marked as reminded ✓)`);
-                                  }
-                                }
-                              }}
+                              onClick={() => handleOpenConsolidatedReminder(grp)}
                               className="py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center gap-1 active:scale-[0.98] cursor-pointer"
-                              title="Send consolidated reminder"
+                              title="Send settlement breakdown & email reminder"
                             >
-                              <Send className="w-3 h-3" />
-                              Reminder
+                              <Mail className="w-3 h-3 text-indigo-600" />
+                              Settlement Reminder
                             </button>
                           </div>
                         </div>
@@ -2903,193 +3121,31 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 6. PEOPLE & GROUPS TAB */}
+      {/* 6. PEOPLE DIRECTORY TAB */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'people' && (
         <div className="space-y-5">
-          {/* View Mode Switcher: Companions vs Expense Groups */}
-          <div className="flex items-center justify-between border-b border-slate-200 pb-3 flex-wrap gap-2">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPeopleViewMode('people')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition ${
-                  peopleViewMode === 'people'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" />
-                Companions & Ledgers ({people.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setPeopleViewMode('groups')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition ${
-                  peopleViewMode === 'groups'
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                Expense Groups ({groups.length})
-              </button>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <User className="w-4 h-4 text-indigo-600" />
+                People & Companions Directory
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Track personal debts, shared splits, email reminders, and complete transaction histories per person
+              </p>
             </div>
-
-            {peopleViewMode === 'people' ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
-                  setIsPersonModalOpen(true);
-                }}
-                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-              >
-                <Plus className="w-4 h-4" /> Add Companion
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
-                  setIsGroupModalOpen(true);
-                }}
-                className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-              >
-                <Plus className="w-4 h-4" /> Create Expense Group
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
+                setIsPersonModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" /> Add Person
+            </button>
           </div>
-
-          {peopleViewMode === 'groups' ? (
-            /* EXPENSE GROUPS VIEW */
-            <div className="space-y-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-600">
-                <div>
-                  <span className="font-bold text-slate-900">Expense Groups</span> let you manage recurring travel squads, roommates, and outing friends.
-                  When you split a bill, choosing a group automatically adds all members so you can easily include/exclude or sponsor individuals.
-                </div>
-              </div>
-
-              {groups.length === 0 ? (
-                <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-xs text-slate-500 space-y-3">
-                  <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
-                    <Users className="w-6 h-6" />
-                  </div>
-                  <h3 className="font-bold text-slate-800 text-sm">No Expense Groups Created Yet</h3>
-                  <p className="max-w-md mx-auto text-slate-500 text-[11px]">
-                    Create groups for your trips, outings, roommates, or office lunch squads to split expenses in seconds.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
-                      setIsGroupModalOpen(true);
-                    }}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition"
-                  >
-                    + Create Your First Group
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {groups.map(group => (
-                    <div
-                      key={group.id}
-                      className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
-                    >
-                      <div className="space-y-3">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-                              <Users className="w-4 h-4 text-indigo-600" />
-                              {group.name}
-                            </h3>
-                            {group.description && (
-                              <p className="text-[11px] text-slate-500 mt-0.5">{group.description}</p>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setGroupForm({
-                                  id: group.id,
-                                  name: group.name,
-                                  description: group.description || '',
-                                  members: group.members || [],
-                                  newMemberInput: ''
-                                });
-                                setIsGroupModalOpen(true);
-                              }}
-                              className="p-1 text-slate-400 hover:text-indigo-600 rounded transition"
-                              title="Edit Group"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteGroup(group.id, group.name)}
-                              className="p-1 text-slate-400 hover:text-red-500 rounded transition"
-                              title="Delete Group"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Members Pills */}
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                            Members ({group.members?.length || 0})
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(group.members || []).map((m, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold flex items-center gap-1"
-                              >
-                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
-                                {m}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-
-                        {/* Group Stats */}
-                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                          <div>
-                            <span className="text-[10px] text-slate-450 uppercase font-bold">Total Spent</span>
-                            <div className="font-black text-slate-800">
-                              Rs. {(group.totalSpent || 0).toLocaleString()}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-[10px] text-slate-450 uppercase font-bold">Expenses</span>
-                            <div className="font-bold text-slate-700">
-                              {group.expenseCount || 0} logged
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Quick Action: Log Group Expense */}
-                      <button
-                        type="button"
-                        onClick={() => openExpenseWithGroup(group)}
-                        className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
-                      >
-                        <CreditCard className="w-3.5 h-3.5" />
-                        ⚡ Log Group Expense
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
-            /* COMPANIONS VIEW */
-            <>
 
           {/* Directory Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -3128,7 +3184,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </p>
                 <button
                   type="button"
-                  onClick={() => setIsPersonModalOpen(true)}
+                  onClick={() => {
+                    setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
+                    setIsPersonModalOpen(true);
+                  }}
                   className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition"
                 >
                   Add First Companion
@@ -3137,12 +3196,17 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             ) : (
               people.map(p => {
                 const balance = p.netBalance || 0;
+                const pLends = lends.filter(l => (l.personName || '').toLowerCase() === p.name.toLowerCase());
+                const pBorrows = borrows.filter(b => (b.personName || '').toLowerCase() === p.name.toLowerCase());
                 const pSponsored = expenses.flatMap(exp => {
                   return (exp.splits || []).filter(s =>
                     (s.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase() && s.isSponsored
-                  );
+                  ).map(s => ({ ...s, date: exp.date, description: exp.description }));
                 });
                 const totalSponsored = pSponsored.reduce((acc, s) => acc + (s.amount || 0), 0);
+                const relatedTxsCount = pLends.length + pBorrows.length + pSponsored.length;
+                const isExpanded = Boolean(expandedPersonTxIds[p.id]);
+
                 return (
                   <div
                     key={p.id}
@@ -3159,11 +3223,36 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                               </span>
                             )}
                           </div>
-                          {p.contact && (
-                            <span className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-                              <Phone className="w-3 h-3" /> {p.contact}
-                            </span>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            {p.contact && (
+                              <span className="text-[11px] text-slate-500 flex items-center gap-1">
+                                <Phone className="w-3 h-3 text-slate-400" /> {p.contact}
+                              </span>
+                            )}
+                            {p.email ? (
+                              <span className="text-[11px] text-indigo-600 flex items-center gap-1 font-medium" title={p.email}>
+                                <Mail className="w-3 h-3" /> {p.email}
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPersonForm({
+                                    id: p.id,
+                                    name: p.name,
+                                    contact: p.contact || '',
+                                    email: '',
+                                    isDefault: Boolean(p.isDefault),
+                                    notes: p.notes || ''
+                                  });
+                                  setIsPersonModalOpen(true);
+                                }}
+                                className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 font-bold cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3" /> Add Email
+                              </button>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-1">
                           <button
@@ -3173,12 +3262,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                                 id: p.id,
                                 name: p.name,
                                 contact: p.contact || '',
+                                email: p.email || '',
                                 isDefault: Boolean(p.isDefault),
                                 notes: p.notes || ''
                               });
                               setIsPersonModalOpen(true);
                             }}
-                            className="p-1 text-slate-400 hover:text-indigo-600 rounded transition"
+                            className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
                             title="Edit Person"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -3186,7 +3276,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <button
                             type="button"
                             onClick={() => handleDeletePerson(p.id, p.name)}
-                            className="p-1 text-slate-400 hover:text-red-500 rounded transition"
+                            className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
                             title="Delete Person"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -3221,7 +3311,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
                       {totalSponsored > 0 && (
                         <div className="text-[10px] text-indigo-700 bg-indigo-50/80 border border-indigo-200/60 rounded-xl px-2.5 py-1.5 flex items-center justify-between font-bold">
-                          <span className="flex items-center gap-1">🎁 Treats / Sponsored:</span>
+                          <span className="flex items-center gap-1">
+                            <Gift className="w-3.5 h-3.5 text-indigo-600" />
+                            Treats / Sponsored by You:
+                          </span>
                           <span className="font-black text-indigo-900">Rs. {Math.round(totalSponsored).toLocaleString()}</span>
                         </div>
                       )}
@@ -3231,13 +3324,102 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           {p.notes}
                         </p>
                       )}
+
+                      {/* Expand / Collapse Transactions related to this person */}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedPersonTxIds(prev => ({ ...prev, [p.id]: !prev[p.id] }))}
+                        className="w-full py-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="w-3 h-3 text-slate-500" />
+                          {isExpanded ? 'Hide Transactions' : `View Transactions (${relatedTxsCount})`}
+                        </span>
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
+
+                      {/* Inline Transactions Breakdown */}
+                      {isExpanded && (
+                        <div className="space-y-2.5 pt-2 border-t border-slate-100 animate-fade-in text-xs">
+                          {relatedTxsCount === 0 ? (
+                            <p className="text-[11px] text-slate-400 text-center py-2">No past transactions recorded for {p.name}.</p>
+                          ) : (
+                            <>
+                              {/* Lends to this person */}
+                              {pLends.length > 0 && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
+                                    Money Lent ({pLends.length})
+                                  </span>
+                                  {pLends.map(l => {
+                                    const rep = (l.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+                                    const rem = Math.max(0, l.amount - rep);
+                                    return (
+                                      <div key={l.id} className="p-2 bg-emerald-50/50 border border-emerald-100 rounded-lg flex items-center justify-between">
+                                        <div>
+                                          <div className="font-semibold text-slate-800 text-[11px]">{l.notes || `Lend on ${l.lentDate}`}</div>
+                                          <div className="text-[10px] text-slate-500">{l.lentDate} • Status: {l.status}</div>
+                                        </div>
+                                        <div className="text-right">
+                                          <div className="font-bold text-emerald-700 text-xs">Rs. {l.amount.toLocaleString()}</div>
+                                          {rem > 0 && <span className="text-[9px] text-slate-400">Due: Rs. {rem.toLocaleString()}</span>}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+
+                              {/* Borrows from this person */}
+                              {pBorrows.length > 0 && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
+                                    Money Borrowed ({pBorrows.length})
+                                  </span>
+                                  {pBorrows.map(b => (
+                                    <div key={b.id} className="p-2 bg-amber-50/50 border border-amber-100 rounded-lg flex items-center justify-between">
+                                      <div>
+                                        <div className="font-semibold text-slate-800 text-[11px]">{b.notes || `Borrowed on ${b.borrowedDate}`}</div>
+                                        <div className="text-[10px] text-slate-500">{b.borrowedDate} • Status: {b.status}</div>
+                                      </div>
+                                      <div className="text-right">
+                                        <div className="font-bold text-amber-700 text-xs">Rs. {b.amount.toLocaleString()}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Sponsored items */}
+                              {pSponsored.length > 0 && (
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                                    Sponsored Treats ({pSponsored.length})
+                                  </span>
+                                  {pSponsored.map((sp, idx) => (
+                                    <div key={idx} className="p-2 bg-indigo-50/50 border border-indigo-100 rounded-lg flex items-center justify-between">
+                                      <div>
+                                        <div className="font-semibold text-slate-800 text-[11px]">{sp.description}</div>
+                                        <div className="text-[10px] text-indigo-600">{sp.date} • Gifted</div>
+                                      </div>
+                                      <div className="text-right font-bold text-indigo-700 text-xs">
+                                        Rs. {Number(sp.amount || 0).toLocaleString()}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                       <button
                         type="button"
                         onClick={() => setSelectedPersonLedger(p)}
-                        className="flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700"
+                        className="flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
                         title="View Full Ledger History"
                       >
                         <Clock className="w-3.5 h-3.5 text-indigo-600" />
@@ -3248,7 +3430,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         onClick={() => handleSettlePerson(p)}
                         className={`flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                           balance !== 0
-                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700'
+                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 cursor-pointer'
                             : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                         }`}
                         disabled={balance === 0}
@@ -3262,8 +3444,158 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
               })
             )}
           </div>
-          </>
-        )}
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* 7. EXPENSE GROUPS TAB */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {activeSubTab === 'groups' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-600" />
+                Expense Groups (Squads, Outings & Roommates)
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Manage recurring travel squads and split bills with automated participant pre-fill
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
+                setIsGroupModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            >
+              <Plus className="w-4 h-4" /> Create Expense Group
+            </button>
+          </div>
+
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-600">
+            <div>
+              <span className="font-bold text-slate-900">Expense Groups</span> let you manage recurring travel squads, roommates, and outing friends.
+              When you split a bill, choosing a group automatically adds all members so you can easily include/exclude or sponsor individuals.
+            </div>
+          </div>
+
+          {groups.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-xs text-slate-500 space-y-3">
+              <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+                <Users className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-800 text-sm">No Expense Groups Created Yet</h3>
+              <p className="max-w-md mx-auto text-slate-500 text-[11px]">
+                Create groups for your trips, outings, roommates, or office lunch squads to split expenses in seconds.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
+                  setIsGroupModalOpen(true);
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition cursor-pointer"
+              >
+                + Create Your First Group
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {groups.map(group => (
+                <div
+                  key={group.id}
+                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                          <Users className="w-4 h-4 text-indigo-600" />
+                          {group.name}
+                        </h3>
+                        {group.description && (
+                          <p className="text-[11px] text-slate-500 mt-0.5">{group.description}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setGroupForm({
+                              id: group.id,
+                              name: group.name,
+                              description: group.description || '',
+                              members: group.members || [],
+                              newMemberInput: ''
+                            });
+                            setIsGroupModalOpen(true);
+                          }}
+                          className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
+                          title="Edit Group"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteGroup(group.id, group.name)}
+                          className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
+                          title="Delete Group"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Members Pills */}
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Members ({group.members?.length || 0})
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(group.members || []).map((m, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold flex items-center gap-1"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                            {m}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Group Stats */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-[10px] text-slate-450 uppercase font-bold">Total Spent</span>
+                        <div className="font-black text-slate-800">
+                          Rs. {(group.totalSpent || 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-450 uppercase font-bold">Expenses</span>
+                        <div className="font-bold text-slate-700">
+                          {group.expenseCount || 0} logged
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick Action: Log Group Expense */}
+                  <button
+                    type="button"
+                    onClick={() => openExpenseWithGroup(group)}
+                    className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <CreditCard className="w-3.5 h-3.5" />
+                    ⚡ Log Group Expense
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -4061,6 +4393,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           >
                             Yesterday
                           </button>
+                          {settings.customDefaultDate && (
+                            <button
+                              type="button"
+                              onClick={() => setExpenseForm(prev => ({ ...prev, date: settings.customDefaultDate! }))}
+                              className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                              title={`Set to configured default date: ${settings.customDefaultDate}`}
+                            >
+                              Default ({settings.customDefaultDate})
+                            </button>
+                          )}
                         </div>
                       </div>
                       <input
@@ -4626,7 +4968,28 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Start Date</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-slate-700">Start Date</label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setSetForm(prev => ({ ...prev, startDate: new Date().toISOString().slice(0, 10) }))}
+                          className="text-[9px] font-bold px-1 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                        >
+                          Today
+                        </button>
+                        {settings.customDefaultDate && (
+                          <button
+                            type="button"
+                            onClick={() => setSetForm(prev => ({ ...prev, startDate: settings.customDefaultDate! }))}
+                            className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                            title={`Set default date: ${settings.customDefaultDate}`}
+                          >
+                            Default
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <input
                       type="date"
                       required
@@ -4710,7 +5073,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+                        setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
                         setIsPersonModalOpen(true);
                       }}
                       className="text-[10px] text-emerald-600 hover:text-emerald-800 font-bold flex items-center gap-0.5"
@@ -4792,7 +5155,28 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     )}
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Lent Date</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-slate-700">Lent Date</label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setLendForm(prev => ({ ...prev, lentDate: new Date().toISOString().slice(0, 10) }))}
+                          className="text-[9px] font-bold px-1 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                        >
+                          Today
+                        </button>
+                        {settings.customDefaultDate && (
+                          <button
+                            type="button"
+                            onClick={() => setLendForm(prev => ({ ...prev, lentDate: settings.customDefaultDate! }))}
+                            className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                            title={`Set default date: ${settings.customDefaultDate}`}
+                          >
+                            Default
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <input
                       type="date"
                       required
@@ -4887,7 +5271,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        setPersonForm({ id: '', name: '', contact: '', isDefault: false, notes: '' });
+                        setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
                         setIsPersonModalOpen(true);
                       }}
                       className="text-[10px] text-amber-600 hover:text-amber-800 font-bold flex items-center gap-0.5"
@@ -4969,7 +5353,28 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     )}
                   </div>
                   <div>
-                    <label className="block font-bold text-slate-700 mb-1">Borrowed Date</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-slate-700">Borrowed Date</label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setBorrowForm(prev => ({ ...prev, borrowedDate: new Date().toISOString().slice(0, 10) }))}
+                          className="text-[9px] font-bold px-1 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600"
+                        >
+                          Today
+                        </button>
+                        {settings.customDefaultDate && (
+                          <button
+                            type="button"
+                            onClick={() => setBorrowForm(prev => ({ ...prev, borrowedDate: settings.customDefaultDate! }))}
+                            className="text-[9px] font-bold px-1 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200"
+                            title={`Set default date: ${settings.customDefaultDate}`}
+                          >
+                            Default
+                          </button>
+                        )}
+                      </div>
+                    </div>
                     <input
                       type="date"
                       required
@@ -5156,6 +5561,18 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     onChange={e => setPersonForm(prev => ({ ...prev, contact: e.target.value }))}
                     className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Email Address (for Settlement Reminders)</label>
+                  <input
+                    type="email"
+                    placeholder="e.g. sahil@gmail.com"
+                    value={personForm.email}
+                    onChange={e => setPersonForm(prev => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-0.5">Used to send formal settlement breakdown & trip reminder emails</p>
                 </div>
 
                 <label className="flex items-center gap-2 cursor-pointer p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
@@ -5822,6 +6239,189 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           </div>
         );
       })()}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* MODAL: SETTLEMENT REMINDER & EMAIL BREAKDOWN */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {emailReminderTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-900/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0 bg-slate-50/50">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100">
+                  <Mail className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-base">Send Settlement Breakdown</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {emailReminderTarget.setName || 'Recent Expenses'} • For <span className="font-bold text-slate-800">{emailReminderTarget.personName}</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEmailReminderTarget(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4 text-xs">
+              {/* Summary Badges */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
+                  <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">Amount to Settle</div>
+                  <div className="text-lg font-black text-emerald-800">
+                    Rs. {emailReminderTarget.totalReceivable.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-emerald-600 mt-0.5">
+                    {emailReminderTarget.items.length} payable expense{emailReminderTarget.items.length === 1 ? '' : 's'}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-purple-50 border border-purple-100 rounded-xl">
+                  <div className="text-[10px] font-bold text-purple-600 uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                    <Gift className="w-3 h-3 text-purple-600" />
+                    Treated / Sponsored
+                  </div>
+                  <div className="text-lg font-black text-purple-800">
+                    Rs. {emailReminderTarget.totalSponsored.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-purple-600 mt-0.5">
+                    {emailReminderTarget.sponsoredItems.length} gift treat{emailReminderTarget.sponsoredItems.length === 1 ? '' : 's'} (No return)
+                  </div>
+                </div>
+              </div>
+
+              {/* Email Address Input */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-indigo-600" />
+                  Recipient Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  placeholder={`e.g. ${emailReminderTarget.personName.toLowerCase().replace(/[^a-z0-9]/g, '')}@gmail.com`}
+                  value={emailReminderTarget.email}
+                  onChange={e => setEmailReminderTarget(prev => prev ? ({ ...prev, email: e.target.value }) : null)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  A settlement receipt with itemized breakdown and payment summary will be sent directly to this email.
+                </p>
+              </div>
+
+              {/* Personal Note */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Personal Note / Payment Note (Optional)</label>
+                <textarea
+                  rows={2}
+                  placeholder={`Hi ${emailReminderTarget.personName}, let's settle our shared expenses whenever convenient!`}
+                  value={emailReminderTarget.customMessage}
+                  onChange={e => setEmailReminderTarget(prev => prev ? ({ ...prev, customMessage: e.target.value }) : null)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 text-xs resize-none"
+                />
+              </div>
+
+              {/* Items to Settle */}
+              {emailReminderTarget.items.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="font-bold text-slate-700 text-[11px] flex items-center justify-between">
+                    <span>Payable Items</span>
+                    <span className="text-slate-400 font-normal">Total: Rs. {emailReminderTarget.totalReceivable.toLocaleString()}</span>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-36 overflow-y-auto">
+                    {emailReminderTarget.items.map((item, idx) => (
+                      <div key={idx} className="p-2 flex items-center justify-between text-[11px]">
+                        <div>
+                          <div className="font-semibold text-slate-800">{item.description}</div>
+                          <div className="text-[10px] text-slate-400">{item.date}</div>
+                        </div>
+                        <div className="font-bold text-emerald-700">Rs. {item.amount.toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Sponsored Treats */}
+              {emailReminderTarget.sponsoredItems.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="font-bold text-purple-800 text-[11px] flex items-center justify-between">
+                    <span className="flex items-center gap-1">
+                      <Gift className="w-3 h-3 text-purple-600" />
+                      Treated / Sponsored (Included in summary as gift)
+                    </span>
+                    <span className="text-purple-600 font-normal">Rs. {emailReminderTarget.totalSponsored.toLocaleString()}</span>
+                  </div>
+                  <div className="bg-purple-50/50 border border-purple-200 rounded-xl divide-y divide-purple-100 max-h-28 overflow-y-auto">
+                    {emailReminderTarget.sponsoredItems.map((item, idx) => (
+                      <div key={idx} className="p-2 flex items-center justify-between text-[11px]">
+                        <div>
+                          <div className="font-semibold text-slate-800">{item.description}</div>
+                          <div className="text-[10px] text-purple-500">{item.date} • Sponsored treat</div>
+                        </div>
+                        <div className="font-bold text-purple-700 line-through">Rs. {item.amount.toLocaleString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100 p-3 sm:p-4 bg-slate-50 flex items-center justify-between gap-2 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const text = generateReminderText(emailReminderTarget);
+                  navigator.clipboard.writeText(text);
+                  setNotiBannerMsg('Copied settlement summary to clipboard!');
+                  setTimeout(() => setNotiBannerMsg(null), 3000);
+                }}
+                className="px-3 py-2 border border-slate-200 rounded-xl font-bold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 text-xs transition"
+                title="Copy text summary for WhatsApp or message"
+              >
+                <Copy className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden sm:inline">Copy Text</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEmailReminderTarget(null)}
+                  className="px-3.5 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-100 text-xs"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendEmailReminder}
+                  disabled={isSendingEmailReminder || !emailReminderTarget.email}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                    isSendingEmailReminder || !emailReminderTarget.email
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 active:scale-[0.98]'
+                  }`}
+                >
+                  {isSendingEmailReminder ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      Send Email
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
