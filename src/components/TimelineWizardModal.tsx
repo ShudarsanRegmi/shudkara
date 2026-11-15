@@ -3,7 +3,7 @@ import {
   X, Camera, Upload, Trash2, ArrowRight, ArrowLeft, Check, Sparkles, 
   Calendar, Eye, Image as ImageIcon, Film,
   Clock, AlertCircle, ChevronLeft, ChevronRight,
-  Files, FileText, Plus, ChevronDown, GripVertical
+  Files, FileText, Plus, ChevronDown, GripVertical, Save
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -23,6 +23,7 @@ export interface TimelineDraftMeta {
   content: string;
   category: string;
   rawTags: string;
+  tags?: string[];
   timestamp: string;
   dateMode: 'AD' | 'BS';
   formBsYear: number;
@@ -30,7 +31,11 @@ export interface TimelineDraftMeta {
   formBsDay: number;
   currentStep: 1 | 2 | 3;
   mediaCount: number;
+  mediaFiles?: DraftMediaItem[];
+  status?: 'draft' | 'queued' | 'syncing' | 'failed' | 'synced';
+  syncError?: string;
   updatedAt: number;
+  createdAt?: number;
 }
 
 interface TimelineWizardModalProps {
@@ -53,40 +58,276 @@ export const DRAFTS_LIST_KEY = 'shudkara_timeline_drafts_v2';
 export const ACTIVE_DRAFT_ID_KEY = 'shudkara_timeline_active_draft_id_v2';
 export const LEGACY_DRAFT_META_KEY = 'shudkara_timeline_draft_meta_v1';
 export const IDB_NAME = 'shudkara_timeline_db';
-export const IDB_STORE = 'draft_media';
+export const IDB_STORE_MEDIA = 'draft_media';
+export const IDB_STORE_DRAFTS = 'timeline_drafts';
 
-// IndexedDB Helper for Large Media Drafts
+let cachedDb: IDBDatabase | null = null;
+
+// ── Bulletproof IndexedDB Singleton (v2 with complete Draft persistence) ──
 export async function openDraftDb(): Promise<IDBDatabase> {
+  if (cachedDb) return cachedDb;
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(IDB_NAME, 1);
+    const request = indexedDB.open(IDB_NAME, 2);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(IDB_STORE_MEDIA)) {
+        db.createObjectStore(IDB_STORE_MEDIA, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(IDB_STORE_DRAFTS)) {
+        db.createObjectStore(IDB_STORE_DRAFTS, { keyPath: 'id' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      cachedDb = request.result;
+      cachedDb.onclose = () => { cachedDb = null; };
+      cachedDb.onversionchange = () => { cachedDb?.close(); cachedDb = null; };
+      resolve(cachedDb);
+    };
     request.onerror = () => reject(request.error);
   });
 }
 
-export async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
+/**
+ * 1. Complete Draft Save: Atomically saves writeup text, metadata AND all snap media
+ * into IndexedDB with an explicit oncomplete wait, plus light metadata mirror in localStorage.
+ */
+export async function saveFullDraftToDb(draft: TimelineDraftMeta & { mediaFiles?: DraftMediaItem[] }): Promise<void> {
   try {
     const db = await openDraftDb();
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    const store = tx.objectStore(IDB_STORE);
-    store.put({ id: `media_${draftId}`, items: media });
+    const mediaToSave = draft.mediaFiles || [];
+
+    await new Promise<void>((resolve, reject) => {
+      try {
+        const tx = db.transaction([IDB_STORE_DRAFTS, IDB_STORE_MEDIA], 'readwrite');
+        const draftStore = tx.objectStore(IDB_STORE_DRAFTS);
+        const mediaStore = tx.objectStore(IDB_STORE_MEDIA);
+
+        draftStore.put({
+          ...draft,
+          mediaFiles: mediaToSave,
+          mediaCount: mediaToSave.length,
+          status: draft.status || 'draft',
+          updatedAt: draft.updatedAt || Date.now()
+        });
+
+        mediaStore.put({ id: `media_${draft.id}`, items: mediaToSave });
+
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    // Mirror light metadata to localStorage for synchronous instant UI pre-fills
+    try {
+      const meta = {
+        id: draft.id,
+        title: draft.title,
+        content: draft.content,
+        category: draft.category,
+        rawTags: draft.rawTags,
+        tags: draft.tags,
+        timestamp: draft.timestamp,
+        dateMode: draft.dateMode,
+        formBsYear: draft.formBsYear,
+        formBsMonth: draft.formBsMonth,
+        formBsDay: draft.formBsDay,
+        currentStep: draft.currentStep,
+        mediaCount: mediaToSave.length,
+        status: draft.status || 'draft',
+        syncError: draft.syncError || '',
+        updatedAt: draft.updatedAt || Date.now(),
+        createdAt: draft.createdAt || Date.now()
+      };
+
+      const raw = localStorage.getItem(DRAFTS_LIST_KEY);
+      let list: any[] = [];
+      if (raw) {
+        try { list = JSON.parse(raw); } catch {}
+      }
+      if (!Array.isArray(list)) list = [];
+      const updated = [meta, ...list.filter((d: any) => d.id !== draft.id)];
+      localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+      localStorage.setItem(ACTIVE_DRAFT_ID_KEY, draft.id);
+    } catch {
+      // LocalStorage quota may be full, but IndexedDB has 100% of the data!
+    }
   } catch (e) {
-    console.warn('Failed to save draft media to IndexedDB:', e);
+    console.error('Critical: Failed to save draft to IndexedDB:', e);
   }
 }
 
+/**
+ * 2. Complete Draft Load: Fetches full writeup AND media from IndexedDB
+ */
+export async function loadFullDraftFromDb(draftId: string): Promise<(TimelineDraftMeta & { mediaFiles: DraftMediaItem[] }) | null> {
+  try {
+    const db = await openDraftDb();
+    const fromIdb: (TimelineDraftMeta & { mediaFiles?: DraftMediaItem[] }) | null = await new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE_DRAFTS, 'readonly');
+        const req = tx.objectStore(IDB_STORE_DRAFTS).get(draftId);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      } catch {
+        resolve(null);
+      }
+    });
+
+    if (fromIdb) {
+      if (!fromIdb.mediaFiles || fromIdb.mediaFiles.length === 0) {
+        fromIdb.mediaFiles = await loadMediaFromDb(draftId);
+      }
+      return {
+        ...fromIdb,
+        mediaFiles: fromIdb.mediaFiles || []
+      };
+    }
+
+    // Fallback: check localStorage + IDB media
+    const raw = localStorage.getItem(DRAFTS_LIST_KEY);
+    if (raw) {
+      try {
+        const list = JSON.parse(raw);
+        const found = list.find((d: any) => d.id === draftId);
+        if (found) {
+          const media = await loadMediaFromDb(draftId);
+          return {
+            ...found,
+            mediaFiles: media
+          };
+        }
+      } catch {}
+    }
+
+    // Fallback 2: check outbox queue
+    const outboxRaw = localStorage.getItem('shudkara_offline_outbox');
+    if (outboxRaw) {
+      try {
+        const outbox = JSON.parse(outboxRaw);
+        const item = outbox.find((o: any) => o.body?.draftId === draftId || o.id === draftId);
+        if (item && item.body) {
+          const media = await loadMediaFromDb(draftId);
+          return {
+            id: draftId,
+            title: item.body.title || '',
+            content: item.body.content || '',
+            category: item.body.category || 'General',
+            rawTags: Array.isArray(item.body.tags) ? item.body.tags.join(', ') : '',
+            tags: item.body.tags || [],
+            timestamp: item.body.timestamp || new Date().toISOString(),
+            dateMode: 'AD',
+            formBsYear: adToBs(new Date()).year,
+            formBsMonth: adToBs(new Date()).month,
+            formBsDay: adToBs(new Date()).day,
+            currentStep: 2,
+            mediaFiles: media,
+            mediaCount: media.length,
+            status: 'queued',
+            updatedAt: item.timestamp || Date.now(),
+            createdAt: item.timestamp || Date.now()
+          };
+        }
+      } catch {}
+    }
+
+    return null;
+  } catch (err) {
+    console.error('Failed to load full draft from IndexedDB:', err);
+    return null;
+  }
+}
+
+/**
+ * 3. List all drafts across IndexedDB, localStorage, and outbox with unified deduplication
+ */
+export async function listAllDraftsFromDb(): Promise<TimelineDraftMeta[]> {
+  const draftsMap = new Map<string, TimelineDraftMeta>();
+
+  // A. Load from IndexedDB
+  try {
+    const db = await openDraftDb();
+    const idbDrafts: TimelineDraftMeta[] = await new Promise((resolve) => {
+      try {
+        const tx = db.transaction(IDB_STORE_DRAFTS, 'readonly');
+        const req = tx.objectStore(IDB_STORE_DRAFTS).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      } catch {
+        resolve([]);
+      }
+    });
+    for (const d of idbDrafts) {
+      if (d && d.id) draftsMap.set(d.id, d);
+    }
+  } catch {}
+
+  // B. Merge with localStorage
+  try {
+    const raw = localStorage.getItem(DRAFTS_LIST_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const meta of parsed) {
+          if (meta && meta.id && !draftsMap.has(meta.id)) {
+            draftsMap.set(meta.id, meta);
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // C. Merge with outbox
+  try {
+    const outboxRaw = localStorage.getItem('shudkara_offline_outbox');
+    if (outboxRaw) {
+      const outbox = JSON.parse(outboxRaw);
+      if (Array.isArray(outbox)) {
+        for (const item of outbox) {
+          if (item.subapp === 'timeline' && item.body && (item.body.content || item.body.title)) {
+            const draftKey = item.body.draftId || `recovered_${item.id}`;
+            if (!draftsMap.has(draftKey)) {
+              draftsMap.set(draftKey, {
+                id: draftKey,
+                title: item.body.title || '',
+                content: item.body.content || '',
+                category: item.body.category || 'General',
+                rawTags: Array.isArray(item.body.tags) ? item.body.tags.join(', ') : '',
+                tags: item.body.tags || [],
+                timestamp: item.body.timestamp || new Date().toISOString(),
+                dateMode: 'AD',
+                formBsYear: adToBs(new Date()).year,
+                formBsMonth: adToBs(new Date()).month,
+                formBsDay: adToBs(new Date()).day,
+                currentStep: 2,
+                mediaCount: 0,
+                status: 'queued',
+                updatedAt: item.timestamp || Date.now(),
+                createdAt: item.timestamp || Date.now()
+              });
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const result = Array.from(draftsMap.values());
+  result.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  return result;
+}
+
+/**
+ * 4. Backward-compatible Media Load
+ */
 export async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]> {
   try {
     const db = await openDraftDb();
     return new Promise((resolve) => {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const store = tx.objectStore(IDB_STORE);
+      const tx = db.transaction([IDB_STORE_MEDIA], 'readonly');
+      const store = tx.objectStore(IDB_STORE_MEDIA);
       const req = store.get(`media_${draftId}`);
       req.onsuccess = () => {
         if (req.result && Array.isArray(req.result.items)) {
@@ -111,34 +352,89 @@ export async function loadMediaFromDb(draftId: string): Promise<DraftMediaItem[]
   }
 }
 
-export async function clearDraftFromDb(draftId: string) {
+export async function saveMediaToDb(draftId: string, media: DraftMediaItem[]) {
   try {
     const db = await openDraftDb();
-    const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).delete(`media_${draftId}`);
-    tx.objectStore(IDB_STORE).delete('current_draft_media');
-  } catch {}
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_MEDIA, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_MEDIA);
+      store.put({ id: `media_${draftId}`, items: media });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn('Failed to save draft media to IndexedDB:', e);
+  }
 }
 
-export async function finalizeSuccessfulDraftUpload(draftId: string) {
+/**
+ * 5. Permanent deletion: removes from IndexedDB and LocalStorage
+ */
+export async function deleteFullDraftFromDb(draftId: string): Promise<void> {
   try {
-    await clearDraftFromDb(draftId);
+    const db = await openDraftDb();
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction([IDB_STORE_DRAFTS, IDB_STORE_MEDIA], 'readwrite');
+        tx.objectStore(IDB_STORE_DRAFTS).delete(draftId);
+        tx.objectStore(IDB_STORE_MEDIA).delete(`media_${draftId}`);
+        tx.objectStore(IDB_STORE_MEDIA).delete('current_draft_media');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+
     const raw = localStorage.getItem(DRAFTS_LIST_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        const updated = parsed.filter((d: any) => d.id !== draftId);
-        localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
-        if (updated.length > 0) {
-          localStorage.setItem(ACTIVE_DRAFT_ID_KEY, updated[0].id);
-        } else {
-          localStorage.removeItem(ACTIVE_DRAFT_ID_KEY);
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const updated = parsed.filter((d: any) => d.id !== draftId);
+          localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
+          if (updated.length > 0) {
+            localStorage.setItem(ACTIVE_DRAFT_ID_KEY, updated[0].id);
+          } else {
+            localStorage.removeItem(ACTIVE_DRAFT_ID_KEY);
+          }
         }
-      }
+      } catch {}
     }
-  } catch (e) {
-    console.warn('Error clearing successful draft:', e);
+  } catch (err) {
+    console.warn('Error deleting draft from DB:', err);
   }
+}
+
+export async function clearDraftFromDb(draftId: string) {
+  return deleteFullDraftFromDb(draftId);
+}
+
+/**
+ * 6. Mark a draft as failed with explicit reason so user can see it in drafts
+ */
+export async function markDraftFailed(draftId: string, errorMsg: string): Promise<void> {
+  try {
+    const draft = await loadFullDraftFromDb(draftId);
+    if (draft) {
+      draft.status = 'failed';
+      draft.syncError = errorMsg;
+      draft.updatedAt = Date.now();
+      await saveFullDraftToDb(draft);
+      window.dispatchEvent(new CustomEvent('shudkara:drafts-updated'));
+    }
+  } catch (err) {
+    console.warn('Error marking draft as failed:', err);
+  }
+}
+
+/**
+ * 7. Finalize draft ONLY when 100% of post and photos have been confirmed on server!
+ */
+export async function finalizeSuccessfulDraftUpload(draftId: string): Promise<void> {
+  await deleteFullDraftFromDb(draftId);
+  window.dispatchEvent(new CustomEvent('shudkara:draft-finalized', { detail: { draftId } }));
+  window.dispatchEvent(new CustomEvent('shudkara:drafts-updated'));
 }
 
 // Client-side image optimization helper for high-res photos
@@ -314,55 +610,57 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ── Load Draft by ID ───────────────────────────────────────────────────
+  // ── Load Draft by ID with Full Content & Snaps ─────────────────────────
   const loadDraftById = async (draftId: string) => {
     setHasDraftLoaded(false);
     try {
-      const stored = getStoredDrafts();
-      const existing = stored.find(d => d.id === draftId);
-      if (existing) {
-        setTitle(existing.title || '');
-        setContent(existing.content || '');
-        setCategory(existing.category || 'General');
-        setRawTags(existing.rawTags || '');
-        if (existing.timestamp) {
-          setTimestamp(existing.timestamp);
-          const bs = adToBs(new Date(existing.timestamp));
-          setFormBsYear(existing.formBsYear || bs.year);
-          setFormBsMonth(existing.formBsMonth || bs.month);
-          setFormBsDay(existing.formBsDay || bs.day);
+      const fullDraft = await loadFullDraftFromDb(draftId);
+      if (fullDraft) {
+        setTitle(fullDraft.title || '');
+        setContent(fullDraft.content || '');
+        setCategory(fullDraft.category || 'General');
+        setRawTags(fullDraft.rawTags || '');
+        if (fullDraft.timestamp) {
+          setTimestamp(fullDraft.timestamp);
+          const bs = adToBs(new Date(fullDraft.timestamp));
+          setFormBsYear(fullDraft.formBsYear || bs.year);
+          setFormBsMonth(fullDraft.formBsMonth || bs.month);
+          setFormBsDay(fullDraft.formBsDay || bs.day);
         }
-        if (existing.dateMode) setDateMode(existing.dateMode);
-        if (existing.currentStep) setCurrentStep(existing.currentStep);
+        if (fullDraft.dateMode) setDateMode(fullDraft.dateMode);
+        if (fullDraft.currentStep) setCurrentStep(fullDraft.currentStep);
 
-        const mediaItems = await loadMediaFromDb(existing.id);
-        setSelectedFiles(mediaItems);
+        const media = fullDraft.mediaFiles || [];
+        setSelectedFiles(media);
+        setLastSavedTime(new Date(fullDraft.updatedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       } else {
         // Check legacy v1 draft for migration
         const legacyMetaStr = localStorage.getItem(LEGACY_DRAFT_META_KEY);
         if (legacyMetaStr) {
-          const meta = JSON.parse(legacyMetaStr);
-          if (meta.title !== undefined) setTitle(meta.title);
-          if (meta.content !== undefined) setContent(meta.content);
-          if (meta.category !== undefined) setCategory(meta.category);
-          if (meta.rawTags !== undefined) setRawTags(meta.rawTags);
-          if (meta.timestamp) {
-            setTimestamp(meta.timestamp);
-            const bs = adToBs(new Date(meta.timestamp));
-            setFormBsYear(bs.year);
-            setFormBsMonth(bs.month);
-            setFormBsDay(bs.day);
-          }
-          if (meta.dateMode) setDateMode(meta.dateMode);
-          if (meta.currentStep) setCurrentStep(meta.currentStep);
+          try {
+            const meta = JSON.parse(legacyMetaStr);
+            if (meta.title !== undefined) setTitle(meta.title);
+            if (meta.content !== undefined) setContent(meta.content);
+            if (meta.category !== undefined) setCategory(meta.category);
+            if (meta.rawTags !== undefined) setRawTags(meta.rawTags);
+            if (meta.timestamp) {
+              setTimestamp(meta.timestamp);
+              const bs = adToBs(new Date(meta.timestamp));
+              setFormBsYear(bs.year);
+              setFormBsMonth(bs.month);
+              setFormBsDay(bs.day);
+            }
+            if (meta.dateMode) setDateMode(meta.dateMode);
+            if (meta.currentStep) setCurrentStep(meta.currentStep);
 
-          const mediaItems = await loadMediaFromDb('current_draft_media');
-          setSelectedFiles(mediaItems);
-          localStorage.removeItem(LEGACY_DRAFT_META_KEY);
+            const mediaItems = await loadMediaFromDb('current_draft_media');
+            setSelectedFiles(mediaItems);
+            localStorage.removeItem(LEGACY_DRAFT_META_KEY);
+          } catch {}
         }
       }
     } catch (err) {
-      console.warn('Failed to restore draft:', err);
+      console.warn('Failed to restore draft from DB:', err);
     } finally {
       setHasDraftLoaded(true);
     }
@@ -372,46 +670,73 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     loadDraftById(activeDraftId);
   }, [activeDraftId]);
 
-  // ── Auto-Save Active Draft on Change ────────────────────────────────────
+  // Initial and reactive refresh of all saved drafts
+  const refreshAllDrafts = async () => {
+    const list = await listAllDraftsFromDb();
+    setDraftsList(list);
+  };
+
+  useEffect(() => {
+    refreshAllDrafts();
+    window.addEventListener('shudkara:drafts-updated', refreshAllDrafts);
+    return () => window.removeEventListener('shudkara:drafts-updated', refreshAllDrafts);
+  }, []);
+
+  // ── Bulletproof Save Helper: Guarantees text + photos are safely committed ──
+  const persistDraftImmediately = async (customStatus?: TimelineDraftMeta['status'], customError?: string) => {
+    if (!activeDraftId) return;
+    const isMeaningful = title.trim() || content.trim() || selectedFiles.length > 0;
+    if (!isMeaningful) return;
+
+    const draftObj: TimelineDraftMeta & { mediaFiles: DraftMediaItem[] } = {
+      id: activeDraftId,
+      title: title.trim(),
+      content: content.trim(),
+      category: category.trim() || 'General',
+      rawTags,
+      tags: rawTags.split(',').map(t => t.trim()).filter(Boolean),
+      timestamp,
+      dateMode,
+      formBsYear,
+      formBsMonth,
+      formBsDay,
+      currentStep,
+      mediaCount: selectedFiles.length,
+      mediaFiles: selectedFiles,
+      status: customStatus || 'draft',
+      syncError: customError,
+      updatedAt: Date.now(),
+      createdAt: Date.now()
+    };
+
+    await saveFullDraftToDb(draftObj);
+    setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    await refreshAllDrafts();
+  };
+
+  // ── Auto-Save Active Draft on Change (Debounced 300ms) ───────────────────
   useEffect(() => {
     if (!hasDraftLoaded || !activeDraftId) return;
 
     const timer = setTimeout(() => {
-      const draftMeta: TimelineDraftMeta = {
-        id: activeDraftId,
-        title: title.trim(),
-        content: content.trim(),
-        category,
-        rawTags,
-        timestamp,
-        dateMode,
-        formBsYear,
-        formBsMonth,
-        formBsDay,
-        currentStep,
-        mediaCount: selectedFiles.length,
-        updatedAt: Date.now()
-      };
-
-      const isMeaningful = title.trim() || content.trim() || selectedFiles.length > 0;
-      if (isMeaningful) {
-        setDraftsList(prev => {
-          const filtered = prev.filter(d => d.id !== activeDraftId);
-          const updated = [draftMeta, ...filtered];
-          localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
-          return updated;
-        });
-        localStorage.setItem(ACTIVE_DRAFT_ID_KEY, activeDraftId);
-        saveMediaToDb(activeDraftId, selectedFiles);
-        setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      }
-    }, 400);
+      persistDraftImmediately();
+    }, 300);
 
     return () => clearTimeout(timer);
   }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
 
+  // Flush on unmount / modal close so not even 1 character is ever lost
+  useEffect(() => {
+    return () => {
+      if (hasDraftLoaded) {
+        persistDraftImmediately();
+      }
+    };
+  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
+
   // Create New Draft
-  const handleCreateNewDraft = () => {
+  const handleCreateNewDraft = async () => {
+    await persistDraftImmediately();
     const newId = generateDraftId();
     setTitle('');
     setContent('');
@@ -432,11 +757,13 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   };
 
   // Switch Draft
-  const handleSwitchDraft = (targetId: string) => {
+  const handleSwitchDraft = async (targetId: string) => {
     if (targetId === activeDraftId) {
       setShowDraftsMenu(false);
       return;
     }
+    // Flush current work first
+    await persistDraftImmediately();
     setActiveDraftId(targetId);
     localStorage.setItem(ACTIVE_DRAFT_ID_KEY, targetId);
     setShowDraftsMenu(false);
@@ -447,10 +774,9 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     if (e) e.stopPropagation();
     if (!window.confirm('Delete this draft permanently?')) return;
 
-    await clearDraftFromDb(targetId);
-    const updated = draftsList.filter(d => d.id !== targetId);
+    await deleteFullDraftFromDb(targetId);
+    const updated = await listAllDraftsFromDb();
     setDraftsList(updated);
-    localStorage.setItem(DRAFTS_LIST_KEY, JSON.stringify(updated));
 
     if (activeDraftId === targetId) {
       if (updated.length > 0) {
@@ -571,7 +897,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   };
 
   // Publish Moment: Immediately minimizes to background floating upload widget
-  const handlePublish = () => {
+  const handlePublish = async () => {
     if (!content.trim()) {
       setErrorMsg('Please write some content or note for this moment.');
       setCurrentStep(2);
@@ -579,6 +905,10 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     }
 
     const tagsArray = rawTags.split(',').map(t => t.trim()).filter(Boolean);
+    
+    // 1. Force save all text and snaps to IndexedDB as queued BEFORE modal unmounts!
+    await persistDraftImmediately('queued');
+
     onSubmit({
       draftId: activeDraftId,
       title: title.trim(),
@@ -621,6 +951,17 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Manual Immediate Save to IndexedDB */}
+            <button
+              type="button"
+              onClick={() => persistDraftImmediately()}
+              className="px-2.5 py-1.5 bg-white border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50 text-slate-700 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-xs transition"
+              title="Force save draft immediately to device IndexedDB storage"
+            >
+              <Save className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Save Draft</span>
+            </button>
+
             {/* Multiple Drafts Switcher Button */}
             <div className="relative">
               <button
@@ -636,7 +977,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
               {/* Drafts Dropdown Menu */}
               {showDraftsMenu && (
-                <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95">
+                <div className="absolute right-0 top-full mt-2 w-72 sm:w-84 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                     <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
                       <Files className="w-3.5 h-3.5 text-blue-600" /> Saved Drafts ({draftsList.length})
@@ -650,29 +991,45 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                     </button>
                   </div>
 
-                  <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                  <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
                     {draftsList.map((d) => (
                       <div
                         key={d.id}
                         onClick={() => handleSwitchDraft(d.id)}
                         className={`p-2.5 rounded-xl border text-left cursor-pointer flex items-center justify-between transition ${
                           d.id === activeDraftId 
-                            ? 'bg-blue-50/70 border-blue-300' 
+                            ? 'bg-blue-50/70 border-blue-300 ring-1 ring-blue-400/40' 
                             : 'bg-slate-50/50 border-slate-100 hover:bg-slate-100'
                         }`}
                       >
                         <div className="min-w-0 pr-2">
-                          <p className="text-xs font-bold text-slate-800 truncate">
-                            {d.title || d.content?.slice(0, 30) || 'Untitled Draft'}
-                          </p>
-                          <p className="text-[10px] text-slate-400">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-bold text-slate-800 truncate">
+                              {d.title || d.content?.slice(0, 28) || 'Untitled Draft'}
+                            </p>
+                            {d.status === 'failed' ? (
+                              <span className="text-[9px] px-1.5 py-0.2 bg-red-100 text-red-700 font-bold rounded-full shrink-0">
+                                ⚠️ Sync Failed
+                              </span>
+                            ) : d.status === 'queued' ? (
+                              <span className="text-[9px] px-1.5 py-0.2 bg-amber-100 text-amber-700 font-bold rounded-full shrink-0">
+                                🕒 Queued
+                              </span>
+                            ) : null}
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-0.5">
                             {d.mediaCount > 0 ? `${d.mediaCount} snaps • ` : ''}{new Date(d.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </p>
+                          {d.syncError && (
+                            <p className="text-[9px] text-red-600 truncate mt-0.5" title={d.syncError}>
+                              {d.syncError}
+                            </p>
+                          )}
                         </div>
                         <button
                           type="button"
                           onClick={(e) => handleDeleteDraft(d.id, e)}
-                          className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition"
+                          className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition shrink-0"
                           title="Delete draft"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

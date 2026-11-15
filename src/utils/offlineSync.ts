@@ -161,6 +161,9 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
           console.warn(`Offline action rejected by server with status ${response.status}:`, item.description);
           removeOfflineAction(item.id);
           failed++;
+          window.dispatchEvent(new CustomEvent('shudkara:action-sync-failed', { 
+            detail: { action: item, status: response.status, error: `Server rejected request (HTTP ${response.status})` } 
+          }));
         } else {
           // Server error 5xx, increment retry and keep in queue
           item.retries += 1;
@@ -168,6 +171,9 @@ export async function syncOfflineQueue(): Promise<{ synced: number; failed: numb
           const updated = q.map(i => (i.id === item.id ? { ...i, retries: item.retries } : i));
           saveOfflineQueue(updated);
           failed++;
+          window.dispatchEvent(new CustomEvent('shudkara:action-sync-failed', { 
+            detail: { action: item, status: response.status, error: `Server error (HTTP ${response.status}), retrying later.` } 
+          }));
         }
       } catch (err) {
         // Network fetch threw (offline or dropped connection)

@@ -11,7 +11,11 @@ import {
   type BikramSambatDate 
 } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
-import { TimelineWizardModal, type DraftMediaItem, finalizeSuccessfulDraftUpload, loadMediaFromDb } from './TimelineWizardModal';
+import { 
+  TimelineWizardModal, type DraftMediaItem, type TimelineDraftMeta,
+  finalizeSuccessfulDraftUpload, loadMediaFromDb, saveFullDraftToDb, 
+  markDraftFailed, listAllDraftsFromDb 
+} from './TimelineWizardModal';
 import { TimelineSidebar } from './TimelineSidebar';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 import { MediaCollageGrid } from './MediaCollageGrid';
@@ -116,8 +120,27 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   // Sidebar Drawer state
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  // Social Wizard Modal State
+  // Social Wizard Modal State & Preserved Drafts
   const [showWizard, setShowWizard] = useState(false);
+  const [pendingDrafts, setPendingDrafts] = useState<TimelineDraftMeta[]>([]);
+  const [selectedDraftIdToOpen, setSelectedDraftIdToOpen] = useState<string | undefined>(undefined);
+
+  const refreshPendingDrafts = async () => {
+    try {
+      const drafts = await listAllDraftsFromDb();
+      setPendingDrafts(drafts);
+    } catch {}
+  };
+
+  useEffect(() => {
+    refreshPendingDrafts();
+    window.addEventListener('shudkara:drafts-updated', refreshPendingDrafts);
+    window.addEventListener('shudkara:draft-finalized', refreshPendingDrafts);
+    return () => {
+      window.removeEventListener('shudkara:drafts-updated', refreshPendingDrafts);
+      window.removeEventListener('shudkara:draft-finalized', refreshPendingDrafts);
+    };
+  }, []);
 
   // Editing state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -228,11 +251,12 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         const postId = responseData?.postId;
 
         if (postId) {
+          let mediaError: string | null = null;
           try {
             const mediaItems = await loadMediaFromDb(draftId);
             if (mediaItems && mediaItems.length > 0) {
               for (const file of mediaItems) {
-                await fetch(`/api/timeline/${postId}/media`, {
+                const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',
@@ -244,22 +268,46 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                     base64: file.base64
                   })
                 });
+                if (!mediaRes.ok) {
+                  const errJson = await mediaRes.json().catch(() => ({}));
+                  mediaError = errJson.error || `Failed to upload "${file.name}"`;
+                  break;
+                }
               }
             }
-          } catch (err) {
-            console.warn('Error uploading media for synced offline draft:', err);
+          } catch (err: any) {
+            mediaError = err?.message || 'Network glitch uploading snaps';
           }
-        }
 
-        // Only after the server has accepted the post and processed media do we retire the draft
-        await finalizeSuccessfulDraftUpload(draftId);
-        fetchPosts(true);
-        fetchFilterMetadata();
+          if (mediaError) {
+            // NEVER lose draft! Mark as failed and retain all snaps safely in IndexedDB
+            await markDraftFailed(draftId, mediaError);
+          } else {
+            // Only after the server has accepted the post and processed media do we retire the draft
+            await finalizeSuccessfulDraftUpload(draftId);
+          }
+          fetchPosts(true);
+          fetchFilterMetadata();
+          refreshPendingDrafts();
+        }
+      }
+    };
+
+    const handleActionFailed = async (e: any) => {
+      const action = e.detail?.action;
+      const errorMsg = e.detail?.error || 'Sync failed';
+      if (action && action.subapp === 'timeline' && action.body?.draftId) {
+        await markDraftFailed(action.body.draftId, errorMsg);
+        refreshPendingDrafts();
       }
     };
 
     window.addEventListener('shudkara:action-synced', handleActionSynced);
-    return () => window.removeEventListener('shudkara:action-synced', handleActionSynced);
+    window.addEventListener('shudkara:action-sync-failed', handleActionFailed);
+    return () => {
+      window.removeEventListener('shudkara:action-synced', handleActionSynced);
+      window.removeEventListener('shudkara:action-sync-failed', handleActionFailed);
+    };
   }, [authToken]);
 
   // Infinite Scroll / Lazy Load Sentinel Ref
@@ -409,6 +457,28 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       totalMedia
     });
 
+    // Safety First: Ensure draft is persisted to IndexedDB right now
+    await saveFullDraftToDb({
+      id: postData.draftId,
+      title: postData.title,
+      content: postData.content,
+      category: postData.category,
+      rawTags: postData.tags.join(', '),
+      tags: postData.tags,
+      timestamp: postData.timestamp,
+      dateMode: 'AD',
+      formBsYear: adToBs(new Date(postData.timestamp)).year,
+      formBsMonth: adToBs(new Date(postData.timestamp)).month,
+      formBsDay: adToBs(new Date(postData.timestamp)).day,
+      currentStep: 3,
+      mediaCount: totalMedia,
+      mediaFiles: postData.mediaFiles,
+      status: 'queued',
+      updatedAt: Date.now(),
+      createdAt: Date.now()
+    });
+    refreshPendingDrafts();
+
     // If device is offline, enqueue to offline queue
     if (!isDeviceOnline()) {
       enqueueOfflineAction({
@@ -436,9 +506,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         progressPercent: 100,
         currentIndex: totalMedia,
         totalMedia,
-        stepText: 'Saved to offline queue. Your writeup is safely preserved in drafts until sync completes.'
+        stepText: 'Saved to offline queue. Your writeup and all photos are safely stored on device.'
       });
-      // SAFETY: Draft remains 100% intact in IndexedDB / localStorage until sync actually succeeds!
+      refreshPendingDrafts();
       setTimeout(() => setActiveUpload(null), 3500);
       return;
     }
@@ -471,6 +541,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       const postId = createData.postId;
 
       // Step 2: Upload each media file 1-by-1 directly to the post folder
+      let mediaGlitch = false;
+      let mediaGlitchMsg = '';
       if (totalMedia > 0) {
         for (let i = 0; i < totalMedia; i++) {
           const file = postData.mediaFiles[i];
@@ -484,24 +556,43 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             stepText: `Uploading file ${i + 1} of ${totalMedia}: ${file.name}...`
           } : null);
 
-          const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Session-Token': authToken
-            },
-            body: JSON.stringify({
-              name: file.name,
-              type: file.type,
-              base64: file.base64
-            })
-          });
+          try {
+            const mediaRes = await fetch(`/api/timeline/${postId}/media`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Session-Token': authToken
+              },
+              body: JSON.stringify({
+                name: file.name,
+                type: file.type,
+                base64: file.base64
+              })
+            });
 
-          if (!mediaRes.ok) {
-            const errData = await mediaRes.json().catch(() => ({}));
-            throw new Error(errData.error || `Failed to upload "${file.name}"`);
+            if (!mediaRes.ok) {
+              const errData = await mediaRes.json().catch(() => ({}));
+              throw new Error(errData.error || `Failed to upload "${file.name}"`);
+            }
+          } catch (fileErr: any) {
+            mediaGlitch = true;
+            mediaGlitchMsg = fileErr.message || `Failed to upload "${file.name}"`;
+            break;
           }
         }
+      }
+
+      if (mediaGlitch) {
+        // DO NOT RETIRE DRAFT: Keep photos safe in IndexedDB
+        await markDraftFailed(postData.draftId, mediaGlitchMsg);
+        refreshPendingDrafts();
+        setActiveUpload(prev => prev ? {
+          ...prev,
+          status: 'error',
+          errorMsg: `${mediaGlitchMsg}. Your writeup was published, and your photos are safely retained in Drafts.`
+        } : null);
+        fetchPosts(true);
+        return;
       }
 
       // Step 3: Success! Finalize draft cleanup and update feed
@@ -515,9 +606,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       // ONLY NOW clear draft from IndexedDB / LocalStorage
       await finalizeSuccessfulDraftUpload(postData.draftId);
 
-      // Refresh posts feed
+      // Refresh posts feed & drafts
       fetchPosts(true);
       fetchFilterMetadata();
+      refreshPendingDrafts();
 
       // Auto-hide floating progress bar after 4 seconds
       setTimeout(() => {
@@ -526,12 +618,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
     } catch (err: any) {
       console.error('Timeline upload failed:', err);
+      await markDraftFailed(postData.draftId, err.message || 'Upload failed');
+      refreshPendingDrafts();
       setActiveUpload(prev => prev ? {
         ...prev,
         status: 'error',
-        errorMsg: err.message || 'Failed to upload files.'
+        errorMsg: `${err.message || 'Failed to upload files.'} Your writeup and photos are safely kept in Drafts.`
       } : null);
-      // NOTE: Draft is completely intact and safe in IndexedDB / localStorage!
     }
   };
 
@@ -835,7 +928,42 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       <div className="flex items-start gap-8">
         
         {/* Main Feed Content Area */}
-        <div className="flex-1 min-w-0 space-y-8">
+        <div className="flex-1 min-w-0 space-y-6">
+
+          {/* ── Persistent Draft Alert: Guarantees user never loses writeup or photos ── */}
+          {pendingDrafts.length > 0 && (
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200/90 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="font-black text-slate-900 text-xs sm:text-sm flex items-center gap-2">
+                    <span>{pendingDrafts.length} Saved / Offline Draft{pendingDrafts.length > 1 ? 's' : ''} on Device</span>
+                    {pendingDrafts.some(d => d.status === 'failed') && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-bold border border-red-200">
+                        Sync Issue (Data Preserved)
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-600 truncate mt-0.5">
+                    Latest: "{pendingDrafts[0].title || pendingDrafts[0].content?.slice(0, 45) || 'Untitled Draft'}" • {pendingDrafts[0].mediaFiles?.length || pendingDrafts[0].mediaCount || 0} snaps attached
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDraftIdToOpen(pendingDrafts[0].id);
+                  setShowWizard(true);
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-sm flex items-center gap-1.5 shrink-0"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                Resume Draft
+              </button>
+            </div>
+          )}
           
           {errorMsg && (
             <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium">
@@ -1243,11 +1371,15 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {/* ── Social Moment Creation Wizard Modal ── */}
       {showWizard && (
         <TimelineWizardModal
-          onClose={() => setShowWizard(false)}
+          onClose={() => {
+            setShowWizard(false);
+            setSelectedDraftIdToOpen(undefined);
+            refreshPendingDrafts();
+          }}
           onSubmit={handleWizardSubmit}
           categoriesList={categories}
           tagsList={tags}
-          initialDraftId={activeUpload?.draftId}
+          initialDraftId={selectedDraftIdToOpen || activeUpload?.draftId}
         />
       )}
 
@@ -1324,6 +1456,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                 <button
                   type="button"
                   onClick={() => {
+                    setSelectedDraftIdToOpen(activeUpload.draftId);
                     setShowWizard(true);
                   }}
                   className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg transition"

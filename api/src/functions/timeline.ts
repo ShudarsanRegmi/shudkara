@@ -304,7 +304,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
           const datePrefix = postDate.toISOString().substring(0, 10);
           const folderSlug = post.title ? slugify(post.title) : 'moment';
-          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug}`, 'Timeline');
+          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug || 'moment'}`, 'Timeline');
           await col.updateOne({ _id: new ObjectId(postId) }, { $set: { googleDriveFolderId: folderId } });
         }
 
@@ -388,15 +388,14 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
       const datePrefix = postDate.toISOString().substring(0, 10);
       const folderSlug = title ? slugify(title) : 'moment';
-      const folderName = `${datePrefix}-${folderSlug}`;
+      const folderName = `${datePrefix}-${folderSlug || 'moment'}`;
 
-      // A. Create the folder in Google Drive
+      // A. Create the folder in Google Drive (Non-fatal: NEVER block post creation if Drive is slow or failing)
       let folderId = '';
       try {
         folderId = await createFolderInDrive(folderName, 'Timeline');
       } catch (folderErr: any) {
-        context.error('Failed to create Google Drive folder:', folderErr);
-        return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Failed to create directory in Google Drive. Check credentials.' } };
+        context.warn('Google Drive folder creation deferred (will create on media upload):', folderErr?.message || folderErr);
       }
 
       // B. Create the post.json metadata file inside the new folder
@@ -408,16 +407,18 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         timestamp: postDate.toISOString()
       };
       
-      try {
-        const metadataBase64 = Buffer.from(JSON.stringify(metadataPayload, null, 2)).toString('base64');
-        await uploadToFolder(folderId, 'post.json', 'application/json', metadataBase64);
-      } catch (metaErr: any) {
-        context.error('Failed to upload post.json description to GDrive folder:', metaErr);
+      if (folderId) {
+        try {
+          const metadataBase64 = Buffer.from(JSON.stringify(metadataPayload, null, 2)).toString('base64');
+          await uploadToFolder(folderId, 'post.json', 'application/json', metadataBase64);
+        } catch (metaErr: any) {
+          context.error('Failed to upload post.json description to GDrive folder:', metaErr);
+        }
       }
 
       // C. Process uploaded media files if passed directly
       const uploadedMedia: any[] = [];
-      if (mediaFiles && Array.isArray(mediaFiles) && mediaFiles.length > 0) {
+      if (folderId && mediaFiles && Array.isArray(mediaFiles) && mediaFiles.length > 0) {
         for (const file of mediaFiles) {
           if (!file || !file.name || !file.base64 || typeof file.base64 !== 'string') {
             context.warn('Skipping invalid media file in POST /api/timeline:', file?.name);
