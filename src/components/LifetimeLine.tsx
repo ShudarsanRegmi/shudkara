@@ -132,11 +132,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [nigudhaLoading, setNigudhaLoading] = useState(false);
   const [nigudhaError, setNigudhaError] = useState('');
 
-  // Cadence click tracking: 5 clicks on title to upgrade, 3 clicks on center space to reset
-  const headerClicksRef = useRef(0);
-  const headerClickTimerRef = useRef<any>(null);
-  const resetClicksRef = useRef(0);
-  const resetClickTimerRef = useRef<any>(null);
+  // Cadence click tracking: sliding timestamp windows for smooth, reliable tapping
+  const headerClicksRef = useRef<number[]>([]);
+  const resetClicksRef = useRef<number[]>([]);
+  const modalOpenedAtRef = useRef<number>(0);
   const lastEscPressRef = useRef<number>(0);
 
   const getAuthHeaders = (extraHeaders: Record<string, string> = {}) => {
@@ -260,14 +259,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [clearanceToken, authToken]);
 
-  // Header Cadence Click: EXACTLY 5 clicks to upgrade: Level 0 -> Level 1 (Guhya), Level 1 -> Level 2 (Nigudha)
-  const handleHeaderCadenceClick = () => {
-    headerClicksRef.current += 1;
-    clearTimeout(headerClickTimerRef.current);
+  // Header Cadence Click: 5 taps within sliding 2.0s window triggers sequential upgrade
+  // Level 0 -> Level 1 (Guhya TOTP), Level 1 -> Level 2 (Nigudha Biometrics)
+  const handleHeaderCadenceClick = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    // Prevent accidental clicks if modal is already open
+    if (showGuhyaModal || showNigudhaModal) return;
 
-    const clicks = headerClicksRef.current;
-    if (clicks === 5) {
-      headerClicksRef.current = 0;
+    const now = Date.now();
+    // Keep clicks occurring within the last 2000ms
+    const recent = headerClicksRef.current.filter(t => now - t < 2000);
+    recent.push(now);
+    headerClicksRef.current = recent;
+
+    if (recent.length >= 5) {
+      headerClicksRef.current = [];
+      modalOpenedAtRef.current = now;
+
       if (clearanceLevel === 0) {
         // Upgrade from Level 0 to Level 1 (Guhya TOTP)
         setFlashBg('amber');
@@ -284,31 +292,24 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         setNigudhaError('');
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
       }
-      return;
     }
-
-    headerClickTimerRef.current = setTimeout(() => {
-      headerClicksRef.current = 0;
-    }, 2000);
   };
 
-  // Center Empty Space Click: EXACTLY 3 clicks consecutively resets back to Level 0 (Prakata)
-  const handleResetCadenceClick = () => {
-    resetClicksRef.current += 1;
-    clearTimeout(resetClickTimerRef.current);
+  // Center Empty Space Click: 3 consecutive taps within 1500ms resets back to Level 0 (Prakata)
+  const handleResetCadenceClick = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const now = Date.now();
+    const recent = resetClicksRef.current.filter(t => now - t < 1500);
+    recent.push(now);
+    resetClicksRef.current = recent;
 
-    if (resetClicksRef.current === 3) {
-      resetClicksRef.current = 0;
+    if (recent.length >= 3) {
+      resetClicksRef.current = [];
       // Immediate 100ms background flash feedback
       setFlashBg('reset');
       setTimeout(() => setFlashBg(null), 100);
       handlePanicConceal();
-      return;
     }
-
-    resetClickTimerRef.current = setTimeout(() => {
-      resetClicksRef.current = 0;
-    }, 1500);
   };
 
   // Submit 6-digit TOTP code for Guhya clearance
@@ -1392,7 +1393,6 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       
       {/* ── Compact Space-Saving Top Header Bar with Signal-Based Clearance Cadence ── */}
       <div 
-        onDoubleClick={handlePanicConceal}
         className={`flex items-center justify-between gap-3 mb-6 border px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs transition-colors duration-100 relative ${
           flashBg === 'amber'
             ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-400/50'
@@ -1409,7 +1409,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       >
         <div 
           onClick={handleHeaderCadenceClick}
-          className="flex items-center gap-3 cursor-pointer select-none"
+          className="flex items-center gap-3 cursor-pointer select-none active:scale-[0.99] transition-transform"
           title=""
         >
           <div className={`p-2 rounded-xl transition-colors duration-300 ${
@@ -1448,7 +1448,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         {/* Cryptic reset door: 3 clicks on the empty space between title and right action icons */}
         <div 
           onClick={handleResetCadenceClick}
-          className="flex-1 self-stretch cursor-pointer select-none min-h-[38px]"
+          className="flex-1 self-stretch cursor-pointer select-none min-h-[44px]"
           title=""
         />
         
@@ -1947,13 +1947,29 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {/* ── Discrete Steganographic Guhya Keycode Dialog (TOTP) ── */}
       {showGuhyaModal && (
         <div 
-          onClick={() => { setShowGuhyaModal(false); setGuhyaInput(''); setGuhyaError(''); }}
+          onClick={() => {
+            // Guard against accidental extra tap (e.g. 6th tap in quick burst)
+            if (Date.now() - modalOpenedAtRef.current < 600) return;
+            setShowGuhyaModal(false);
+            setGuhyaInput('');
+            setGuhyaError('');
+          }}
           className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
             className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150 relative"
           >
+            {/* Explicit Close Button */}
+            <button
+              type="button"
+              onClick={() => { setShowGuhyaModal(false); setGuhyaInput(''); setGuhyaError(''); }}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 p-1.5 rounded-xl hover:bg-slate-800/60 transition"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center shadow-inner">
               <Sparkles className="w-6 h-6 text-amber-400" />
             </div>
@@ -2009,13 +2025,31 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {/* ── Discrete Steganographic Nigudha Biometric Modal (WebAuthn / Passkeys) ── */}
       {showNigudhaModal && (
         <div 
-          onClick={() => { if (!nigudhaLoading) { setShowNigudhaModal(false); setNigudhaError(''); } }}
+          onClick={() => {
+            // Guard against accidental extra tap (e.g. 6th tap in quick burst)
+            if (Date.now() - modalOpenedAtRef.current < 600) return;
+            if (!nigudhaLoading) {
+              setShowNigudhaModal(false);
+              setNigudhaError('');
+            }
+          }}
           className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
         >
           <div 
             onClick={(e) => e.stopPropagation()}
             className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150 relative"
           >
+            {/* Explicit Close Button */}
+            <button
+              type="button"
+              disabled={nigudhaLoading}
+              onClick={() => { setShowNigudhaModal(false); setNigudhaError(''); }}
+              className="absolute top-4 right-4 text-slate-500 hover:text-slate-300 p-1.5 rounded-xl hover:bg-slate-800/60 transition disabled:opacity-30"
+              title="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
             <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shadow-inner">
               <Sparkles className="w-6 h-6 text-rose-400" />
             </div>
