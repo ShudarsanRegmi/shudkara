@@ -4,8 +4,8 @@ import {
   RefreshCw, Clock, AlertTriangle, Filter,
   Trash2, X, DollarSign, Layers, ChevronRight, ChevronDown, ChevronUp,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
-  Users, CheckCircle2, Edit2, Tag, Bell, BellRing, Send,
-  Settings, Gift, Sliders, CheckSquare, Square, Loader2, Mail, Copy
+  Users, Edit2, Tag, Bell, BellRing, Send,
+  Settings, Gift, Sliders, CheckSquare, Square, Loader2, Mail, Copy, LayoutGrid, List
 } from 'lucide-react';
 
 export interface SplitParticipant {
@@ -234,10 +234,11 @@ export interface ParticipantItem {
 }
 
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'groups' | 'categories' | 'settings'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories' | 'settings'>('overview');
+  const [peopleViewMode, setPeopleViewMode] = useState<'people' | 'groups'>('people');
+  const [peopleDisplayMode, setPeopleDisplayMode] = useState<'list' | 'grid'>('list');
   const [lendsViewMode, setLendsViewMode] = useState<'consolidated' | 'individual'>('consolidated');
   const [expandedConsolidatedKeys, setExpandedConsolidatedKeys] = useState<Record<string, boolean>>({});
-  const [expandedPersonTxIds, setExpandedPersonTxIds] = useState<Record<string, boolean>>({});
   const [emailReminderTarget, setEmailReminderTarget] = useState<{
     personName: string;
     email: string;
@@ -703,6 +704,20 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     });
   };
 
+  // Memoized sanitized people list (ensures clean profile names only, no composite or sponsored artifacts)
+  const sanitizedPeople = useMemo(() => {
+    return people.filter(p => {
+      const raw = (p.name || '').trim();
+      const lower = raw.toLowerCase();
+      return raw.length > 0 &&
+        !lower.includes('sponsored') &&
+        !raw.includes('(') &&
+        !raw.includes(')') &&
+        !raw.includes('+') &&
+        !raw.includes(',');
+    });
+  }, [people]);
+
   // Memoized consolidated lends grouped by person & expense set (including sponsored treats)
   const consolidatedLends = useMemo(() => {
     const map = new Map<string, {
@@ -899,7 +914,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
           if (first.isSponsored) {
             finalAmount = totalBaseAmount;
-            splitPersonName = `${first.name.trim()} (sponsored)`;
+            splitPersonName = first.name.trim();
             splitAmount = 0;
           } else {
             finalAmount = parseFloat((totalBaseAmount - halfBase).toFixed(2));
@@ -920,14 +935,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           }));
 
           const nonSponsoredSplits = splits.filter(s => !s.isSponsored);
-          const sponsoredSplits = splits.filter(s => s.isSponsored);
           const totalReceivable = nonSponsoredSplits.reduce((acc, s) => acc + s.amount, 0);
 
           finalAmount = Math.max(0, parseFloat((totalBaseAmount - totalReceivable).toFixed(2)));
 
           const nonSpNames = nonSponsoredSplits.map(s => s.personName).join(', ');
-          const spNames = sponsoredSplits.length > 0 ? ` (+${sponsoredSplits.map(s => s.personName).join(', ')} sponsored)` : '';
-          splitPersonName = `${nonSpNames}${spNames}`.trim() || null;
+          splitPersonName = (nonSpNames || activeParticipants.map(p => p.name.trim()).join(', ')).trim() || null;
           splitAmount = totalReceivable;
         } else if (expenseForm.splitMode === '100_them') {
           // Entire bill is split among participants, your personal share = 0 (unless sponsoring)
@@ -945,7 +958,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           const totalReceivable = nonSponsoredSplits.reduce((acc, s) => acc + s.amount, 0);
           finalAmount = Math.max(0, parseFloat((totalBaseAmount - totalReceivable).toFixed(2)));
 
-          splitPersonName = activeParticipants.map(p => p.name.trim() + (p.isSponsored ? ' (sponsored)' : '')).join(', ');
+          splitPersonName = activeParticipants.map(p => p.name.trim()).join(', ');
           splitAmount = totalReceivable;
         } else if (expenseForm.splitMode === 'custom') {
           // Custom amount specified for each friend
@@ -974,8 +987,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           }
 
           const nonSpNames = nonSponsoredSplits.map(s => s.personName).join(', ');
-          const spNames = sponsoredSplits.length > 0 ? ` (+${sponsoredSplits.map(s => s.personName).join(', ')} sponsored)` : '';
-          splitPersonName = `${nonSpNames}${spNames}`.trim() || null;
+          splitPersonName = (nonSpNames || activeParticipants.map(p => p.name.trim()).join(', ')).trim() || null;
           splitAmount = totalReceivable;
         }
       } else if (expenseForm.splitPersonName.trim()) {
@@ -1620,6 +1632,44 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     });
   };
 
+  // Open Reminder / Settlement Modal directly for a Person profile
+  const handleOpenPersonReminder = (p: Person) => {
+    const norm = p.name.toLowerCase();
+    const pLends = lends.filter(l => (l.personName || '').toLowerCase() === norm && l.status !== 'returned');
+    const items = pLends.map(it => {
+      const repaid = (it.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+      return {
+        id: it.id,
+        description: it.notes || `Lend on ${it.lentDate}`,
+        date: it.lentDate,
+        amount: Math.max(0, it.amount - repaid)
+      };
+    });
+
+    const matchingSponsored = expenses.flatMap(e => {
+      if (!e.splits) return [];
+      return e.splits
+        .filter(s => (s.personName || '').toLowerCase() === norm && s.isSponsored)
+        .map(s => ({ description: e.description || 'Sponsored treat', date: e.date, amount: s.amount }));
+    });
+
+    const totalReceivable = items.reduce((s, it) => s + it.amount, 0);
+    const totalSponsored = matchingSponsored.reduce((s, it) => s + it.amount, 0);
+
+    setEmailReminderTarget({
+      personName: p.name,
+      email: p.email || '',
+      setName: 'Personal Account Balance',
+      expenseSetId: null,
+      totalReceivable,
+      totalSponsored,
+      items,
+      sponsoredItems: matchingSponsored,
+      lendIds: pLends.map(l => l.id),
+      customMessage: ''
+    });
+  };
+
   // Send Settlement Email
   const handleSendEmailReminder = async () => {
     if (!emailReminderTarget) return;
@@ -1932,8 +1982,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
           { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
           { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
-          { key: 'people', label: 'People', icon: User, count: people.length },
-          { key: 'groups', label: 'Expense Groups', icon: Users, count: groups.length },
+          { key: 'people', label: 'People & Groups', icon: User, count: sanitizedPeople.length },
           { key: 'categories', label: 'Categories', icon: Tag, count: categories.length },
           { key: 'settings', label: 'Settings', icon: Settings }
         ].map(tab => {
@@ -3121,119 +3170,361 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 6. PEOPLE DIRECTORY TAB */}
+      {/* 6. PEOPLE & EXPENSE GROUPS TAB */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'people' && (
         <div className="space-y-5">
+          {/* Top Sub-Navigation Toggle: People Directory vs Expense Groups */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <User className="w-4 h-4 text-indigo-600" />
-                People & Companions Directory
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Track personal debts, shared splits, email reminders, and complete transaction histories per person
-              </p>
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100 border border-slate-200/80 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setPeopleViewMode('people')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  peopleViewMode === 'people'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" />
+                People & Companions ({sanitizedPeople.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setPeopleViewMode('groups')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  peopleViewMode === 'groups'
+                    ? 'bg-white text-indigo-700 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                Expense Groups ({groups.length})
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
-                setIsPersonModalOpen(true);
-              }}
-              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-            >
-              <Plus className="w-4 h-4" /> Add Person
-            </button>
-          </div>
 
-          {/* Directory Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
-              <span className="text-[11px] font-semibold text-slate-500">Total Receivables (Others Owe You)</span>
-              <div className="text-xl font-black text-emerald-600">
-                Rs. {people.reduce((sum, p) => sum + (p.netReceivable || 0), 0).toLocaleString()}
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
-              <span className="text-[11px] font-semibold text-slate-500">Total Payables (You Owe Others)</span>
-              <div className="text-xl font-black text-amber-600">
-                Rs. {people.reduce((sum, p) => sum + (p.netPayable || 0), 0).toLocaleString()}
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
-              <span className="text-[11px] font-semibold text-slate-500">Net Ledger Position</span>
-              {(() => {
-                const net = people.reduce((sum, p) => sum + (p.netBalance || 0), 0);
-                return (
-                  <div className={`text-xl font-black ${net >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                    {net >= 0 ? `+ Rs. ${net.toLocaleString()}` : `- Rs. ${Math.abs(net).toLocaleString()}`}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
+            {peopleViewMode === 'people' ? (
+              <div className="flex items-center gap-2">
+                {/* List / Grid View Mode Toggle */}
+                <div className="flex items-center p-1 bg-slate-100 border border-slate-200/80 rounded-xl text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPeopleDisplayMode('list')}
+                    className={`p-1.5 px-2.5 rounded-lg font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                      peopleDisplayMode === 'list'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="List View of Profiles"
+                  >
+                    <List className="w-3.5 h-3.5" />
+                    <span>List</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPeopleDisplayMode('grid')}
+                    className={`p-1.5 px-2.5 rounded-lg font-bold flex items-center gap-1.5 cursor-pointer transition ${
+                      peopleDisplayMode === 'grid'
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                    title="Grid View of Profiles"
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    <span>Grid</span>
+                  </button>
+                </div>
 
-          {/* People Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {people.length === 0 ? (
-              <div className="col-span-full bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 space-y-2">
-                <p>No companions or people added yet.</p>
-                <p className="text-[11px] text-slate-400">
-                  When you split an expense (e.g. outing with Ram) or someone pays for you, people are auto-created or can be added manually.
-                </p>
                 <button
                   type="button"
                   onClick={() => {
                     setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
                     setIsPersonModalOpen(true);
                   }}
-                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition"
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
                 >
-                  Add First Companion
+                  <Plus className="w-4 h-4" /> Add Person
                 </button>
               </div>
             ) : (
-              people.map(p => {
-                const balance = p.netBalance || 0;
-                const pLends = lends.filter(l => (l.personName || '').toLowerCase() === p.name.toLowerCase());
-                const pBorrows = borrows.filter(b => (b.personName || '').toLowerCase() === p.name.toLowerCase());
-                const pSponsored = expenses.flatMap(exp => {
-                  return (exp.splits || []).filter(s =>
-                    (s.personName || '').trim().toLowerCase() === p.name.trim().toLowerCase() && s.isSponsored
-                  ).map(s => ({ ...s, date: exp.date, description: exp.description }));
-                });
-                const totalSponsored = pSponsored.reduce((acc, s) => acc + (s.amount || 0), 0);
-                const relatedTxsCount = pLends.length + pBorrows.length + pSponsored.length;
-                const isExpanded = Boolean(expandedPersonTxIds[p.id]);
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
+                  setIsGroupModalOpen(true);
+                }}
+                className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Create Group
+              </button>
+            )}
+          </div>
 
-                return (
-                  <div
-                    key={p.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
+          {peopleViewMode === 'people' ? (
+            <>
+              {/* Directory Summary Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-500">Total Receivables (Others Owe You)</span>
+                  <div className="text-xl font-black text-emerald-600">
+                    Rs. {sanitizedPeople.reduce((sum, p) => sum + (p.netReceivable || 0), 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-500">Total Payables (You Owe Others)</span>
+                  <div className="text-xl font-black text-amber-600">
+                    Rs. {sanitizedPeople.reduce((sum, p) => sum + (p.netPayable || 0), 0).toLocaleString()}
+                  </div>
+                </div>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
+                  <span className="text-[11px] font-semibold text-slate-500">Net Ledger Position</span>
+                  {(() => {
+                    const net = sanitizedPeople.reduce((sum, p) => sum + (p.netBalance || 0), 0);
+                    return (
+                      <div className={`text-xl font-black ${net >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                        {net >= 0 ? `+ Rs. ${net.toLocaleString()}` : `- Rs. ${Math.abs(net).toLocaleString()}`}
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {sanitizedPeople.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 space-y-2">
+                  <p>No companions or people added yet.</p>
+                  <p className="text-[11px] text-slate-400">
+                    When you split an expense (e.g. outing with friends) or someone pays for you, individual companions are automatically added here.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
+                      setIsPersonModalOpen(true);
+                    }}
+                    className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-xs transition cursor-pointer"
                   >
-                    <div className="space-y-3">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="font-bold text-slate-900 text-base flex items-center gap-2">
-                            {p.name}
-                            {p.isDefault && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700 border border-indigo-200">
-                                Default
-                              </span>
-                            )}
+                    Add First Companion
+                  </button>
+                </div>
+              ) : peopleDisplayMode === 'list' ? (
+                /* ── LIST VIEW OF PROFILES ── */
+                <div className="space-y-2.5">
+                  {sanitizedPeople.map(p => {
+                    const balance = p.netBalance || 0;
+                    const normName = p.name.toLowerCase();
+                    const pLends = lends.filter(l => (l.personName || '').toLowerCase() === normName);
+                    const pBorrows = borrows.filter(b => (b.personName || '').toLowerCase() === normName);
+                    const pSplits = expenses.filter(e => {
+                      if (e.splits && e.splits.length > 0) {
+                        return e.splits.some(s => (s.personName || '').trim().toLowerCase() === normName && !s.isSponsored);
+                      }
+                      return (e.splitPersonName || '').toLowerCase() === normName;
+                    });
+                    const pPaidForMe = expenses.filter(e => (e.paidByPersonName || '').toLowerCase() === normName);
+                    const pSponsored = expenses.flatMap(exp => {
+                      return (exp.splits || []).filter(s =>
+                        (s.personName || '').trim().toLowerCase() === normName && s.isSponsored
+                      ).map(s => ({ ...s, date: exp.date, description: exp.description }));
+                    });
+                    const totalSponsored = pSponsored.reduce((acc, s) => acc + (s.amount || 0), 0);
+                    const relatedTxsCount = pLends.length + pBorrows.length + pSplits.length + pPaidForMe.length + pSponsored.length;
+
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => setSelectedPersonLedger(p)}
+                        className="bg-white hover:bg-indigo-50/20 border border-slate-200 hover:border-indigo-300 rounded-2xl p-3.5 sm:p-4 shadow-xs hover:shadow-md transition cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3 group active:scale-[0.99]"
+                        title="Click to view all transactions with this person"
+                      >
+                        {/* Profile Details */}
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white font-black text-sm flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
+                            {p.name.slice(0, 2).toUpperCase()}
                           </div>
-                          <div className="flex flex-wrap items-center gap-2 mt-1">
-                            {p.contact && (
-                              <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                                <Phone className="w-3 h-3 text-slate-400" /> {p.contact}
-                              </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-bold text-slate-900 text-sm truncate">{p.name}</h3>
+                              {p.isDefault && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700 border border-indigo-200 shrink-0">
+                                  Default
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[11px] text-slate-500">
+                              {p.contact && (
+                                <span className="flex items-center gap-1">
+                                  <Phone className="w-3 h-3 text-slate-400" /> {p.contact}
+                                </span>
+                              )}
+                              {p.email ? (
+                                <span className="flex items-center gap-1 text-indigo-600 font-medium">
+                                  <Mail className="w-3 h-3" /> {p.email}
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPersonForm({ id: p.id, name: p.name, contact: p.contact || '', email: '', isDefault: Boolean(p.isDefault), notes: p.notes || '' });
+                                    setIsPersonModalOpen(true);
+                                  }}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <Plus className="w-2.5 h-2.5" /> Add Email
+                                </button>
+                              )}
+                              <span className="text-slate-300 hidden sm:inline">•</span>
+                              <span className="text-slate-500">{relatedTxsCount} transaction{relatedTxsCount === 1 ? '' : 's'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Right: Badges, Net Balance & Actions */}
+                        <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+                          {totalSponsored > 0 && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
+                              <Gift className="w-3 h-3 text-purple-600" />
+                              Rs. {Math.round(totalSponsored).toLocaleString()} treated
+                            </span>
+                          )}
+
+                          {/* Balance Display */}
+                          <div className="text-right">
+                            <div className={`text-sm font-black ${
+                              balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-rose-600' : 'text-slate-600'
+                            }`}>
+                              {balance > 0 ? `+ Rs. ${balance.toLocaleString()}` : balance < 0 ? `- Rs. ${Math.abs(balance).toLocaleString()}` : 'Rs. 0'}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-semibold">
+                              {balance > 0 ? 'Owes you' : balance < 0 ? 'You owe' : 'All Settled'}
+                            </div>
+                          </div>
+
+                          {/* Actions */}
+                          <div className="flex items-center gap-1">
+                            {balance > 0 && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenPersonReminder(p);
+                                }}
+                                className="p-1.5 text-indigo-600 hover:bg-indigo-100 rounded-lg transition cursor-pointer"
+                                title="Send settlement breakdown & reminder email"
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                              </button>
                             )}
-                            {p.email ? (
-                              <span className="text-[11px] text-indigo-600 flex items-center gap-1 font-medium" title={p.email}>
-                                <Mail className="w-3 h-3" /> {p.email}
-                              </span>
-                            ) : (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPersonForm({
+                                  id: p.id,
+                                  name: p.name,
+                                  contact: p.contact || '',
+                                  email: p.email || '',
+                                  isDefault: Boolean(p.isDefault),
+                                  notes: p.notes || ''
+                                });
+                                setIsPersonModalOpen(true);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition cursor-pointer"
+                              title="Edit Person"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeletePerson(p.id, p.name);
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition cursor-pointer"
+                              title="Delete Person"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                            <div className="p-1 text-slate-300 group-hover:text-indigo-500 transition-colors">
+                              <ChevronRight className="w-4 h-4" />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                /* ── GRID VIEW OF PROFILES ── */
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {sanitizedPeople.map(p => {
+                    const balance = p.netBalance || 0;
+                    const normName = p.name.toLowerCase();
+                    const pLends = lends.filter(l => (l.personName || '').toLowerCase() === normName);
+                    const pBorrows = borrows.filter(b => (b.personName || '').toLowerCase() === normName);
+                    const pSplits = expenses.filter(e => {
+                      if (e.splits && e.splits.length > 0) {
+                        return e.splits.some(s => (s.personName || '').trim().toLowerCase() === normName && !s.isSponsored);
+                      }
+                      return (e.splitPersonName || '').toLowerCase() === normName;
+                    });
+                    const pPaidForMe = expenses.filter(e => (e.paidByPersonName || '').toLowerCase() === normName);
+                    const pSponsored = expenses.flatMap(exp => {
+                      return (exp.splits || []).filter(s =>
+                        (s.personName || '').trim().toLowerCase() === normName && s.isSponsored
+                      ).map(s => ({ ...s, date: exp.date, description: exp.description }));
+                    });
+                    const totalSponsored = pSponsored.reduce((acc, s) => acc + (s.amount || 0), 0);
+                    const relatedTxsCount = pLends.length + pBorrows.length + pSplits.length + pPaidForMe.length + pSponsored.length;
+
+                    return (
+                      <div
+                        key={p.id}
+                        onClick={() => setSelectedPersonLedger(p)}
+                        className="bg-white hover:bg-indigo-50/10 border border-slate-200 hover:border-indigo-300 rounded-2xl p-5 shadow-xs hover:shadow-md transition cursor-pointer flex flex-col justify-between space-y-4 group active:scale-[0.99]"
+                        title="Click to view all transactions with this person"
+                      >
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-white font-black text-sm flex items-center justify-center shadow-xs shrink-0 group-hover:scale-105 transition-transform">
+                                {p.name.slice(0, 2).toUpperCase()}
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-900 text-base flex items-center gap-2">
+                                  {p.name}
+                                  {p.isDefault && (
+                                    <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700 border border-indigo-200">
+                                      Default
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-500">
+                                  {p.contact && (
+                                    <span className="flex items-center gap-1">
+                                      <Phone className="w-3 h-3 text-slate-400" /> {p.contact}
+                                    </span>
+                                  )}
+                                  {p.email && (
+                                    <span className="flex items-center gap-1 text-indigo-600 font-medium">
+                                      <Mail className="w-3 h-3" /> {p.email}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                              {balance > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenPersonReminder(p)}
+                                  className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                                  title="Send settlement breakdown & reminder email"
+                                >
+                                  <Mail className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -3241,365 +3532,204 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                                     id: p.id,
                                     name: p.name,
                                     contact: p.contact || '',
-                                    email: '',
+                                    email: p.email || '',
                                     isDefault: Boolean(p.isDefault),
                                     notes: p.notes || ''
                                   });
                                   setIsPersonModalOpen(true);
                                 }}
-                                className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 font-bold cursor-pointer"
+                                className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
+                                title="Edit Person"
                               >
-                                <Plus className="w-3 h-3" /> Add Email
+                                <Edit2 className="w-3.5 h-3.5" />
                               </button>
-                            )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePerson(p.id, p.name)}
+                                className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
+                                title="Delete Person"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setPersonForm({
-                                id: p.id,
-                                name: p.name,
-                                contact: p.contact || '',
-                                email: p.email || '',
-                                isDefault: Boolean(p.isDefault),
-                                notes: p.notes || ''
-                              });
-                              setIsPersonModalOpen(true);
-                            }}
-                            className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
-                            title="Edit Person"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePerson(p.id, p.name)}
-                            className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
-                            title="Delete Person"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
 
-                      {/* Running Balance Box */}
-                      <div className={`p-3 rounded-xl border ${
-                        balance > 0
-                          ? 'bg-emerald-50/70 border-emerald-200'
-                          : balance < 0
-                          ? 'bg-amber-50/70 border-amber-200'
-                          : 'bg-slate-50 border-slate-200'
-                      }`}>
-                        <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">
-                          {balance > 0 ? 'Owes You (Receivable)' : balance < 0 ? 'You Owe (Payable)' : 'Current Balance'}
-                        </div>
-                        <div className={`text-lg font-black ${
-                          balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-amber-700' : 'text-slate-700'
-                        }`}>
-                          {balance > 0
-                            ? `Rs. ${balance.toLocaleString()}`
-                            : balance < 0
-                            ? `Rs. ${Math.abs(balance).toLocaleString()}`
-                            : 'Rs. 0 (All Settled)'}
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {p.activeLendsCount || 0} active lend(s) • {p.activeBorrowsCount || 0} active borrow(s)
-                        </div>
-                      </div>
+                          {/* Balance Box */}
+                          <div className={`p-3 rounded-xl border ${
+                            balance > 0
+                              ? 'bg-emerald-50/70 border-emerald-200'
+                              : balance < 0
+                              ? 'bg-amber-50/70 border-amber-200'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}>
+                            <div className="text-[10px] uppercase font-bold tracking-wider text-slate-500">
+                              {balance > 0 ? 'Owes You (Receivable)' : balance < 0 ? 'You Owe (Payable)' : 'Current Balance'}
+                            </div>
+                            <div className={`text-lg font-black ${
+                              balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-amber-700' : 'text-slate-700'
+                            }`}>
+                              {balance > 0
+                                ? `Rs. ${balance.toLocaleString()}`
+                                : balance < 0
+                                ? `Rs. ${Math.abs(balance).toLocaleString()}`
+                                : 'Rs. 0 (All Settled)'}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              {relatedTxsCount} transactions recorded
+                            </div>
+                          </div>
 
-                      {totalSponsored > 0 && (
-                        <div className="text-[10px] text-indigo-700 bg-indigo-50/80 border border-indigo-200/60 rounded-xl px-2.5 py-1.5 flex items-center justify-between font-bold">
-                          <span className="flex items-center gap-1">
-                            <Gift className="w-3.5 h-3.5 text-indigo-600" />
-                            Treats / Sponsored by You:
-                          </span>
-                          <span className="font-black text-indigo-900">Rs. {Math.round(totalSponsored).toLocaleString()}</span>
-                        </div>
-                      )}
-
-                      {p.notes && (
-                        <p className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100">
-                          {p.notes}
-                        </p>
-                      )}
-
-                      {/* Expand / Collapse Transactions related to this person */}
-                      <button
-                        type="button"
-                        onClick={() => setExpandedPersonTxIds(prev => ({ ...prev, [p.id]: !prev[p.id] }))}
-                        className="w-full py-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
-                      >
-                        <span className="flex items-center gap-1.5">
-                          <Clock className="w-3 h-3 text-slate-500" />
-                          {isExpanded ? 'Hide Transactions' : `View Transactions (${relatedTxsCount})`}
-                        </span>
-                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                      </button>
-
-                      {/* Inline Transactions Breakdown */}
-                      {isExpanded && (
-                        <div className="space-y-2.5 pt-2 border-t border-slate-100 animate-fade-in text-xs">
-                          {relatedTxsCount === 0 ? (
-                            <p className="text-[11px] text-slate-400 text-center py-2">No past transactions recorded for {p.name}.</p>
-                          ) : (
-                            <>
-                              {/* Lends to this person */}
-                              {pLends.length > 0 && (
-                                <div className="space-y-1">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
-                                    Money Lent ({pLends.length})
-                                  </span>
-                                  {pLends.map(l => {
-                                    const rep = (l.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-                                    const rem = Math.max(0, l.amount - rep);
-                                    return (
-                                      <div key={l.id} className="p-2 bg-emerald-50/50 border border-emerald-100 rounded-lg flex items-center justify-between">
-                                        <div>
-                                          <div className="font-semibold text-slate-800 text-[11px]">{l.notes || `Lend on ${l.lentDate}`}</div>
-                                          <div className="text-[10px] text-slate-500">{l.lentDate} • Status: {l.status}</div>
-                                        </div>
-                                        <div className="text-right">
-                                          <div className="font-bold text-emerald-700 text-xs">Rs. {l.amount.toLocaleString()}</div>
-                                          {rem > 0 && <span className="text-[9px] text-slate-400">Due: Rs. {rem.toLocaleString()}</span>}
-                                        </div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-
-                              {/* Borrows from this person */}
-                              {pBorrows.length > 0 && (
-                                <div className="space-y-1">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
-                                    Money Borrowed ({pBorrows.length})
-                                  </span>
-                                  {pBorrows.map(b => (
-                                    <div key={b.id} className="p-2 bg-amber-50/50 border border-amber-100 rounded-lg flex items-center justify-between">
-                                      <div>
-                                        <div className="font-semibold text-slate-800 text-[11px]">{b.notes || `Borrowed on ${b.borrowedDate}`}</div>
-                                        <div className="text-[10px] text-slate-500">{b.borrowedDate} • Status: {b.status}</div>
-                                      </div>
-                                      <div className="text-right">
-                                        <div className="font-bold text-amber-700 text-xs">Rs. {b.amount.toLocaleString()}</div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-
-                              {/* Sponsored items */}
-                              {pSponsored.length > 0 && (
-                                <div className="space-y-1">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
-                                    Sponsored Treats ({pSponsored.length})
-                                  </span>
-                                  {pSponsored.map((sp, idx) => (
-                                    <div key={idx} className="p-2 bg-indigo-50/50 border border-indigo-100 rounded-lg flex items-center justify-between">
-                                      <div>
-                                        <div className="font-semibold text-slate-800 text-[11px]">{sp.description}</div>
-                                        <div className="text-[10px] text-indigo-600">{sp.date} • Gifted</div>
-                                      </div>
-                                      <div className="text-right font-bold text-indigo-700 text-xs">
-                                        Rs. {Number(sp.amount || 0).toLocaleString()}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </>
+                          {totalSponsored > 0 && (
+                            <div className="text-[10px] text-indigo-700 bg-indigo-50/80 border border-indigo-200/60 rounded-xl px-2.5 py-1.5 flex items-center justify-between font-bold">
+                              <span className="flex items-center gap-1">
+                                <Gift className="w-3.5 h-3.5 text-indigo-600" />
+                                Treats / Sponsored by You:
+                              </span>
+                              <span className="font-black text-indigo-900">Rs. {Math.round(totalSponsored).toLocaleString()}</span>
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
 
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPersonLedger(p)}
-                        className="flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer"
-                        title="View Full Ledger History"
-                      >
-                        <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                        Ledger
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleSettlePerson(p)}
-                        className={`flex-1 py-2 px-2 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
-                          balance !== 0
-                            ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 cursor-pointer'
-                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                        }`}
-                        disabled={balance === 0}
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        Settle Balance
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 7. EXPENSE GROUPS TAB */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {activeSubTab === 'groups' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <div>
-              <h2 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Users className="w-4 h-4 text-indigo-600" />
-                Expense Groups (Squads, Outings & Roommates)
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Manage recurring travel squads and split bills with automated participant pre-fill
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
-                setIsGroupModalOpen(true);
-              }}
-              className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-            >
-              <Plus className="w-4 h-4" /> Create Expense Group
-            </button>
-          </div>
-
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-600">
-            <div>
-              <span className="font-bold text-slate-900">Expense Groups</span> let you manage recurring travel squads, roommates, and outing friends.
-              When you split a bill, choosing a group automatically adds all members so you can easily include/exclude or sponsor individuals.
-            </div>
-          </div>
-
-          {groups.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-xs text-slate-500 space-y-3">
-              <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
-                <Users className="w-6 h-6" />
-              </div>
-              <h3 className="font-bold text-slate-800 text-sm">No Expense Groups Created Yet</h3>
-              <p className="max-w-md mx-auto text-slate-500 text-[11px]">
-                Create groups for your trips, outings, roommates, or office lunch squads to split expenses in seconds.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
-                  setIsGroupModalOpen(true);
-                }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition cursor-pointer"
-              >
-                + Create Your First Group
-              </button>
-            </div>
+                        <div className="w-full py-1.5 px-3 bg-slate-50 group-hover:bg-indigo-50 border border-slate-200 group-hover:border-indigo-200 rounded-xl text-xs font-bold text-slate-700 group-hover:text-indigo-700 flex items-center justify-between transition">
+                          <span>View all {relatedTxsCount} transactions</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {groups.map(group => (
-                <div
-                  key={group.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-                          <Users className="w-4 h-4 text-indigo-600" />
-                          {group.name}
-                        </h3>
-                        {group.description && (
-                          <p className="text-[11px] text-slate-500 mt-0.5">{group.description}</p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setGroupForm({
-                              id: group.id,
-                              name: group.name,
-                              description: group.description || '',
-                              members: group.members || [],
-                              newMemberInput: ''
-                            });
-                            setIsGroupModalOpen(true);
-                          }}
-                          className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
-                          title="Edit Group"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteGroup(group.id, group.name)}
-                          className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
-                          title="Delete Group"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
+            /* ── EXPENSE GROUPS SECTION ── */
+            <div className="space-y-4">
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between text-xs text-slate-600">
+                <div>
+                  <span className="font-bold text-slate-900">Expense Groups</span> let you manage recurring travel squads, roommates, and outing friends.
+                  When you split a bill, choosing a group automatically adds all members so you can easily include/exclude or sponsor individuals.
+                </div>
+              </div>
 
-                    {/* Members Pills */}
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        Members ({group.members?.length || 0})
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {(group.members || []).map((m, idx) => (
-                          <span
-                            key={idx}
-                            className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold flex items-center gap-1"
-                          >
-                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
-                            {m}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Group Stats */}
-                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-450 uppercase font-bold">Total Spent</span>
-                        <div className="font-black text-slate-800">
-                          Rs. {(group.totalSpent || 0).toLocaleString()}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] text-slate-450 uppercase font-bold">Expenses</span>
-                        <div className="font-bold text-slate-700">
-                          {group.expenseCount || 0} logged
-                        </div>
-                      </div>
-                    </div>
+              {groups.length === 0 ? (
+                <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-xs text-slate-500 space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto">
+                    <Users className="w-6 h-6" />
                   </div>
-
-                  {/* Quick Action: Log Group Expense */}
+                  <h3 className="font-bold text-slate-800 text-sm">No Expense Groups Created Yet</h3>
+                  <p className="max-w-md mx-auto text-slate-500 text-[11px]">
+                    Create groups for your trips, outings, roommates, or office lunch squads to split expenses in seconds.
+                  </p>
                   <button
                     type="button"
-                    onClick={() => openExpenseWithGroup(group)}
-                    className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                    onClick={() => {
+                      setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
+                      setIsGroupModalOpen(true);
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs transition cursor-pointer"
                   >
-                    <CreditCard className="w-3.5 h-3.5" />
-                    ⚡ Log Group Expense
+                    + Create Your First Group
                   </button>
                 </div>
-              ))}
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {groups.map(group => (
+                    <div
+                      key={group.id}
+                      className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                              <Users className="w-4 h-4 text-indigo-600" />
+                              {group.name}
+                            </h3>
+                            {group.description && (
+                              <p className="text-[11px] text-slate-500 mt-0.5">{group.description}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setGroupForm({
+                                  id: group.id,
+                                  name: group.name,
+                                  description: group.description || '',
+                                  members: group.members || [],
+                                  newMemberInput: ''
+                                });
+                                setIsGroupModalOpen(true);
+                              }}
+                              className="p-1 text-slate-400 hover:text-indigo-600 rounded transition cursor-pointer"
+                              title="Edit Group"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGroup(group.id, group.name)}
+                              className="p-1 text-slate-400 hover:text-red-500 rounded transition cursor-pointer"
+                              title="Delete Group"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Members Pills */}
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            Members ({group.members?.length || 0})
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {(group.members || []).map((m, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-semibold flex items-center gap-1"
+                              >
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                                {m}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Group Stats */}
+                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-450 uppercase font-bold">Total Spent</span>
+                            <div className="font-black text-slate-800">
+                              Rs. {(group.totalSpent || 0).toLocaleString()}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-450 uppercase font-bold">Expenses</span>
+                            <div className="font-bold text-slate-700">
+                              {group.expenseCount || 0} logged
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Quick Action: Log Group Expense */}
+                      <button
+                        type="button"
+                        onClick={() => openExpenseWithGroup(group)}
+                        className="w-full py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <CreditCard className="w-3.5 h-3.5" />
+                        ⚡ Log Group Expense
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ─────────────────────────────────────────────────────────────────── */}
       {/* 7. CATEGORIES MANAGEMENT TAB */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'categories' && (
@@ -5963,7 +6093,30 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
         const normName = p.name.toLowerCase();
         const pLends = lends.filter(l => l.personName.toLowerCase() === normName);
         const pBorrows = borrows.filter(b => b.personName.toLowerCase() === normName);
-        const pSplits = expenses.filter(e => (e.splitPersonName || '').toLowerCase() === normName);
+        const pSplits = expenses.flatMap(e => {
+          if (e.splits && e.splits.length > 0) {
+            return e.splits
+              .filter(s => (s.personName || '').trim().toLowerCase() === normName && !s.isSponsored)
+              .map(s => ({
+                id: `${e.id}-${s.personName}`,
+                description: e.description,
+                date: e.date,
+                category: e.category,
+                amount: e.amount,
+                splitAmount: s.amount
+              }));
+          } else if ((e.splitPersonName || '').toLowerCase() === normName) {
+            return [{
+              id: e.id,
+              description: e.description,
+              date: e.date,
+              category: e.category,
+              amount: e.amount,
+              splitAmount: e.splitAmount || 0
+            }];
+          }
+          return [];
+        });
         const pPaidForMe = expenses.filter(e => (e.paidByPersonName || '').toLowerCase() === normName);
 
         // Find all sponsored items for this person (absorbed by user as treat/gift, 0 debt to return)
@@ -6013,16 +6166,36 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         </span>
                       )}
                     </h3>
-                    {p.contact && (
-                      <p className="text-[11px] text-slate-500 flex items-center gap-1">
-                        <Phone className="w-3 h-3" /> {p.contact}
-                      </p>
-                    )}
+                    <div className="flex flex-wrap items-center gap-2.5 mt-0.5">
+                      {p.contact && (
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                          <Phone className="w-3 h-3 text-slate-400" /> {p.contact}
+                        </p>
+                      )}
+                      {p.email && (
+                        <p className="text-[11px] text-indigo-600 flex items-center gap-1 font-medium">
+                          <Mail className="w-3 h-3" /> {p.email}
+                        </p>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <button onClick={() => setSelectedPersonLedger(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
-                  <X className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  {netLedger > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenPersonReminder(p)}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                      title="Send email settlement breakdown to this person"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Send Reminder</span>
+                    </button>
+                  )}
+                  <button onClick={() => setSelectedPersonLedger(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
 
               <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4 text-xs">

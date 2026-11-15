@@ -223,53 +223,92 @@ async function migratePeopleAndCategories(db: any) {
     console.error('Error cleaning duplicate categories:', err);
   }
 
-  // 2. Clean up any existing duplicate people in database
+  // 2. Clean up any existing duplicate or corrupted composite people in database
   try {
     const allExistingPeople = await peopleCol.find({}).toArray();
     const seenPeopleMap = new Map<string, any>();
     const dupPeopleIds: any[] = [];
+    const individualNamesToEnsure = new Set<string>();
+
     for (const p of allExistingPeople) {
-      const norm = (p.name || '').trim().toLowerCase();
-      if (!norm) {
+      const rawName = (p.name || '').trim();
+      const lower = rawName.toLowerCase();
+      // Detect corrupted names like "(+Nitesh, Sahil, Richa sponsored) Nitesh, Sahil"
+      if (!rawName || lower.includes('sponsored') || rawName.includes('(') || rawName.includes(')') || rawName.includes('+') || rawName.includes(',')) {
         dupPeopleIds.push(p._id);
+        // Extract any individual names from comma-separated parts
+        const stripped = rawName.replace(/\([^)]*\)/g, '').replace(/\+/g, '');
+        const parts = stripped.split(',').map((s: string) => s.trim()).filter((s: string) => s && !s.toLowerCase().includes('sponsored'));
+        for (const part of parts) {
+          if (part.length > 1 && !part.includes('(') && !part.includes(')')) {
+            individualNamesToEnsure.add(part);
+          }
+        }
         continue;
       }
-      if (seenPeopleMap.has(norm)) {
-        const prev = seenPeopleMap.get(norm);
-        if ((!prev.contact && p.contact) || (!prev.isDefault && p.isDefault)) {
+      if (seenPeopleMap.has(lower)) {
+        const prev = seenPeopleMap.get(lower);
+        if ((!prev.contact && p.contact) || (!prev.email && p.email) || (!prev.isDefault && p.isDefault)) {
           dupPeopleIds.push(prev._id);
-          seenPeopleMap.set(norm, p);
+          seenPeopleMap.set(lower, p);
         } else {
           dupPeopleIds.push(p._id);
         }
       } else {
-        seenPeopleMap.set(norm, p);
+        seenPeopleMap.set(lower, p);
       }
     }
     if (dupPeopleIds.length > 0) {
       await peopleCol.deleteMany({ _id: { $in: dupPeopleIds } });
     }
+
+    // Ensure extracted individual people exist with clean profile
+    for (const cleanName of individualNamesToEnsure) {
+      const lower = cleanName.toLowerCase();
+      if (!seenPeopleMap.has(lower)) {
+        const newPerson: Person = {
+          id: crypto.randomUUID(),
+          name: cleanName,
+          contact: '',
+          isDefault: false,
+          notes: 'Auto-extracted companion',
+          createdAt: now,
+          updatedAt: now
+        };
+        await peopleCol.insertOne(newPerson);
+        seenPeopleMap.set(lower, newPerson);
+      }
+    }
   } catch (err) {
-    console.error('Error cleaning duplicate people:', err);
+    console.error('Error cleaning duplicate/corrupted people:', err);
   }
 
   // 3. Unify and migrate all people across the whole finance system
   const lendNames: string[] = await lendsCol.distinct('personName');
   const borrowNames: string[] = await borrowsCol.distinct('personName');
   const splitNames: string[] = await expensesCol.distinct('splitPersonName');
+  const splitItemNames: string[] = await expensesCol.distinct('splits.personName');
   const paidByNames: string[] = await expensesCol.distinct('paidByPersonName');
   const backlogSplitNames: string[] = await backlogCol.distinct('splitPersonName');
 
   const peopleNameMap = new Map<string, string>();
-  for (const n of [...lendNames, ...borrowNames, ...splitNames, ...paidByNames, ...backlogSplitNames]) {
-    const trimmed = (n || '').trim();
-    if (trimmed && !peopleNameMap.has(trimmed.toLowerCase())) {
-      peopleNameMap.set(trimmed.toLowerCase(), trimmed);
+  for (const n of [...lendNames, ...borrowNames, ...splitNames, ...splitItemNames, ...paidByNames, ...backlogSplitNames]) {
+    const raw = (n || '').trim();
+    if (!raw) continue;
+    // Strip parenthetical notes like (sponsored)
+    const stripped = raw.replace(/\([^)]*\)/g, '').replace(/\+/g, '');
+    // Split by comma in case multiple names were stored in splitPersonName
+    const tokens = stripped.split(',').map((s: string) => s.trim()).filter((s: string) => s && !s.toLowerCase().includes('sponsored'));
+    for (const singleName of tokens) {
+      const lower = singleName.toLowerCase();
+      if (singleName.length > 1 && !singleName.includes('(') && !singleName.includes(')') && !peopleNameMap.has(lower)) {
+        peopleNameMap.set(lower, singleName);
+      }
     }
   }
 
   const freshPeople = await peopleCol.find({}).toArray();
-  const existingNamesSet = new Set(freshPeople.map((p: any) => p.name.trim().toLowerCase()));
+  const existingNamesSet = new Set(freshPeople.map((p: any) => (p.name || '').trim().toLowerCase()));
 
   for (const [lowerName, originalName] of peopleNameMap.entries()) {
     if (!existingNamesSet.has(lowerName)) {
@@ -278,7 +317,7 @@ async function migratePeopleAndCategories(db: any) {
         name: originalName,
         contact: '',
         isDefault: false,
-        notes: 'Auto-migrated from existing finance transactions',
+        notes: 'Auto-migrated companion',
         createdAt: now,
         updatedAt: now
       };
@@ -1056,7 +1095,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         // Run migration to guarantee all names across lends, borrows, and shared expenses are synced as users
         await migratePeopleAndCategories(db);
 
-        const people = await peopleCol.find({}).sort({ isDefault: -1, name: 1 }).toArray();
+        const people = await peopleCol.find({
+          name: { $not: { $regex: /sponsored|\(|\)|\+|,/i } }
+        }).sort({ isDefault: -1, name: 1 }).toArray();
         const lends = await lendsCol.find({}).toArray();
         const borrows = await borrowsCol.find({}).toArray();
         const expenses = await expensesCol.find({}).toArray();
@@ -1094,8 +1135,9 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
 
         const uniquePeopleMap = new Map<string, any>();
         for (const p of enriched as any[]) {
-          const norm = (p.name || '').trim().toLowerCase();
-          if (norm && !uniquePeopleMap.has(norm)) {
+          const raw = (p.name || '').trim();
+          const norm = raw.toLowerCase();
+          if (norm && !norm.includes('sponsored') && !raw.includes('(') && !raw.includes(')') && !raw.includes('+') && !raw.includes(',') && !uniquePeopleMap.has(norm)) {
             uniquePeopleMap.set(norm, p);
           }
         }
