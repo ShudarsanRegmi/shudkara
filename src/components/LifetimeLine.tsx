@@ -48,6 +48,8 @@ export interface Post {
   content: string;
   timestamp: string;
   createdAt: string;
+  clearanceLevel?: number;
+  clearanceTier?: 'prakata' | 'guhya' | 'nigudha';
   category: string;
   tags: string[];
   media?: MediaItem[];
@@ -84,6 +86,8 @@ export interface ActiveUploadState {
   category: string;
   tags: string[];
   timestamp: string;
+  clearanceLevel?: number;
+  clearanceTier?: 'prakata' | 'guhya' | 'nigudha';
   mediaFiles: DraftMediaItem[];
   status: 'uploading' | 'completed' | 'error';
   stepText: string;
@@ -104,6 +108,40 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   // Background Upload Queue & Floating Progress Bar State
   const [activeUpload, setActiveUpload] = useState<ActiveUploadState | null>(null);
   const [shareToastPostId, setShareToastPostId] = useState<string | null>(null);
+  
+  // ── Steganographic Clearance State & Secret Cadence Handlers ──
+  const [clearanceToken, setClearanceToken] = useState<string | null>(() => {
+    try {
+      return sessionStorage.getItem('shudkara_clearance_token');
+    } catch {
+      return null;
+    }
+  });
+  const [clearanceLevel, setClearanceLevel] = useState<0 | 1 | 2>(0);
+  const [clearanceExpiresAt, setClearanceExpiresAt] = useState<Date | null>(null);
+
+  // Steganographic Modal & Trigger States
+  const [showGuhyaModal, setShowGuhyaModal] = useState(false);
+  const [guhyaInput, setGuhyaInput] = useState('');
+  const [guhyaLoading, setGuhyaLoading] = useState(false);
+  const [guhyaError, setGuhyaError] = useState('');
+  const [nigudhaLoading, setNigudhaLoading] = useState(false);
+
+  // Cadence click tracking on header
+  const headerClicksRef = useRef(0);
+  const headerClickTimerRef = useRef<any>(null);
+  const lastEscPressRef = useRef<number>(0);
+
+  const getAuthHeaders = (extraHeaders: Record<string, string> = {}) => {
+    const headers: Record<string, string> = {
+      'X-Session-Token': authToken || '',
+      ...extraHeaders
+    };
+    if (clearanceToken) {
+      headers['X-Clearance-Token'] = clearanceToken;
+    }
+    return headers;
+  };
   
   // Filters & Search
   const [search, setSearch] = useState('');
@@ -141,6 +179,279 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       window.removeEventListener('shudkara:draft-finalized', refreshPendingDrafts);
     };
   }, []);
+
+  // ── Steganographic Clearance Lifecycle & Lease Verification ──
+  useEffect(() => {
+    if (!clearanceToken || !authToken) {
+      setClearanceLevel(0);
+      return;
+    }
+    fetch('/api/timeline/clearance/status', {
+      headers: { 'X-Session-Token': authToken, 'X-Clearance-Token': clearanceToken }
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.active) {
+          setClearanceLevel(data.level || 0);
+          if (data.expiresAt) setClearanceExpiresAt(new Date(data.expiresAt));
+        } else {
+          sessionStorage.removeItem('shudkara_clearance_token');
+          setClearanceToken(null);
+          setClearanceLevel(0);
+        }
+      })
+      .catch(() => {});
+  }, [clearanceToken, authToken]);
+
+  // Panic Conceal: Instantly revokes elevated clearance and purges memory
+  const handlePanicConceal = async () => {
+    if (clearanceToken && authToken) {
+      fetch('/api/timeline/clearance/lock', {
+        method: 'POST',
+        headers: { 'X-Session-Token': authToken, 'X-Clearance-Token': clearanceToken }
+      }).catch(() => {});
+    }
+    try {
+      sessionStorage.removeItem('shudkara_clearance_token');
+    } catch {}
+    setClearanceToken(null);
+    setClearanceLevel(0);
+    setClearanceExpiresAt(null);
+    setShowGuhyaModal(false);
+    setGuhyaInput('');
+    setGuhyaError('');
+    // Instant DOM & in-memory purge
+    setPosts(prev => prev.filter(p => !p.clearanceLevel || p.clearanceLevel === 0));
+    fetchPosts(true);
+    fetchFilterMetadata();
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([60, 40, 60]);
+  };
+
+  // Check 15-minute lease expiry every 10 seconds
+  useEffect(() => {
+    if (clearanceLevel === 0 || !clearanceExpiresAt) return;
+    const interval = setInterval(() => {
+      if (Date.now() >= clearanceExpiresAt.getTime()) {
+        handlePanicConceal();
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [clearanceLevel, clearanceExpiresAt]);
+
+  // Double-Escape key listener for Instant Panic Conceal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const now = Date.now();
+        if (now - lastEscPressRef.current < 500) {
+          handlePanicConceal();
+        }
+        lastEscPressRef.current = now;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clearanceToken, authToken]);
+
+  // Header Cadence Click Trigger: 5 clicks -> Guhya (TOTP), 10 clicks -> Nigudha (Biometric)
+  const handleHeaderCadenceClick = () => {
+    headerClicksRef.current += 1;
+    clearTimeout(headerClickTimerRef.current);
+
+    const clicks = headerClicksRef.current;
+    if (clicks === 5) {
+      if (clearanceLevel === 1) {
+        triggerBiometricClearance();
+      } else {
+        setShowGuhyaModal(true);
+        setGuhyaError('');
+        setGuhyaInput('');
+      }
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
+    } else if (clicks === 10) {
+      triggerBiometricClearance();
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
+    }
+
+    headerClickTimerRef.current = setTimeout(() => {
+      headerClicksRef.current = 0;
+    }, 2500);
+  };
+
+  // Submit 6-digit TOTP code for Guhya clearance
+  const submitGuhyaCode = async (codeToVerify?: string) => {
+    const code = (codeToVerify || guhyaInput).trim();
+    if (!code || code.length < 6 || !authToken) return;
+
+    setGuhyaLoading(true);
+    setGuhyaError('');
+    try {
+      const res = await fetch('/api/timeline/clearance/verify-totp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Session-Token': authToken },
+        body: JSON.stringify({ code })
+      });
+      const data = await res.json();
+      if (res.ok && data.success && data.clearanceToken) {
+        try {
+          sessionStorage.setItem('shudkara_clearance_token', data.clearanceToken);
+        } catch {}
+        setClearanceToken(data.clearanceToken);
+        setClearanceLevel(1);
+        if (data.expiresAt) setClearanceExpiresAt(new Date(data.expiresAt));
+        setShowGuhyaModal(false);
+        setGuhyaInput('');
+        fetchPosts(true);
+        fetchFilterMetadata();
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 100]);
+      } else {
+        setGuhyaError(data.error || 'Authentication rejected.');
+        setGuhyaInput('');
+      }
+    } catch {
+      setGuhyaError('Verification connection failed.');
+    } finally {
+      setGuhyaLoading(false);
+    }
+  };
+
+  // WebAuthn Passkey Helper Functions
+  function bufferToBase64Url(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function base64UrlToBuffer(base64url: string): BufferSource {
+    const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
+    const base64 = (base64url + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = atob(base64);
+    const buffer = new ArrayBuffer(rawData.length);
+    const outputArray = new Uint8Array(buffer);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return buffer;
+  }
+
+  // Trigger WebAuthn Passkey Biometric challenge (Nigudha / Level 2)
+  const triggerBiometricClearance = async () => {
+    if (!authToken || typeof window === 'undefined' || !window.navigator?.credentials) {
+      return;
+    }
+
+    setNigudhaLoading(true);
+    try {
+      const challengeRes = await fetch('/api/timeline/clearance/biometric/auth-challenge', {
+        method: 'POST',
+        headers: { 'X-Session-Token': authToken }
+      });
+      const challengeData = await challengeRes.json();
+
+      if (!challengeData.hasRegisteredPasskeys) {
+        // First-time setup: Register passkey via Phone QR or local sensor
+        const regChallengeRes = await fetch('/api/timeline/clearance/biometric/register-challenge', {
+          method: 'POST',
+          headers: { 'X-Session-Token': authToken }
+        });
+        const regData = await regChallengeRes.json();
+
+        const credential = await navigator.credentials.create({
+          publicKey: {
+            challenge: base64UrlToBuffer(regData.challenge),
+            rp: regData.rp,
+            user: {
+              ...regData.user,
+              id: base64UrlToBuffer(regData.user.id)
+            },
+            pubKeyCredParams: regData.pubKeyCredParams,
+            authenticatorSelection: regData.authenticatorSelection,
+            timeout: regData.timeout
+          }
+        }) as PublicKeyCredential;
+
+        if (credential) {
+          const response = credential.response as AuthenticatorAttestationResponse;
+          const verifyRes = await fetch('/api/timeline/clearance/biometric/verify-registration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Session-Token': authToken },
+            body: JSON.stringify({
+              id: credential.id,
+              rawId: bufferToBase64Url(credential.rawId),
+              type: credential.type,
+              response: {
+                clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+                attestationObject: bufferToBase64Url(response.attestationObject),
+                transports: response.getTransports ? response.getTransports() : undefined
+              }
+            })
+          });
+          const verifyData = await verifyRes.json();
+          if (verifyRes.ok && verifyData.success && verifyData.clearanceToken) {
+            try { sessionStorage.setItem('shudkara_clearance_token', verifyData.clearanceToken); } catch {}
+            setClearanceToken(verifyData.clearanceToken);
+            setClearanceLevel(2);
+            if (verifyData.expiresAt) setClearanceExpiresAt(new Date(verifyData.expiresAt));
+            fetchPosts(true);
+            fetchFilterMetadata();
+            if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 40, 100]);
+          }
+        }
+        return;
+      }
+
+      // Existing passkey: Authenticate with registered phone / hardware
+      const credential = await navigator.credentials.get({
+        publicKey: {
+          challenge: base64UrlToBuffer(challengeData.challenge),
+          rpId: challengeData.rpId,
+          allowCredentials: challengeData.allowCredentials.map((c: any) => ({
+            id: base64UrlToBuffer(c.id),
+            type: c.type,
+            transports: c.transports
+          })),
+          userVerification: 'preferred',
+          timeout: challengeData.timeout
+        }
+      }) as PublicKeyCredential;
+
+      if (credential) {
+        const response = credential.response as AuthenticatorAssertionResponse;
+        const verifyRes = await fetch('/api/timeline/clearance/biometric/verify-auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Session-Token': authToken },
+          body: JSON.stringify({
+            id: credential.id,
+            rawId: bufferToBase64Url(credential.rawId),
+            type: credential.type,
+            response: {
+              clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+              authenticatorData: bufferToBase64Url(response.authenticatorData),
+              signature: bufferToBase64Url(response.signature),
+              userHandle: response.userHandle ? bufferToBase64Url(response.userHandle) : null
+            }
+          })
+        });
+        const verifyData = await verifyRes.json();
+        if (verifyRes.ok && verifyData.success && verifyData.clearanceToken) {
+          try { sessionStorage.setItem('shudkara_clearance_token', verifyData.clearanceToken); } catch {}
+          setClearanceToken(verifyData.clearanceToken);
+          setClearanceLevel(2);
+          if (verifyData.expiresAt) setClearanceExpiresAt(new Date(verifyData.expiresAt));
+          fetchPosts(true);
+          fetchFilterMetadata();
+          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 40, 100]);
+        }
+      }
+    } catch {
+      // User cancelled passkey prompt or dialog timed out
+    } finally {
+      setNigudhaLoading(false);
+    }
+  };
 
   // Editing state
   const [editingPostId, setEditingPostId] = useState<string | null>(null);
@@ -305,7 +616,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     try {
       const res = await fetch('/api/timeline/sync-drive', {
         method: 'POST',
-        headers: { 'X-Session-Token': authToken }
+        headers: getAuthHeaders()
       });
       const data = await res.json();
       if (res.ok) {
@@ -327,7 +638,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     if (!authToken) return;
     try {
       const res = await fetch('/api/timeline/tags', {
-        headers: { 'X-Session-Token': authToken }
+        headers: getAuthHeaders()
       });
       if (res.ok) {
         const data = await res.json();
@@ -356,7 +667,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       if (selectedTag) url.searchParams.set('tag', selectedTag);
 
       const res = await fetch(url.toString(), {
-        headers: { 'X-Session-Token': authToken }
+        headers: getAuthHeaders()
       });
       const data = await res.json();
 
@@ -369,6 +680,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           setSkip(prev => prev + limit);
         }
         setTotal(data.total || 0);
+        if (data.activeClearance) {
+          setClearanceLevel(data.activeClearance.level || 0);
+        }
       } else {
         setErrorMsg(data.details ? `${data.error} (${data.details})` : (data.error || 'Failed to load timeline feed.'));
       }
@@ -446,7 +760,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const uploadMediaFileWithProgress = async (
     postId: string,
     file: DraftMediaItem,
-    token: string,
+    _token?: string,
     onProgress?: (chunkPercent: number, stepText: string) => void
   ): Promise<any> => {
     const blob = await getBlobFromDraftMedia(file);
@@ -457,10 +771,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     if (size < CHUNK_THRESHOLD) {
       const res = await fetch(`/api/timeline/${postId}/media`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': token
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           name: file.name,
           type: file.type,
@@ -481,10 +794,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
     const initRes = await fetch(`/api/timeline/${postId}/media/init-chunked`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-Token': token
-      },
+      headers: getAuthHeaders({
+        'Content-Type': 'application/json'
+      }),
       body: JSON.stringify({
         name: file.name,
         type: file.type,
@@ -525,10 +837,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         try {
           const chunkRes = await fetch(`/api/timeline/${postId}/media/upload-chunk`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Session-Token': token
-            },
+            headers: getAuthHeaders({
+              'Content-Type': 'application/json'
+            }),
             body: JSON.stringify({
               uploadId,
               chunkBase64,
@@ -576,6 +887,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     category: string;
     tags: string[];
     timestamp: string;
+    clearanceLevel?: number;
+    clearanceTier?: 'prakata' | 'guhya' | 'nigudha';
     mediaFiles: DraftMediaItem[];
   }) => {
     if (!authToken) return;
@@ -606,6 +919,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       currentStep: 3,
       mediaCount: totalMedia,
       mediaFiles: postData.mediaFiles,
+      clearanceLevel: postData.clearanceLevel || 0,
+      clearanceTier: postData.clearanceTier || 'prakata',
       status: 'queued',
       updatedAt: Date.now(),
       createdAt: Date.now()
@@ -617,10 +932,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       enqueueOfflineAction({
         url: '/api/timeline',
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: {
           draftId: postData.draftId,
           title: postData.title,
@@ -628,6 +942,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           category: postData.category,
           tags: postData.tags,
           timestamp: postData.timestamp,
+          clearanceLevel: postData.clearanceLevel || 0,
+          clearanceTier: postData.clearanceTier || 'prakata',
           mediaFiles: [] // send empty so offline action fits in localStorage and never times out Azure Functions
         },
         description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
@@ -650,16 +966,17 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       // Step 1: Create post on server with metadata and empty media list (fast!)
       const createRes = await fetch('/api/timeline', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           title: postData.title,
           content: postData.content,
           category: postData.category,
           tags: postData.tags,
           timestamp: postData.timestamp,
+          clearanceLevel: postData.clearanceLevel || 0,
+          clearanceTier: postData.clearanceTier || 'prakata',
           mediaFiles: [] // send empty so creation is fast and avoids huge payload limits
         })
       });
@@ -761,7 +1078,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     try {
       const res = await fetch(`/api/timeline/${id}`, {
         method: 'DELETE',
-        headers: { 'X-Session-Token': authToken }
+        headers: getAuthHeaders()
       });
       if (res.ok) {
         setPosts(prev => prev.filter(p => p._id !== id));
@@ -839,10 +1156,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
       const res = await fetch(`/api/timeline/${id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Session-Token': authToken
-        },
+        headers: getAuthHeaders({
+          'Content-Type': 'application/json'
+        }),
         body: JSON.stringify({
           title: editTitle.trim(),
           content: editContent.trim(),
@@ -1009,15 +1325,48 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   return (
     <div className="w-full pb-20 select-none">
       
-      {/* ── Compact Space-Saving Top Header Bar ── */}
-      <div className="flex items-center justify-between gap-3 mb-6 bg-white border border-slate-200/90 px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
-            <Sparkles className="w-5 h-5 text-blue-600" />
+      {/* ── Compact Space-Saving Top Header Bar with Signal-Based Clearance Cadence ── */}
+      <div 
+        onDoubleClick={handlePanicConceal}
+        className={`flex items-center justify-between gap-3 mb-6 bg-white border px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs transition-all duration-300 relative ${
+          clearanceLevel === 2
+            ? 'border-rose-400/60 ring-1 ring-rose-400/20'
+            : clearanceLevel === 1
+            ? 'border-amber-400/60 ring-1 ring-amber-400/20'
+            : 'border-slate-200/90'
+        }`}
+      >
+        <div 
+          onClick={handleHeaderCadenceClick}
+          className="flex items-center gap-3 cursor-pointer select-none"
+          title=""
+        >
+          <div className={`p-2 rounded-xl transition-colors duration-300 ${
+            clearanceLevel === 2
+              ? 'bg-rose-50 text-rose-600'
+              : clearanceLevel === 1
+              ? 'bg-amber-50 text-amber-600'
+              : 'bg-blue-50 text-blue-600'
+          }`}>
+            <Sparkles className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 leading-none">
+            <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-slate-900 leading-none flex items-center gap-1.5">
               Lifetime Line
+              {clearanceLevel === 1 && (
+                <span 
+                  onClick={(e) => { e.stopPropagation(); handlePanicConceal(); }} 
+                  className="w-2 h-2 rounded-full bg-amber-400 inline-block animate-pulse cursor-pointer"
+                  title=""
+                />
+              )}
+              {clearanceLevel === 2 && (
+                <span 
+                  onClick={(e) => { e.stopPropagation(); handlePanicConceal(); }} 
+                  className="w-2 h-2 rounded-full bg-rose-500 inline-block animate-ping cursor-pointer"
+                  title=""
+                />
+              )}
             </h1>
             <p className="text-[11px] text-slate-400 mt-0.5">
               {total} memories in chronicle
@@ -1517,6 +1866,88 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         />
       )}
 
+      {/* ── Discrete Steganographic Guhya Keycode Dialog (TOTP) ── */}
+      {showGuhyaModal && (
+        <div 
+          onClick={() => { setShowGuhyaModal(false); setGuhyaInput(''); setGuhyaError(''); }}
+          className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150 relative"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center shadow-inner">
+              <Sparkles className="w-6 h-6 text-amber-400" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-base font-extrabold text-slate-100 tracking-wider">
+                गुह्य
+              </h3>
+              <p className="text-xs text-slate-400">
+                Keycode required to illuminate chronicle
+              </p>
+            </div>
+
+            <form 
+              onSubmit={(e) => { e.preventDefault(); submitGuhyaCode(); }}
+              className="w-full space-y-3"
+            >
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={6}
+                autoFocus
+                value={guhyaInput}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                  setGuhyaInput(val);
+                  setGuhyaError('');
+                  if (val.length === 6) {
+                    submitGuhyaCode(val);
+                  }
+                }}
+                placeholder="· · · · · ·"
+                className="w-full text-center text-2xl tracking-[0.5em] font-mono py-3 px-4 bg-slate-950/60 border border-slate-800 focus:border-amber-400 focus:ring-1 focus:ring-amber-400/40 rounded-2xl text-white outline-none transition placeholder:text-slate-600"
+              />
+
+              {guhyaError && (
+                <p className="text-xs font-semibold text-rose-400 animate-in fade-in">
+                  {guhyaError}
+                </p>
+              )}
+
+              {guhyaLoading && (
+                <div className="flex items-center justify-center gap-2 text-xs text-amber-300 font-semibold">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Verifying...
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Discrete Steganographic Nigudha Biometric Modal (WebAuthn / Passkeys) ── */}
+      {nigudhaLoading && (
+        <div className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shadow-inner">
+              <Sparkles className="w-6 h-6 text-rose-400 animate-pulse" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-extrabold text-slate-100 tracking-wider">
+                निगूढ
+              </h3>
+              <p className="text-xs text-slate-400">
+                Awaiting biometric confirmation...
+              </p>
+            </div>
+            <Loader2 className="w-5 h-5 text-rose-400 animate-spin mt-2" />
+          </div>
+        </div>
+      )}
+
       {/* ── Floating Visual Upload Progress Bar (Bottom Right Corner) ── */}
       {activeUpload && (
         <aside 
@@ -2012,6 +2443,12 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
       {/* Top Bar with Category, Time & Controls */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex flex-wrap items-center gap-2">
+          {post.clearanceLevel === 1 && (
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse" title="" />
+          )}
+          {post.clearanceLevel === 2 && (
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 animate-pulse" title="" />
+          )}
           <span className="px-2 py-0.5 bg-slate-100 border border-slate-200 text-slate-700 font-bold uppercase tracking-wider rounded-md text-[9px]">
             {post.category || 'General'}
           </span>
@@ -2026,14 +2463,16 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
         </div>
 
         <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition relative">
-          {/* Public Social Share Button */}
-          <button
-            onClick={() => onSharePost(post)}
-            className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition relative"
-            title="Share Public Link (Friends can like/comment with no login)"
-          >
-            {isShareToastActive ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5" />}
-          </button>
+          {/* Public Social Share Button (Only for Prakata / Level 0 posts) */}
+          {(!post.clearanceLevel || post.clearanceLevel === 0) && (
+            <button
+              onClick={() => onSharePost(post)}
+              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition relative"
+              title="Share Public Link (Friends can like/comment with no login)"
+            >
+              {isShareToastActive ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Share2 className="w-3.5 h-3.5" />}
+            </button>
+          )}
           {isShareToastActive && (
             <span className="absolute -top-7 right-0 bg-slate-900 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow-lg whitespace-nowrap animate-in fade-in duration-150 z-30">
               Copied Share Link!

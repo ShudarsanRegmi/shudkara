@@ -33,6 +33,8 @@ export interface TimelineDraftMeta {
   currentStep: 1 | 2 | 3;
   mediaCount: number;
   mediaFiles?: DraftMediaItem[];
+  clearanceLevel?: number;
+  clearanceTier?: 'prakata' | 'guhya' | 'nigudha';
   status?: 'draft' | 'queued' | 'syncing' | 'failed' | 'synced';
   syncError?: string;
   updatedAt: number;
@@ -48,6 +50,8 @@ interface TimelineWizardModalProps {
     category: string;
     tags: string[];
     timestamp: string;
+    clearanceLevel?: number;
+    clearanceTier?: 'prakata' | 'guhya' | 'nigudha';
     mediaFiles: DraftMediaItem[];
   }) => void;
   categoriesList?: string[];
@@ -649,6 +653,49 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   const [isDraggingExternalFiles, setIsDraggingExternalFiles] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // Steganographic Clearance State & Secret Cadence Handlers
+  const [clearanceLevel, setClearanceLevel] = useState<0 | 1 | 2>(0);
+  const clickCountRef = useRef(0);
+  const clickTimerRef = useRef<any>(null);
+  const holdTimerRef = useRef<any>(null);
+  const isHoldingRef = useRef(false);
+
+  const handleCadenceClick = () => {
+    if (isHoldingRef.current) return;
+    clickCountRef.current += 1;
+    clearTimeout(clickTimerRef.current);
+
+    const clicks = clickCountRef.current;
+    if (clicks === 5) {
+      // 5 Clicks: Elevate to Guhya (Level 1)
+      setClearanceLevel(1);
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
+    } else if (clicks === 10) {
+      // 10 Clicks: Elevate to Nigudha (Level 2)
+      setClearanceLevel(2);
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
+    }
+
+    clickTimerRef.current = setTimeout(() => {
+      clickCountRef.current = 0;
+    }, 2500);
+  };
+
+  const handleHoldStart = () => {
+    isHoldingRef.current = false;
+    holdTimerRef.current = setTimeout(() => {
+      isHoldingRef.current = true;
+      // Press & Hold (1.5s): Reset back to Prakata (Level 0)
+      setClearanceLevel(0);
+      clickCountRef.current = 0;
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(100);
+    }, 1500);
+  };
+
+  const handleHoldEnd = () => {
+    clearTimeout(holdTimerRef.current);
+  };
+
   // Submission & feedback states
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -675,6 +722,11 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
         const media = fullDraft.mediaFiles || [];
         setSelectedFiles(media);
+        if (fullDraft.clearanceLevel !== undefined) {
+          setClearanceLevel((fullDraft.clearanceLevel as 0 | 1 | 2) || 0);
+        } else {
+          setClearanceLevel(0);
+        }
         setLastSavedTime(new Date(fullDraft.updatedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
       } else {
         // Check legacy v1 draft for migration
@@ -746,6 +798,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       currentStep,
       mediaCount: selectedFiles.length,
       mediaFiles: selectedFiles,
+      clearanceLevel,
+      clearanceTier: clearanceLevel === 2 ? 'nigudha' : clearanceLevel === 1 ? 'guhya' : 'prakata',
       status: customStatus || 'draft',
       syncError: customError,
       updatedAt: Date.now(),
@@ -813,7 +867,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         persistDraftImmediately();
       }
     };
-  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
+  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId, clearanceLevel]);
 
   // Create New Draft
   const handleCreateNewDraft = async () => {
@@ -823,6 +877,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     setContent('');
     setCategory('General');
     setRawTags('');
+    setClearanceLevel(0);
     const now = new Date();
     setTimestamp(now.toISOString().substring(0, 16));
     const bs = adToBs(now);
@@ -1121,6 +1176,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       category: category.trim() || 'General',
       tags: tagsArray,
       timestamp: new Date(timestamp).toISOString(),
+      clearanceLevel,
+      clearanceTier: clearanceLevel === 2 ? 'nigudha' : clearanceLevel === 1 ? 'guhya' : 'prakata',
       mediaFiles: selectedFiles
     });
     onClose();
@@ -1140,7 +1197,22 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     >
       
       {/* ── Wizard Dialog Box ── */}
-      <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden relative animate-in zoom-in-95 duration-200 my-auto">
+      <div className={`bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl transition-all duration-300 overflow-hidden relative animate-in zoom-in-95 duration-200 my-auto ${
+        clearanceLevel === 2
+          ? 'border-2 border-rose-500/80 ring-2 ring-rose-500/20 shadow-rose-500/10'
+          : clearanceLevel === 1
+          ? 'border-2 border-amber-400/80 ring-2 ring-amber-400/20 shadow-amber-500/10'
+          : 'border border-slate-200'
+      }`}>
+        {/* Subtle Steganographic Hairline Accent */}
+        {clearanceLevel > 0 && (
+          <div className={`h-1 w-full shrink-0 transition-all duration-300 ${
+            clearanceLevel === 2
+              ? 'bg-gradient-to-r from-rose-500 via-purple-500 to-rose-600'
+              : 'bg-gradient-to-r from-amber-400 via-amber-300 to-amber-500'
+          }`} />
+        )}
+
         {/* Visual Drop Overlay when dragging images/videos from other places */}
         {isDraggingExternalFiles && (
           <div className="absolute inset-0 z-50 bg-blue-600/20 backdrop-blur-xs border-4 border-dashed border-blue-500 rounded-3xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-150 pointer-events-none">
@@ -1158,13 +1230,33 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         
         {/* ── Top Bar with Step Indicators & Multiple Drafts Dropdown ── */}
         <div className="px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between shrink-0 relative">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-extrabold text-sm shadow-md shadow-blue-500/20">
+          <div 
+            onClick={handleCadenceClick}
+            onMouseDown={handleHoldStart}
+            onMouseUp={handleHoldEnd}
+            onTouchStart={handleHoldStart}
+            onTouchEnd={handleHoldEnd}
+            className="flex items-center gap-3 cursor-pointer select-none"
+            title=""
+          >
+            <div className={`w-8 h-8 rounded-xl text-white flex items-center justify-center font-extrabold text-sm shadow-md transition-colors duration-300 ${
+              clearanceLevel === 2
+                ? 'bg-rose-600 shadow-rose-500/20'
+                : clearanceLevel === 1
+                ? 'bg-amber-500 shadow-amber-500/20'
+                : 'bg-blue-600 shadow-blue-500/20'
+            }`}>
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
               <h2 className="text-base font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
                 Document Moment
+                {clearanceLevel === 1 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block animate-pulse" />
+                )}
+                {clearanceLevel === 2 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block animate-ping" />
+                )}
                 {lastSavedTime && (
                   <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1">
                     <Check className="w-3 h-3 text-emerald-600" /> Draft Saved {lastSavedTime}
