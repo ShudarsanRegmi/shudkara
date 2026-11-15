@@ -120,16 +120,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   const [clearanceLevel, setClearanceLevel] = useState<0 | 1 | 2>(0);
   const [clearanceExpiresAt, setClearanceExpiresAt] = useState<Date | null>(null);
 
+  // Immediate 100ms background flash feedback state
+  const [flashBg, setFlashBg] = useState<'amber' | 'rose' | 'reset' | null>(null);
+
   // Steganographic Modal & Trigger States
   const [showGuhyaModal, setShowGuhyaModal] = useState(false);
   const [guhyaInput, setGuhyaInput] = useState('');
   const [guhyaLoading, setGuhyaLoading] = useState(false);
   const [guhyaError, setGuhyaError] = useState('');
+  const [showNigudhaModal, setShowNigudhaModal] = useState(false);
   const [nigudhaLoading, setNigudhaLoading] = useState(false);
+  const [nigudhaError, setNigudhaError] = useState('');
 
-  // Cadence click tracking on header
+  // Cadence click tracking: 5 clicks on title to upgrade, 3 clicks on center space to reset
   const headerClicksRef = useRef(0);
   const headerClickTimerRef = useRef<any>(null);
+  const resetClicksRef = useRef(0);
+  const resetClickTimerRef = useRef<any>(null);
   const lastEscPressRef = useRef<number>(0);
 
   const getAuthHeaders = (extraHeaders: Record<string, string> = {}) => {
@@ -253,29 +260,55 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [clearanceToken, authToken]);
 
-  // Header Cadence Click Trigger: 5 clicks -> Guhya (TOTP), 10 clicks -> Nigudha (Biometric)
+  // Header Cadence Click: EXACTLY 5 clicks to upgrade: Level 0 -> Level 1 (Guhya), Level 1 -> Level 2 (Nigudha)
   const handleHeaderCadenceClick = () => {
     headerClicksRef.current += 1;
     clearTimeout(headerClickTimerRef.current);
 
     const clicks = headerClicksRef.current;
     if (clicks === 5) {
-      if (clearanceLevel === 1) {
-        triggerBiometricClearance();
-      } else {
+      headerClicksRef.current = 0;
+      if (clearanceLevel === 0) {
+        // Upgrade from Level 0 to Level 1 (Guhya TOTP)
+        setFlashBg('amber');
+        setTimeout(() => setFlashBg(null), 100);
         setShowGuhyaModal(true);
         setGuhyaError('');
         setGuhyaInput('');
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
+      } else if (clearanceLevel === 1) {
+        // Upgrade from Level 1 to Level 2 (Nigudha Biometrics)
+        setFlashBg('rose');
+        setTimeout(() => setFlashBg(null), 100);
+        setShowNigudhaModal(true);
+        setNigudhaError('');
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
       }
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
-    } else if (clicks === 10) {
-      triggerBiometricClearance();
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
+      return;
     }
 
     headerClickTimerRef.current = setTimeout(() => {
       headerClicksRef.current = 0;
-    }, 2500);
+    }, 2000);
+  };
+
+  // Center Empty Space Click: EXACTLY 3 clicks consecutively resets back to Level 0 (Prakata)
+  const handleResetCadenceClick = () => {
+    resetClicksRef.current += 1;
+    clearTimeout(resetClickTimerRef.current);
+
+    if (resetClicksRef.current === 3) {
+      resetClicksRef.current = 0;
+      // Immediate 100ms background flash feedback
+      setFlashBg('reset');
+      setTimeout(() => setFlashBg(null), 100);
+      handlePanicConceal();
+      return;
+    }
+
+    resetClickTimerRef.current = setTimeout(() => {
+      resetClicksRef.current = 0;
+    }, 1500);
   };
 
   // Submit 6-digit TOTP code for Guhya clearance
@@ -325,7 +358,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
 
-  function base64UrlToBuffer(base64url: string): BufferSource {
+  function base64UrlToBuffer(base64url: string): ArrayBuffer {
     const padding = '='.repeat((4 - (base64url.length % 4)) % 4);
     const base64 = (base64url + padding).replace(/-/g, '+').replace(/_/g, '/');
     const rawData = atob(base64);
@@ -337,39 +370,57 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return buffer;
   }
 
-  // Trigger WebAuthn Passkey Biometric challenge (Nigudha / Level 2)
-  const triggerBiometricClearance = async () => {
-    if (!authToken || typeof window === 'undefined' || !window.navigator?.credentials) {
+  // Execute WebAuthn hardware biometric / phone passkey authentication
+  const executeBiometricAuth = async () => {
+    if (!authToken) return;
+    if (typeof window === 'undefined' || !window.navigator?.credentials) {
+      setNigudhaError('WebAuthn is not supported in this browser.');
       return;
     }
 
     setNigudhaLoading(true);
+    setNigudhaError('');
+
     try {
       const challengeRes = await fetch('/api/timeline/clearance/biometric/auth-challenge', {
         method: 'POST',
         headers: { 'X-Session-Token': authToken }
       });
+      if (!challengeRes.ok) {
+        throw new Error('Failed to obtain challenge from server.');
+      }
       const challengeData = await challengeRes.json();
+      const challengeBuffer = base64UrlToBuffer(challengeData.challenge);
 
       if (!challengeData.hasRegisteredPasskeys) {
-        // First-time setup: Register passkey via Phone QR or local sensor
+        // First-time setup: Register passkey via Phone QR or local hardware sensor
         const regChallengeRes = await fetch('/api/timeline/clearance/biometric/register-challenge', {
           method: 'POST',
           headers: { 'X-Session-Token': authToken }
         });
         const regData = await regChallengeRes.json();
+        const regChallengeBuffer = base64UrlToBuffer(regData.challenge);
+        const userIdBuffer = new TextEncoder().encode('shudkara-owner').buffer as ArrayBuffer;
 
         const credential = await navigator.credentials.create({
           publicKey: {
-            challenge: base64UrlToBuffer(regData.challenge),
-            rp: regData.rp,
-            user: {
-              ...regData.user,
-              id: base64UrlToBuffer(regData.user.id)
+            challenge: regChallengeBuffer,
+            rp: {
+              name: 'Shudkara Timeline'
             },
-            pubKeyCredParams: regData.pubKeyCredParams,
-            authenticatorSelection: regData.authenticatorSelection,
-            timeout: regData.timeout
+            user: {
+              id: userIdBuffer,
+              name: 'shudkara-owner',
+              displayName: 'Shudkara Owner'
+            },
+            pubKeyCredParams: [
+              { alg: -7, type: 'public-key' },  // ES256
+              { alg: -257, type: 'public-key' } // RS256
+            ],
+            authenticatorSelection: {
+              userVerification: 'preferred'
+            },
+            timeout: 60000
           }
         }) as PublicKeyCredential;
 
@@ -395,26 +446,30 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             setClearanceToken(verifyData.clearanceToken);
             setClearanceLevel(2);
             if (verifyData.expiresAt) setClearanceExpiresAt(new Date(verifyData.expiresAt));
+            setShowNigudhaModal(false);
             fetchPosts(true);
             fetchFilterMetadata();
             if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 40, 100]);
+            return;
+          } else {
+            throw new Error(verifyData.error || 'Passkey registration rejected.');
           }
         }
-        return;
       }
 
-      // Existing passkey: Authenticate with registered phone / hardware
+      // Existing passkeys registered: authenticate
+      const allowCreds = (challengeData.allowCredentials || []).map((c: any) => ({
+        id: base64UrlToBuffer(c.id),
+        type: c.type || 'public-key',
+        transports: c.transports
+      }));
+
       const credential = await navigator.credentials.get({
         publicKey: {
-          challenge: base64UrlToBuffer(challengeData.challenge),
-          rpId: challengeData.rpId,
-          allowCredentials: challengeData.allowCredentials.map((c: any) => ({
-            id: base64UrlToBuffer(c.id),
-            type: c.type,
-            transports: c.transports
-          })),
+          challenge: challengeBuffer,
+          allowCredentials: allowCreds.length > 0 ? allowCreds : undefined,
           userVerification: 'preferred',
-          timeout: challengeData.timeout
+          timeout: 60000
         }
       }) as PublicKeyCredential;
 
@@ -441,13 +496,23 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           setClearanceToken(verifyData.clearanceToken);
           setClearanceLevel(2);
           if (verifyData.expiresAt) setClearanceExpiresAt(new Date(verifyData.expiresAt));
+          setShowNigudhaModal(false);
           fetchPosts(true);
           fetchFilterMetadata();
           if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 40, 100]);
+        } else {
+          throw new Error(verifyData.error || 'Biometric authentication rejected.');
         }
       }
-    } catch {
-      // User cancelled passkey prompt or dialog timed out
+    } catch (err: any) {
+      console.warn('Biometric auth notice:', err);
+      if (err.name === 'NotAllowedError') {
+        setNigudhaError('Authentication cancelled or timed out.');
+      } else if (err.name === 'SecurityError') {
+        setNigudhaError('Security origin mismatch. Ensure HTTPS or localhost is used.');
+      } else {
+        setNigudhaError(err.message || 'Biometric hardware unavailable.');
+      }
     } finally {
       setNigudhaLoading(false);
     }
@@ -1328,12 +1393,18 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       {/* ── Compact Space-Saving Top Header Bar with Signal-Based Clearance Cadence ── */}
       <div 
         onDoubleClick={handlePanicConceal}
-        className={`flex items-center justify-between gap-3 mb-6 bg-white border px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs transition-all duration-300 relative ${
-          clearanceLevel === 2
-            ? 'border-rose-400/60 ring-1 ring-rose-400/20'
+        className={`flex items-center justify-between gap-3 mb-6 border px-4 sm:px-6 py-3.5 rounded-2xl shadow-xs transition-colors duration-100 relative ${
+          flashBg === 'amber'
+            ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-400/50'
+            : flashBg === 'rose'
+            ? 'bg-rose-100 border-rose-400 ring-2 ring-rose-400/50'
+            : flashBg === 'reset'
+            ? 'bg-slate-200 border-slate-400 ring-2 ring-slate-400/50'
+            : clearanceLevel === 2
+            ? 'bg-white border-rose-400/60 ring-1 ring-rose-400/20'
             : clearanceLevel === 1
-            ? 'border-amber-400/60 ring-1 ring-amber-400/20'
-            : 'border-slate-200/90'
+            ? 'bg-white border-amber-400/60 ring-1 ring-amber-400/20'
+            : 'bg-white border-slate-200/90'
         }`}
       >
         <div 
@@ -1373,6 +1444,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             </p>
           </div>
         </div>
+
+        {/* Cryptic reset door: 3 clicks on the empty space between title and right action icons */}
+        <div 
+          onClick={handleResetCadenceClick}
+          className="flex-1 self-stretch cursor-pointer select-none min-h-[38px]"
+          title=""
+        />
         
         <div className="flex items-center gap-2">
           {/* Filters & Config Drawer Toggle Button */}
@@ -1929,21 +2007,52 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       )}
 
       {/* ── Discrete Steganographic Nigudha Biometric Modal (WebAuthn / Passkeys) ── */}
-      {nigudhaLoading && (
-        <div className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
-          <div className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150">
+      {showNigudhaModal && (
+        <div 
+          onClick={() => { if (!nigudhaLoading) { setShowNigudhaModal(false); setNigudhaError(''); } }}
+          className="fixed inset-0 z-[70] bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="bg-slate-900 border border-slate-800 text-white rounded-3xl p-6 sm:p-8 w-full max-w-sm shadow-2xl flex flex-col items-center text-center space-y-4 animate-in zoom-in-95 duration-150 relative"
+          >
             <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center shadow-inner">
-              <Sparkles className="w-6 h-6 text-rose-400 animate-pulse" />
+              <Sparkles className="w-6 h-6 text-rose-400" />
             </div>
+
             <div className="space-y-1">
               <h3 className="text-base font-extrabold text-slate-100 tracking-wider">
                 निगूढ
               </h3>
               <p className="text-xs text-slate-400">
-                Awaiting biometric confirmation...
+                Touch sensor, Windows Hello, or scan QR with Phone
               </p>
             </div>
-            <Loader2 className="w-5 h-5 text-rose-400 animate-spin mt-2" />
+
+            {nigudhaError && (
+              <p className="text-xs font-semibold text-rose-400 animate-in fade-in">
+                {nigudhaError}
+              </p>
+            )}
+
+            <button
+              type="button"
+              disabled={nigudhaLoading}
+              onClick={() => executeBiometricAuth()}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 active:scale-[0.98] text-white font-bold text-sm shadow-lg shadow-rose-500/25 transition disabled:opacity-50 disabled:pointer-events-none flex items-center justify-center gap-2"
+            >
+              {nigudhaLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Verifying Sensor...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>Verify Biometrics / Phone</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       )}

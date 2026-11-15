@@ -306,13 +306,12 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           expiresAt: new Date(Date.now() + 5 * 60 * 1000)
         });
 
-        const rpId = url.hostname === 'localhost' || url.hostname === '127.0.0.1' ? 'localhost' : url.hostname;
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
           jsonBody: {
             challenge,
-            rp: { name: 'Shudkara Timeline', id: rpId },
+            rp: { name: 'Shudkara Timeline' },
             user: {
               id: Buffer.from('shudkara-owner').toString('base64url'),
               name: 'shudkara-owner',
@@ -323,8 +322,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
               { alg: -257, type: 'public-key' } // RS256
             ],
             authenticatorSelection: {
-              userVerification: 'preferred',
-              residentKey: 'preferred'
+              userVerification: 'preferred'
             },
             timeout: 60000
           }
@@ -392,13 +390,11 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           expiresAt: new Date(Date.now() + 5 * 60 * 1000)
         });
 
-        const rpId = url.hostname === 'localhost' || url.hostname === '127.0.0.1' ? 'localhost' : url.hostname;
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
           jsonBody: {
             challenge,
-            rpId,
             allowCredentials: passkeys.map((p: any) => ({
               id: p.credentialId,
               type: 'public-key',
@@ -886,13 +882,6 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
 
       const requestedClearance = parseClearanceLevel(body.clearanceLevel ?? body.clearanceTier);
-      if (requestedClearance > activeClearance) {
-        return {
-          status: 403,
-          headers: { 'Content-Type': 'application/json' },
-          jsonBody: { error: `Insufficient clearance to publish under tier ${CLEARANCE_LEVELS[requestedClearance]}.` }
-        };
-      }
 
       const rawDate = timestamp ? new Date(timestamp) : new Date();
       const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
