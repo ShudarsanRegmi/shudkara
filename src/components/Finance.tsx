@@ -349,6 +349,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   });
 
   const [lendForm, setLendForm] = useState({
+    id: '',
     personName: '',
     contact: '',
     amount: '',
@@ -360,6 +361,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   });
 
   const [borrowForm, setBorrowForm] = useState({
+    id: '',
     personName: '',
     contact: '',
     amount: '',
@@ -1199,6 +1201,121 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
+  // Handle Edit Expense
+  const handleEditExpense = (item: ExpenseItem) => {
+    const hasSplits = item.splits && item.splits.length > 0;
+    let splitOption: 'none' | 'split' | 'paid_by_other' = 'none';
+    let splitMode: '50_50' | 'equal' | 'custom' | '100_them' = 'equal';
+    let participants: ParticipantItem[] = [];
+
+    if (item.paidByPersonName) {
+      splitOption = 'paid_by_other';
+    } else if (hasSplits || item.splitPersonName) {
+      splitOption = 'split';
+      if (hasSplits) {
+        participants = item.splits!.map(s => ({
+          name: s.personName,
+          included: true,
+          isSponsored: Boolean(s.isSponsored),
+          customAmount: s.originalAmount !== undefined ? String(s.originalAmount) : String(s.amount)
+        }));
+        if (participants.length === 1 && !participants[0].customAmount) {
+          splitMode = '50_50';
+        } else if (participants.some(p => p.customAmount && parseFloat(p.customAmount) > 0)) {
+          splitMode = 'custom';
+        } else {
+          splitMode = 'equal';
+        }
+      } else if (item.splitPersonName) {
+        participants = [{
+          name: item.splitPersonName,
+          included: true,
+          isSponsored: false,
+          customAmount: item.splitAmount ? String(item.splitAmount) : ''
+        }];
+        splitMode = '50_50';
+      }
+    }
+
+    const linkedLend = lends.find(l => l.sourceExpenseId === item.id);
+    const expectedReturnDate = linkedLend?.expectedReturnDate || '';
+
+    const displayAmount = item.originalAmount !== null && item.originalAmount !== undefined
+      ? String(item.originalAmount)
+      : (item.totalAmount !== null && item.totalAmount !== undefined ? String(item.totalAmount) : String(item.amount));
+
+    setExpenseForm({
+      id: item.id,
+      amount: displayAmount,
+      currency: item.currency || settings.defaultCurrency || 'NPR',
+      description: item.description,
+      category: item.category,
+      expenseSetId: item.expenseSetId || '',
+      groupId: item.groupId || '',
+      paymentMethod: item.paymentMethod || PAYMENT_METHODS[0],
+      isRotation: Boolean(item.isRotation),
+      rotationNote: item.rotationNote || '',
+      date: item.date,
+      time: item.time || '',
+      splitOption,
+      splitPersonName: item.splitPersonName || '',
+      splitMode,
+      participants,
+      newParticipantInput: '',
+      customMyShare: '',
+      customTheirShare: '',
+      paidByPersonName: item.paidByPersonName || '',
+      expectedReturnDate
+    });
+    setIsExpenseModalOpen(true);
+  };
+
+  // Handle Edit Expense Set
+  const handleEditSet = (set: ExpenseSet) => {
+    setSetForm({
+      id: set.id,
+      name: set.name,
+      category: set.category,
+      budget: set.budget !== null && set.budget !== undefined ? String(set.budget) : '',
+      startDate: set.startDate,
+      endDate: set.endDate || '',
+      notes: set.notes || ''
+    });
+    setIsSetModalOpen(true);
+  };
+
+  // Handle Edit Lend Record
+  const handleEditLend = (item: LendItem) => {
+    setLendForm({
+      id: item.id,
+      personName: item.personName,
+      contact: item.contact || '',
+      amount: String(item.originalAmount !== null && item.originalAmount !== undefined ? item.originalAmount : item.amount),
+      currency: item.currency || settings.defaultCurrency || 'NPR',
+      lentDate: item.lentDate,
+      expectedReturnDate: item.expectedReturnDate || '',
+      isRotation: Boolean(item.isRotation),
+      notes: item.notes || ''
+    });
+    setIsLendModalOpen(true);
+  };
+
+  // Handle Edit Borrow Record
+  const handleEditBorrow = (item: BorrowItem) => {
+    setBorrowForm({
+      id: item.id,
+      personName: item.personName,
+      contact: item.contact || '',
+      amount: String(item.originalAmount !== null && item.originalAmount !== undefined ? item.originalAmount : item.amount),
+      currency: item.currency || settings.defaultCurrency || 'NPR',
+      borrowedDate: item.borrowedDate,
+      expectedReturnDate: item.expectedReturnDate || '',
+      isRotation: Boolean(item.isRotation),
+      notes: item.notes || ''
+    });
+    setIsBorrowModalOpen(true);
+  };
+
   // Handle Save Expense Set
   const handleSaveSet = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1271,14 +1388,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
     setIsSavingLend(true);
     try {
-      const res = await fetch('/api/finance/lends', {
-        method: 'POST',
+      const endpoint = lendForm.id ? `/api/finance/lends/${lendForm.id}` : '/api/finance/lends';
+      const method = lendForm.id ? 'PUT' : 'POST';
+      const res = await fetch(endpoint, {
+        method,
         headers: authHeaders,
         body: JSON.stringify(payload)
       });
       if (res.ok) {
         setIsLendModalOpen(false);
-        setLendForm({ personName: '', contact: '', amount: '', currency: settings.defaultCurrency || 'NPR', lentDate: new Date().toISOString().slice(0, 10), expectedReturnDate: '', isRotation: false, notes: '' });
+        setLendForm({ id: '', personName: '', contact: '', amount: '', currency: settings.defaultCurrency || 'NPR', lentDate: new Date().toISOString().slice(0, 10), expectedReturnDate: '', isRotation: false, notes: '' });
         fetchAllData();
       }
     } catch (err) {
@@ -1313,14 +1432,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
     setIsSavingBorrow(true);
     try {
-      const res = await fetch('/api/finance/borrows', {
-        method: 'POST',
+      const endpoint = borrowForm.id ? `/api/finance/borrows/${borrowForm.id}` : '/api/finance/borrows';
+      const method = borrowForm.id ? 'PUT' : 'POST';
+      const res = await fetch(endpoint, {
+        method,
         headers: authHeaders,
         body: JSON.stringify(payload)
       });
       if (res.ok) {
         setIsBorrowModalOpen(false);
-        setBorrowForm({ personName: '', contact: '', amount: '', currency: settings.defaultCurrency || 'NPR', borrowedDate: new Date().toISOString().slice(0, 10), expectedReturnDate: '', isRotation: false, notes: '' });
+        setBorrowForm({ id: '', personName: '', contact: '', amount: '', currency: settings.defaultCurrency || 'NPR', borrowedDate: new Date().toISOString().slice(0, 10), expectedReturnDate: '', isRotation: false, notes: '' });
         fetchAllData();
       }
     } catch (err) {
@@ -1960,19 +2081,29 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         </div>
                       </div>
 
-                      <div className="text-right">
-                        <div className={`text-sm font-black ${e.isRotation ? 'text-indigo-600' : 'text-slate-900'}`}>
-                          {e.currency && e.currency !== (settings.defaultCurrency || 'NPR') && e.originalAmount ? (
-                            <div>
-                              <span>{getCurrencySymbol(e.currency)} {e.originalAmount.toLocaleString()}</span>
-                              <div className="text-[10px] font-normal text-slate-500">
-                                ≈ {getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <div className={`text-sm font-black ${e.isRotation ? 'text-indigo-600' : 'text-slate-900'}`}>
+                            {e.currency && e.currency !== (settings.defaultCurrency || 'NPR') && e.originalAmount ? (
+                              <div>
+                                <span>{getCurrencySymbol(e.currency)} {e.originalAmount.toLocaleString()}</span>
+                                <div className="text-[10px] font-normal text-slate-500">
+                                  ≈ {getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}
+                                </div>
                               </div>
-                            </div>
-                          ) : (
-                            <>{getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}</>
-                          )}
+                            ) : (
+                              <>{getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}</>
+                            )}
+                          </div>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => handleEditExpense(e)}
+                          className="text-slate-400 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                          title="Edit Expense"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   );
@@ -2097,13 +2228,24 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             )}
                           </td>
                           <td className="py-3 px-4 text-right">
-                            <button
-                              onClick={() => handleDeleteExpense(e.id)}
-                              className="text-slate-400 hover:text-red-600 p-1 rounded transition"
-                              title="Delete Expense"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleEditExpense(e)}
+                                className="text-slate-400 hover:text-indigo-600 p-1 rounded transition cursor-pointer"
+                                title="Edit Expense"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExpense(e.id)}
+                                className="text-slate-400 hover:text-red-600 p-1 rounded transition cursor-pointer"
+                                title="Delete Expense"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -2209,8 +2351,18 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         + Add Entry
                       </button>
                       <button
+                        type="button"
+                        onClick={() => handleEditSet(set)}
+                        className="text-slate-400 hover:text-indigo-600 p-1 rounded transition cursor-pointer"
+                        title="Edit Expense Set"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDeleteSet(set.id)}
-                        className="text-slate-400 hover:text-red-600 p-1 rounded"
+                        className="text-slate-400 hover:text-red-600 p-1 rounded transition cursor-pointer"
+                        title="Delete Expense Set"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -2263,7 +2415,20 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
               </div>
 
               <button
-                onClick={() => setIsLendModalOpen(true)}
+                onClick={() => {
+                  setLendForm({
+                    id: '',
+                    personName: '',
+                    contact: '',
+                    amount: '',
+                    currency: settings.defaultCurrency || 'NPR',
+                    lentDate: new Date().toISOString().slice(0, 10),
+                    expectedReturnDate: '',
+                    isRotation: false,
+                    notes: ''
+                  });
+                  setIsLendModalOpen(true);
+                }}
                 className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
               >
                 <Plus className="w-4 h-4" /> Log Money Lent
@@ -2382,8 +2547,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                                     </button>
                                     <button
                                       type="button"
+                                      onClick={() => handleEditLend(subItem)}
+                                      className="text-slate-400 hover:text-emerald-600 p-0.5 cursor-pointer transition"
+                                      title="Edit this entry"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      type="button"
                                       onClick={() => handleDeleteLend(subItem.id)}
-                                      className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer"
+                                      className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer transition"
                                       title="Delete this entry"
                                     >
                                       <Trash2 className="w-3 h-3" />
@@ -2492,8 +2665,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </span>
                             <button
                               type="button"
+                              onClick={() => handleEditLend(item)}
+                              className="text-slate-400 hover:text-emerald-600 p-1 rounded cursor-pointer transition"
+                              title="Edit Lend Record"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => handleDeleteLend(item.id)}
-                              className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                              className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer transition"
                               title="Delete Lend Record"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -2597,8 +2778,21 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
               <p className="text-[11px] text-slate-500">Track liabilities, who you borrowed from, and return deadlines</p>
             </div>
             <button
-              onClick={() => setIsBorrowModalOpen(true)}
-              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
+              onClick={() => {
+                setBorrowForm({
+                  id: '',
+                  personName: '',
+                  contact: '',
+                  amount: '',
+                  currency: settings.defaultCurrency || 'NPR',
+                  borrowedDate: new Date().toISOString().slice(0, 10),
+                  expectedReturnDate: '',
+                  isRotation: false,
+                  notes: ''
+                });
+                setIsBorrowModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition cursor-pointer"
             >
               <Plus className="w-4 h-4" /> Log Money Borrowed
             </button>
@@ -2638,8 +2832,16 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           </span>
                           <button
                             type="button"
+                            onClick={() => handleEditBorrow(item)}
+                            className="text-slate-400 hover:text-amber-600 p-1 rounded cursor-pointer transition"
+                            title="Edit Borrow Record"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => handleDeleteBorrow(item.id)}
-                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer"
+                            className="text-slate-400 hover:text-red-600 p-1 rounded cursor-pointer transition"
                             title="Delete Borrow Record"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -4378,7 +4580,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0 bg-slate-50/50">
               <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
                 <Layers className="w-4 h-4 text-indigo-600" />
-                Create Expense Set / Trip Bucket
+                {setForm.id ? 'Edit Expense Set / Trip Bucket' : 'Create Expense Set / Trip Bucket'}
               </h3>
               <button onClick={() => setIsSetModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                 <X className="w-4 h-4" />
@@ -4472,10 +4674,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   {isSavingSet ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Creating Set...
+                      {setForm.id ? 'Updating Set...' : 'Creating Set...'}
                     </>
                   ) : (
-                    'Create Set'
+                    setForm.id ? 'Update Set' : 'Create Set'
                   )}
                 </button>
               </div>
@@ -4493,7 +4695,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0 bg-slate-50/50">
               <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
                 <ArrowUpRight className="w-4 h-4 text-emerald-600" />
-                Log Money Given (Lend)
+                {lendForm.id ? 'Edit Money Given (Lend)' : 'Log Money Given (Lend)'}
               </h3>
               <button onClick={() => setIsLendModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                 <X className="w-4 h-4" />
@@ -4649,10 +4851,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   {isSavingLend ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Saving Record...
+                      {lendForm.id ? 'Updating Record...' : 'Saving Record...'}
                     </>
                   ) : (
-                    'Save Lend Record'
+                    lendForm.id ? 'Update Lend Record' : 'Save Lend Record'
                   )}
                 </button>
               </div>
@@ -4670,7 +4872,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             <div className="flex items-center justify-between border-b border-slate-100 p-4 sm:p-5 flex-shrink-0 bg-slate-50/50">
               <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
                 <ArrowDownLeft className="w-4 h-4 text-amber-600" />
-                Log Money Taken (Borrow)
+                {borrowForm.id ? 'Edit Money Taken (Borrow)' : 'Log Money Taken (Borrow)'}
               </h3>
               <button onClick={() => setIsBorrowModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                 <X className="w-4 h-4" />
@@ -4826,10 +5028,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   {isSavingBorrow ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Saving Record...
+                      {borrowForm.id ? 'Updating Record...' : 'Saving Record...'}
                     </>
                   ) : (
-                    'Save Borrow Record'
+                    borrowForm.id ? 'Update Borrow Record' : 'Save Borrow Record'
                   )}
                 </button>
               </div>

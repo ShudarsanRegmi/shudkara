@@ -906,6 +906,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         if (body.personName !== undefined) updates.personName = body.personName.trim();
         if (body.contact !== undefined) updates.contact = body.contact;
         if (body.amount !== undefined) updates.amount = Number(body.amount);
+        if (body.currency !== undefined) updates.currency = body.currency;
+        if (body.originalAmount !== undefined) updates.originalAmount = Number(body.originalAmount);
         if (body.lentDate !== undefined) updates.lentDate = body.lentDate;
         if (body.expectedReturnDate !== undefined) updates.expectedReturnDate = body.expectedReturnDate;
         if (body.isRotation !== undefined) updates.isRotation = Boolean(body.isRotation);
@@ -1013,6 +1015,8 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
         if (body.personName !== undefined) updates.personName = body.personName.trim();
         if (body.contact !== undefined) updates.contact = body.contact;
         if (body.amount !== undefined) updates.amount = Number(body.amount);
+        if (body.currency !== undefined) updates.currency = body.currency;
+        if (body.originalAmount !== undefined) updates.originalAmount = Number(body.originalAmount);
         if (body.borrowedDate !== undefined) updates.borrowedDate = body.borrowedDate;
         if (body.expectedReturnDate !== undefined) updates.expectedReturnDate = body.expectedReturnDate;
         if (body.isRotation !== undefined) updates.isRotation = Boolean(body.isRotation);
