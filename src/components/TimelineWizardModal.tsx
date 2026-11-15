@@ -503,6 +503,46 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   });
 }
 
+// Convert image URL from external drag (other websites/tabs) into local base64
+async function processImageUrl(url: string, defaultName = 'dropped-image.jpg'): Promise<DraftMediaItem> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Could not get 2D canvas context');
+        ctx.drawImage(img, 0, 0);
+        const base64 = canvas.toDataURL('image/jpeg', 0.9);
+        resolve({ name: defaultName, type: 'image/jpeg', base64 });
+      } catch {
+        fetch(url)
+          .then(res => res.blob())
+          .then(blob => {
+            const file = new File([blob], defaultName, { type: blob.type || 'image/jpeg' });
+            return processSelectedFile(file);
+          })
+          .then(resolve)
+          .catch(reject);
+      }
+    };
+    img.onerror = () => {
+      fetch(url)
+        .then(res => res.blob())
+        .then(blob => {
+          const file = new File([blob], defaultName, { type: blob.type || 'image/jpeg' });
+          return processSelectedFile(file);
+        })
+        .then(resolve)
+        .catch(reject);
+    };
+    img.src = url;
+  });
+}
+
 function getStoredDrafts(): TimelineDraftMeta[] {
   let list: TimelineDraftMeta[] = [];
   try {
@@ -605,6 +645,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   // Drag and drop reordering states
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [isDraggingExternalFiles, setIsDraggingExternalFiles] = useState(false);
+  const dragCounterRef = useRef(0);
 
   // Submission & feedback states
   const [errorMsg, setErrorMsg] = useState('');
@@ -724,6 +766,44 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
     return () => clearTimeout(timer);
   }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
+
+  // ── Global Drag & Drop Safety and Clipboard Paste (Ctrl+V) ───────────────
+  useEffect(() => {
+    const preventDefaults = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleWindowPaste = async (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items || items.length === 0) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            try {
+              const mediaItem = await processSelectedFile(file);
+              setSelectedFiles(prev => [...prev, mediaItem]);
+              if (currentStep !== 1) setCurrentStep(1);
+            } catch (err) {
+              console.error('Error processing pasted image:', err);
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('dragover', preventDefaults);
+    window.addEventListener('drop', preventDefaults);
+    window.addEventListener('paste', handleWindowPaste);
+    return () => {
+      window.removeEventListener('dragover', preventDefaults);
+      window.removeEventListener('drop', preventDefaults);
+      window.removeEventListener('paste', handleWindowPaste);
+    };
+  }, [currentStep]);
 
   // Flush on unmount / modal close so not even 1 character is ever lost
   useEffect(() => {
@@ -868,8 +948,132 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     setDragOverIdx(null);
   };
 
+  // External Drag and Drop handlers (files from desktop, file explorer, or images from web pages)
+  const handleWindowDragEnter = (e: React.DragEvent) => {
+    if (draggedIdx !== null) return;
+    const types = e.dataTransfer.types;
+    if (types && (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragCounterRef.current++;
+      setIsDraggingExternalFiles(true);
+    }
+  };
+
+  const handleWindowDragOver = (e: React.DragEvent) => {
+    if (draggedIdx !== null) return;
+    const types = e.dataTransfer.types;
+    if (types && (types.includes('Files') || types.includes('text/uri-list') || types.includes('text/html'))) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!isDraggingExternalFiles) {
+        setIsDraggingExternalFiles(true);
+      }
+    }
+  };
+
+  const handleWindowDragLeave = (e: React.DragEvent) => {
+    if (draggedIdx !== null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+    if (dragCounterRef.current <= 0) {
+      dragCounterRef.current = 0;
+      setIsDraggingExternalFiles(false);
+    }
+  };
+
+  const handleExternalFileDrop = async (e: React.DragEvent) => {
+    if (draggedIdx !== null) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingExternalFiles(false);
+    dragCounterRef.current = 0;
+
+    const dt = e.dataTransfer;
+    if (!dt) return;
+
+    let addedCount = 0;
+
+    // 1. Direct File Objects (from local folders, desktop, downloads)
+    const files = dt.files ? Array.from(dt.files) : [];
+    if (files.length > 0) {
+      for (const file of files) {
+        if (
+          file.type.startsWith('image/') ||
+          file.type.startsWith('video/') ||
+          file.name.match(/\.(jpe?g|png|gif|webp|bmp|svg|mp4|webm|mov|heic|m4v)$/i)
+        ) {
+          try {
+            const item = await processSelectedFile(file);
+            setSelectedFiles(prev => [...prev, item]);
+            addedCount++;
+          } catch (err) {
+            console.error('Error processing dropped file:', file.name, err);
+          }
+        }
+      }
+      if (addedCount > 0 && currentStep !== 1) {
+        setCurrentStep(1);
+      }
+      return;
+    }
+
+    // 2. DataTransferItemList
+    if (dt.items && dt.items.length > 0) {
+      for (let i = 0; i < dt.items.length; i++) {
+        const item = dt.items[i];
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            try {
+              const mediaItem = await processSelectedFile(file);
+              setSelectedFiles(prev => [...prev, mediaItem]);
+              addedCount++;
+            } catch (err) {
+              console.error('Error processing dropped item file:', err);
+            }
+          }
+        }
+      }
+      if (addedCount > 0) {
+        if (currentStep !== 1) setCurrentStep(1);
+        return;
+      }
+    }
+
+    // 3. Image URLs / HTML dragged from another browser tab or website
+    const uriList = dt.getData('text/uri-list');
+    const html = dt.getData('text/html');
+    let imageUrl = uriList ? uriList.split('\n')[0].trim() : '';
+    if (!imageUrl && html) {
+      const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (match && match[1]) imageUrl = match[1];
+    }
+
+    if (imageUrl && (imageUrl.startsWith('http') || imageUrl.startsWith('data:image/'))) {
+      try {
+        if (imageUrl.startsWith('data:image/')) {
+          setSelectedFiles(prev => [...prev, { name: 'dropped-image.png', type: 'image/png', base64: imageUrl }]);
+        } else {
+          const mediaItem = await processImageUrl(imageUrl);
+          setSelectedFiles(prev => [...prev, mediaItem]);
+        }
+        if (currentStep !== 1) setCurrentStep(1);
+      } catch (err) {
+        console.error('Error processing dropped web image:', err);
+      }
+    }
+  };
+
   const handleDrop = (e: React.DragEvent, targetIndex: number) => {
     e.preventDefault();
+    if (draggedIdx === null) {
+      handleExternalFileDrop(e);
+      return;
+    }
     const sourceIndexStr = e.dataTransfer.getData('text/plain');
     const sourceIndex = sourceIndexStr ? parseInt(sourceIndexStr, 10) : draggedIdx;
     
@@ -926,10 +1130,30 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   const commonTags = tagsList.slice(0, 6);
 
   return (
-    <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200 select-none overflow-y-auto">
+    <div
+      onDragEnter={handleWindowDragEnter}
+      onDragOver={handleWindowDragOver}
+      onDragLeave={handleWindowDragLeave}
+      onDrop={handleExternalFileDrop}
+      className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-200 select-none overflow-y-auto"
+    >
       
       {/* ── Wizard Dialog Box ── */}
       <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden relative animate-in zoom-in-95 duration-200 my-auto">
+        {/* Visual Drop Overlay when dragging images/videos from other places */}
+        {isDraggingExternalFiles && (
+          <div className="absolute inset-0 z-50 bg-blue-600/20 backdrop-blur-xs border-4 border-dashed border-blue-500 rounded-3xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-150 pointer-events-none">
+            <div className="w-16 h-16 rounded-3xl bg-blue-600 text-white flex items-center justify-center shadow-xl animate-bounce mb-3">
+              <Upload className="w-8 h-8" />
+            </div>
+            <h4 className="text-lg font-black text-blue-900 bg-white/95 px-4 py-1.5 rounded-full shadow-md">
+              Drop Images or Videos Here
+            </h4>
+            <p className="text-xs text-blue-800 font-bold mt-2 bg-white/90 px-3 py-1 rounded-full shadow-xs">
+              Directly attach from your computer, folders, or other tabs
+            </p>
+          </div>
+        )}
         
         {/* ── Top Bar with Step Indicators & Multiple Drafts Dropdown ── */}
         <div className="px-6 py-4 bg-slate-50/80 border-b border-slate-200/80 flex items-center justify-between shrink-0 relative">
@@ -1127,13 +1351,21 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
                 <div
                   onClick={() => fileInputRef.current?.click()}
-                  className="p-5 rounded-3xl border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/80 hover:bg-blue-50/30 flex flex-col items-center justify-center gap-2 cursor-pointer transition hover:scale-[1.02] active:scale-95 group"
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={handleExternalFileDrop}
+                  className={`p-5 rounded-3xl border-2 border-dashed flex flex-col items-center justify-center gap-2 cursor-pointer transition hover:scale-[1.02] active:scale-95 group ${
+                    isDraggingExternalFiles
+                      ? 'border-blue-500 bg-blue-50/70 ring-2 ring-blue-400'
+                      : 'border-slate-200 hover:border-blue-400 bg-slate-50/80 hover:bg-blue-50/30'
+                  }`}
                 >
                   <div className="w-12 h-12 rounded-2xl bg-blue-100 flex items-center justify-center text-blue-600 group-hover:scale-110 transition duration-200">
                     <Upload className="w-6 h-6" />
                   </div>
-                  <span className="font-extrabold text-sm text-slate-800">Browse Device Files</span>
-                  <span className="text-[11px] text-slate-500 font-medium">Select photos, videos (.mp4, .webm), or GIFs</span>
+                  <span className="font-extrabold text-sm text-slate-800">Browse or Drag & Drop</span>
+                  <span className="text-[11px] text-slate-500 font-medium text-center">
+                    Drag photos/videos here, or click to browse device files
+                  </span>
                   <input
                     ref={fileInputRef}
                     type="file"
