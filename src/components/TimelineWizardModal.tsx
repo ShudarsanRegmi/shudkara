@@ -655,30 +655,27 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
   // Steganographic Clearance State & Secret Cadence Handlers
   const [clearanceLevel, setClearanceLevel] = useState<0 | 1 | 2>(0);
-  const clickCountRef = useRef(0);
-  const clickTimerRef = useRef<any>(null);
+  const clicksRef = useRef<number[]>([]);
   const holdTimerRef = useRef<any>(null);
   const isHoldingRef = useRef(false);
 
   const handleCadenceClick = () => {
     if (isHoldingRef.current) return;
-    clickCountRef.current += 1;
-    clearTimeout(clickTimerRef.current);
+    const now = Date.now();
+    const recent = clicksRef.current.filter(t => now - t < 2500);
+    recent.push(now);
+    clicksRef.current = recent;
 
-    const clicks = clickCountRef.current;
-    if (clicks === 5) {
-      // 5 Clicks: Elevate to Guhya (Level 1)
-      setClearanceLevel(1);
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
-    } else if (clicks === 10) {
+    const count = recent.length;
+    if (count >= 10 && clearanceLevel < 2) {
       // 10 Clicks: Elevate to Nigudha (Level 2)
       setClearanceLevel(2);
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([50, 40, 50, 40, 80]);
+    } else if (count >= 5 && count < 10 && clearanceLevel < 1) {
+      // 5 Clicks: Elevate to Guhya (Level 1)
+      setClearanceLevel(1);
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.([40, 30, 40]);
     }
-
-    clickTimerRef.current = setTimeout(() => {
-      clickCountRef.current = 0;
-    }, 2500);
   };
 
   const handleHoldStart = () => {
@@ -687,7 +684,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       isHoldingRef.current = true;
       // Press & Hold (1.5s): Reset back to Prakata (Level 0)
       setClearanceLevel(0);
-      clickCountRef.current = 0;
+      clicksRef.current = [];
       if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(100);
     }, 1500);
   };
