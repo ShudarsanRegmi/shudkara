@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   Wallet, Plus, Calendar, ArrowUpRight, ArrowDownLeft,
   RefreshCw, Clock, AlertTriangle, Filter,
-  Trash2, X, DollarSign, Layers, ChevronRight, ChevronDown, ChevronUp,
+  Trash2, X, DollarSign, Layers, ChevronRight,
   TrendingDown, TrendingUp, User, Phone, Check, CreditCard,
   Users, Edit2, Tag, Bell, BellRing, Send,
-  Settings, Gift, Sliders, CheckSquare, Square, Loader2, Mail, Copy, LayoutGrid, List
+  Settings, Gift, Sliders, CheckSquare, Square, Loader2, Mail, Copy, LayoutGrid, List,
+  BarChart3, PieChart, LineChart, Eye, ArrowRight
 } from 'lucide-react';
 
 export interface SplitParticipant {
@@ -47,14 +48,14 @@ export interface FinanceSettings {
 }
 
 export const CURRENCIES = [
-  { code: 'NPR', label: 'NPR (Rs. / रू)', symbol: 'Rs.' },
-  { code: 'INR', label: 'INR (₹ Rupee)', symbol: '₹' },
+  { code: 'NPR', label: 'NPR (Nepali Rupee)', symbol: 'NPR' },
+  { code: 'INR', label: 'INR (Indian Rupee ₹)', symbol: '₹' },
   { code: 'USD', label: 'USD ($ Dollar)', symbol: '$' },
   { code: 'EUR', label: 'EUR (€ Euro)', symbol: '€' }
 ];
 
 export const CURRENCY_SYMBOLS: Record<string, string> = {
-  NPR: 'Rs.',
+  NPR: 'NPR',
   INR: '₹',
   USD: '$',
   EUR: '€'
@@ -234,11 +235,20 @@ export interface ParticipantItem {
 }
 
 export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories' | 'settings'>('overview');
+  const [activeSubTab, setActiveSubTab] = useState<'overview' | 'analytics' | 'expenses' | 'sets' | 'lends' | 'borrows' | 'people' | 'categories' | 'settings'>('overview');
+  const [viewCurrency, setViewCurrency] = useState<string>(() => {
+    try {
+      const cached = localStorage.getItem('shudkara_finance_view_currency');
+      if (cached && ['NPR', 'INR', 'USD', 'EUR'].includes(cached)) return cached;
+    } catch {}
+    return 'NPR';
+  });
+  const [analyticsTimeframe, setAnalyticsTimeframe] = useState<'7d' | 'month' | '30d' | '90d' | 'all'>('month');
+  const [viewSetEntriesTarget, setViewSetEntriesTarget] = useState<ExpenseSet | null>(null);
+  const [viewConsolidatedBreakdownTarget, setViewConsolidatedBreakdownTarget] = useState<any | null>(null);
   const [peopleViewMode, setPeopleViewMode] = useState<'people' | 'groups'>('people');
   const [peopleDisplayMode, setPeopleDisplayMode] = useState<'list' | 'grid'>('list');
   const [lendsViewMode, setLendsViewMode] = useState<'consolidated' | 'individual'>('consolidated');
-  const [expandedConsolidatedKeys, setExpandedConsolidatedKeys] = useState<Record<string, boolean>>({});
   const [emailReminderTarget, setEmailReminderTarget] = useState<{
     personName: string;
     email: string;
@@ -415,7 +425,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     ...(authToken ? { 'X-Session-Token': authToken, 'Authorization': `Bearer ${authToken}` } : {})
   };
 
-  // Currency conversion helper
+  // Currency conversion helpers
   const convertToBase = (amount: number, fromCurrency: string): { baseAmount: number; rate: number } => {
     const baseCurr = settings.defaultCurrency || 'NPR';
     if (!amount || isNaN(amount)) return { baseAmount: 0, rate: 1 };
@@ -428,8 +438,32 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     return { baseAmount, rate };
   };
 
+  const convertBaseToTarget = (amountInNPR: number, targetCurrency: string = viewCurrency): number => {
+    if (!amountInNPR || isNaN(amountInNPR)) return 0;
+    const rates = settings.exchangeRates || DEFAULT_SETTINGS.exchangeRates;
+    const nprPerTarget = Number(rates[targetCurrency as keyof typeof rates]) || 1;
+    return amountInNPR / nprPerTarget;
+  };
+
+  const formatMoney = (amountInNPR: number, targetCurrency: string = viewCurrency): string => {
+    const converted = convertBaseToTarget(amountInNPR, targetCurrency);
+    const symbol = getCurrencySymbol(targetCurrency);
+    if (targetCurrency === 'USD' || targetCurrency === 'EUR') {
+      return `${symbol} ${converted.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+    return `${symbol} ${Math.round(converted).toLocaleString()}`;
+  };
+
+  const handleSelectViewCurrency = (curr: string) => {
+    setViewCurrency(curr);
+    try {
+      localStorage.setItem('shudkara_finance_view_currency', curr);
+    } catch {}
+  };
+
   const getCurrencySymbol = (currency?: string) => {
-    return CURRENCY_SYMBOLS[currency || settings.defaultCurrency || 'NPR'] || 'Rs.';
+    const c = currency || viewCurrency || settings.defaultCurrency || 'NPR';
+    return CURRENCY_SYMBOLS[c] || c;
   };
 
   const fetchAllData = async () => {
@@ -539,7 +573,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           const diffDays = Math.round((new Date(l.expectedReturnDate).getTime() - new Date(todayStr).getTime()) / (1000 * 60 * 60 * 24));
           const dueMsg = diffDays < 0 ? `Overdue by ${Math.abs(diffDays)} day(s)!` : 'Due today!';
           new Notification(`⚠️ Return Overdue: ${l.personName}`, {
-            body: `${l.personName} was expected to return Rs. ${l.amount.toLocaleString()} on ${l.expectedReturnDate}. ${dueMsg}`,
+            body: `${l.personName} was expected to return ${formatMoney(l.amount)} on ${l.expectedReturnDate}. ${dueMsg}`,
             icon: '/favicon.ico'
           });
           count++;
@@ -558,7 +592,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           const diffDays = Math.round((new Date(b.expectedReturnDate).getTime() - new Date(todayStr).getTime()) / (1000 * 60 * 60 * 24));
           const dueMsg = diffDays < 0 ? `Expired ${Math.abs(diffDays)} day(s) ago!` : 'Due today!';
           new Notification(`⏰ Debt Repayment Due: ${b.personName}`, {
-            body: `Reminder: You were expected to return Rs. ${b.amount.toLocaleString()} to ${b.personName} on ${b.expectedReturnDate}. ${dueMsg}`,
+            body: `Reminder: You were expected to return ${formatMoney(b.amount)} to ${b.personName} on ${b.expectedReturnDate}. ${dueMsg}`,
             icon: '/favicon.ico'
           });
           count++;
@@ -1181,9 +1215,9 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
   const handleSettlePerson = async (person: Person) => {
     const balance = person.netBalance || 0;
     const msg = balance > 0
-      ? `Mark ${person.name}'s balance of Rs. ${balance.toLocaleString()} as fully settled / received?`
+      ? `Mark ${person.name}'s balance of ${formatMoney(balance)} as fully settled / received?`
       : balance < 0
-      ? `Mark your debt of Rs. ${Math.abs(balance).toLocaleString()} to ${person.name} as fully paid / settled?`
+      ? `Mark your debt of ${formatMoney(Math.abs(balance))} to ${person.name} as fully paid / settled?`
       : `Mark all open records for ${person.name} as settled?`;
 
     if (!confirm(msg)) return;
@@ -1719,10 +1753,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     if (!target) return '';
     let txt = `Hi ${target.personName},\nHere is our shared expense summary for ${target.setName || 'our recent outing'}:\n\n`;
     if (target.totalReceivable > 0) {
-      txt += `💰 Remaining to settle: Rs. ${target.totalReceivable.toLocaleString()}\n`;
+      txt += `💰 Remaining to settle: ${formatMoney(target.totalReceivable)}\n`;
       if (target.items.length > 0) {
         target.items.forEach(it => {
-          txt += `  • ${it.date}: ${it.description} - Rs. ${it.amount.toLocaleString()}\n`;
+          txt += `  • ${it.date}: ${it.description} - ${formatMoney(it.amount)}\n`;
         });
       }
     } else {
@@ -1731,9 +1765,9 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     if (target.totalSponsored > 0) {
       txt += `\n🎁 Sponsored / Treated by Shudarsan (No repayment required):\n`;
       target.sponsoredItems.forEach(sp => {
-        txt += `  • ${sp.date}: ${sp.description} - Rs. ${sp.amount.toLocaleString()}\n`;
+        txt += `  • ${sp.date}: ${sp.description} - ${formatMoney(sp.amount)}\n`;
       });
-      txt += `  Total Sponsored: Rs. ${target.totalSponsored.toLocaleString()}\n`;
+      txt += `  Total Sponsored: ${formatMoney(target.totalSponsored)}\n`;
     }
     txt += `\nThank you!`;
     return txt;
@@ -1858,159 +1892,425 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
     }
   };
 
+  const getFilteredAnalyticsData = () => {
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+    const currentMonthStr = todayStr.slice(0, 7);
+
+    let dateLimit = '';
+    if (analyticsTimeframe === '7d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 7);
+      dateLimit = d.toISOString().slice(0, 10);
+    } else if (analyticsTimeframe === '30d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 30);
+      dateLimit = d.toISOString().slice(0, 10);
+    } else if (analyticsTimeframe === '90d') {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 90);
+      dateLimit = d.toISOString().slice(0, 10);
+    }
+
+    const timeframeExpenses = expenses.filter(e => {
+      if (analyticsTimeframe === 'month') {
+        return (e.date || '').startsWith(currentMonthStr);
+      }
+      if (analyticsTimeframe === 'all') return true;
+      return (e.date || '') >= dateLimit;
+    });
+
+    const netExpenses = timeframeExpenses.filter(e => !e.isRotation);
+    const totalNetSpendBase = netExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const totalRotationsBase = timeframeExpenses.filter(e => e.isRotation).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+    const daysCount = analyticsTimeframe === '7d' ? 7 : analyticsTimeframe === '30d' ? 30 : analyticsTimeframe === '90d' ? 90 : analyticsTimeframe === 'month' ? now.getDate() : Math.max(1, Math.ceil((now.getTime() - new Date(expenses[expenses.length - 1]?.date || now).getTime()) / (1000 * 3600 * 24)));
+    const dailyAverageBase = totalNetSpendBase / Math.max(1, daysCount);
+
+    const peakExpense = netExpenses.reduce((max, e) => (Number(e.amount) > Number(max?.amount || 0) ? e : max), null as ExpenseItem | null);
+
+    let totalSponsoredBase = 0;
+    netExpenses.forEach(e => {
+      if (e.splits && e.splits.length > 0) {
+        e.splits.filter(s => s.isSponsored).forEach(s => {
+          totalSponsoredBase += (Number(s.amount) || 0);
+        });
+      }
+    });
+
+    const categoryMap: Record<string, { count: number; totalBase: number; color?: string }> = {};
+    const defaultColors = ['#6366f1', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4', '#14b8a6', '#f43f5e', '#64748b'];
+    netExpenses.forEach(e => {
+      const cat = e.category || 'Miscellaneous';
+      if (!categoryMap[cat]) {
+        const foundCat = categories.find(c => c.name.toLowerCase() === cat.toLowerCase());
+        const colorIdx = Object.keys(categoryMap).length % defaultColors.length;
+        categoryMap[cat] = { count: 0, totalBase: 0, color: foundCat?.color || defaultColors[colorIdx] };
+      }
+      categoryMap[cat].count += 1;
+      categoryMap[cat].totalBase += (Number(e.amount) || 0);
+    });
+    const categoryBreakdown = Object.entries(categoryMap)
+      .map(([name, data]) => ({ name, ...data, percentage: totalNetSpendBase > 0 ? (data.totalBase / totalNetSpendBase) * 100 : 0 }))
+      .sort((a, b) => b.totalBase - a.totalBase);
+
+    const paymentMap: Record<string, number> = {};
+    netExpenses.forEach(e => {
+      const m = e.paymentMethod || 'Other';
+      paymentMap[m] = (paymentMap[m] || 0) + (Number(e.amount) || 0);
+    });
+    const paymentBreakdown = Object.entries(paymentMap)
+      .map(([method, totalBase]) => ({ method, totalBase, percentage: totalNetSpendBase > 0 ? (totalBase / totalNetSpendBase) * 100 : 0 }))
+      .sort((a, b) => b.totalBase - a.totalBase);
+
+    const daysToShow = analyticsTimeframe === '7d' ? 7 : analyticsTimeframe === 'month' ? Math.min(31, now.getDate()) : 14;
+    const dailyPoints: Array<{ date: string; label: string; amountBase: number }> = [];
+    for (let i = daysToShow - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dStr = d.toISOString().slice(0, 10);
+      const dayTotal = netExpenses.filter(e => e.date === dStr).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      dailyPoints.push({
+        date: dStr,
+        label: d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }),
+        amountBase: dayTotal
+      });
+    }
+
+    const setComparison = expenseSets.map(s => {
+      const setExp = expenses.filter(e => e.expenseSetId === s.id);
+      const spentBase = setExp.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      const budgetBase = Number(s.budget) || 0;
+      return {
+        id: s.id,
+        name: s.name,
+        category: s.category,
+        spentBase,
+        budgetBase,
+        entriesCount: setExp.length
+      };
+    }).filter(s => s.spentBase > 0 || s.budgetBase > 0).sort((a, b) => b.spentBase - a.spentBase);
+
+    const companionMap: Record<string, { splitBase: number; sponsoredBase: number; outingCount: number }> = {};
+    expenses.forEach(e => {
+      if (e.splits && e.splits.length > 0) {
+        e.splits.forEach(sp => {
+          const pName = sp.personName || (sp as any).name;
+          if (!pName) return;
+          if (!companionMap[pName]) {
+            companionMap[pName] = { splitBase: 0, sponsoredBase: 0, outingCount: 0 };
+          }
+          companionMap[pName].outingCount += 1;
+          if (sp.isSponsored) {
+            companionMap[pName].sponsoredBase += (Number(sp.amount) || 0);
+          } else {
+            companionMap[pName].splitBase += (Number(sp.amount) || 0);
+          }
+        });
+      }
+    });
+    const companionMatrix = Object.entries(companionMap)
+      .map(([name, data]) => ({ name, ...data, totalOutingBase: data.splitBase + data.sponsoredBase }))
+      .sort((a, b) => b.totalOutingBase - a.totalOutingBase);
+
+    return {
+      netExpenses,
+      totalNetSpendBase,
+      totalRotationsBase,
+      dailyAverageBase,
+      peakExpense,
+      totalSponsoredBase,
+      categoryBreakdown,
+      paymentBreakdown,
+      dailyPoints,
+      setComparison,
+      companionMatrix
+    };
+  };
+
+  const navTabs = [
+    { key: 'overview', label: 'Overview', icon: TrendingUp },
+    { key: 'analytics', label: 'Analytics & Insights', icon: BarChart3, badge: 'New' },
+    { key: 'expenses', label: 'Expenses', icon: CreditCard, count: expenses.length },
+    { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
+    { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
+    { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
+    { key: 'people', label: 'People & Groups', icon: Users, count: sanitizedPeople.length },
+    { key: 'categories', label: 'Categories', icon: Tag, count: categories.length },
+    { key: 'settings', label: 'Settings', icon: Settings }
+  ];
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6 pb-20 animate-fade-in">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
-        <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2.5">
+    <div className="max-w-7xl mx-auto pb-24 animate-fade-in">
+      {/* Mobile Top Header (< lg) */}
+      <div className="lg:hidden space-y-3 mb-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
             <span className="p-2 bg-indigo-600 text-white rounded-xl shadow-md shadow-indigo-600/20">
               <Wallet className="w-5 h-5" />
             </span>
-            Finance & Cashflow
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Expense sets, daily spending, lend/borrow ledger, rotations, and auto-SMS companion tracking
-          </p>
+            <div>
+              <h1 className="text-lg font-black text-slate-900 leading-tight">Finance & Ledger</h1>
+              <p className="text-[10px] text-slate-500 font-medium">Multi-Currency Cashflow</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => {
+                resetExpenseForm();
+                setIsExpenseModalOpen(true);
+              }}
+              className="p-2 bg-indigo-600 text-white rounded-xl shadow-sm hover:bg-indigo-700 active:scale-95 transition cursor-pointer"
+              title="Add Expense"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+            <button
+              onClick={fetchAllData}
+              title="Refresh"
+              className="p-2 border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 rounded-xl transition cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+            </button>
+          </div>
         </div>
 
-        {/* Quick Action Buttons */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Currency Switcher Bar on Mobile */}
+        <div className="flex items-center justify-between bg-white border border-slate-200 rounded-2xl p-1.5 shadow-xs">
+          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 pl-2">Display Currency</span>
+          <div className="flex items-center gap-1">
+            {[
+              { code: 'NPR', label: 'NPR' },
+              { code: 'INR', label: '₹ INR' },
+              { code: 'USD', label: '$ USD' },
+              { code: 'EUR', label: '€ EUR' }
+            ].map(c => (
+              <button
+                key={c.code}
+                type="button"
+                onClick={() => handleSelectViewCurrency(c.code)}
+                className={`px-2.5 py-1 text-xs font-black rounded-xl transition cursor-pointer ${
+                  viewCurrency === c.code
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 bg-slate-50'
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Horizontal Navigation Pills on Mobile */}
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+          {navTabs.map(tab => {
+            const Icon = tab.icon;
+            const isActive = activeSubTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveSubTab(tab.key as any)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 whitespace-nowrap transition cursor-pointer ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+                {tab.count !== undefined && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                    isActive ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {tab.count}
+                  </span>
+                )}
+                {tab.badge && !isActive && (
+                  <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-100 text-indigo-700">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Main Container: Desktop Sidebar + Content Area */}
+      <div className="flex flex-col lg:flex-row gap-6 items-start">
+        {/* Desktop Sidebar (hidden on < lg) */}
+        <aside className="hidden lg:flex flex-col w-64 xl:w-72 shrink-0 bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs sticky top-6 space-y-4">
+          {/* Brand & Title */}
+          <div>
+            <div className="flex items-center gap-2.5">
+              <span className="p-2.5 bg-indigo-600 text-white rounded-2xl shadow-md shadow-indigo-600/20">
+                <Wallet className="w-5 h-5" />
+              </span>
+              <div>
+                <h1 className="text-base font-black text-slate-900 tracking-tight leading-tight">Finance & Ledger</h1>
+                <p className="text-[11px] text-slate-500 font-medium">Smart Multi-Currency Cashflow</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Currency Switcher Pill Widget */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-2.5 space-y-1.5">
+            <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-wider text-slate-400 px-1">
+              <span>Display Currency</span>
+              <span className="text-indigo-600 font-bold lowercase">auto-converted</span>
+            </div>
+            <div className="grid grid-cols-4 gap-1 bg-white p-1 rounded-xl border border-slate-200/60 shadow-2xs">
+              {[
+                { code: 'NPR', label: 'NPR' },
+                { code: 'INR', label: '₹ INR' },
+                { code: 'USD', label: '$ USD' },
+                { code: 'EUR', label: '€ EUR' }
+              ].map(c => (
+                <button
+                  key={c.code}
+                  type="button"
+                  onClick={() => handleSelectViewCurrency(c.code)}
+                  className={`py-1.5 text-center text-xs font-black rounded-lg transition cursor-pointer ${
+                    viewCurrency === c.code
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Primary Quick Action Button */}
           <button
             onClick={() => {
               resetExpenseForm();
               setIsExpenseModalOpen(true);
             }}
-            className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/10 transition"
+            className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-2xl text-xs flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition active:scale-[0.98] cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Add Expense
           </button>
 
-          <button
-            onClick={() => {
-              setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
-              setIsPersonModalOpen(true);
-            }}
-            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-          >
-            <User className="w-4 h-4" />
-            + Person
-          </button>
+          {/* Navigation Links */}
+          <nav className="space-y-1">
+            {navTabs.map(tab => {
+              const Icon = tab.icon;
+              const isActive = activeSubTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveSubTab(tab.key as any)}
+                  className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between transition cursor-pointer ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span>{tab.label}</span>
+                  </div>
+                  {tab.count !== undefined && (
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                      isActive ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-500'
+                    }`}>
+                      {tab.count}
+                    </span>
+                  )}
+                  {tab.badge && !isActive && (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-full font-black bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
 
-          <button
-            onClick={() => {
-              setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
-              setIsGroupModalOpen(true);
-            }}
-            className="px-3.5 py-2 bg-indigo-700 hover:bg-indigo-800 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-          >
-            <Users className="w-4 h-4" />
-            + Group
-          </button>
+          {/* Secondary Quick Action Mini-Links */}
+          <div className="pt-2 border-t border-slate-100 space-y-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 px-1">Quick Add</span>
+            <div className="grid grid-cols-3 gap-1 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => {
+                  setPersonForm({ id: '', name: '', contact: '', email: '', isDefault: false, notes: '' });
+                  setIsPersonModalOpen(true);
+                }}
+                className="p-1.5 bg-slate-50 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 rounded-xl border border-slate-200 text-center transition cursor-pointer"
+              >
+                + Person
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setGroupForm({ id: '', name: '', description: '', members: [], newMemberInput: '' });
+                  setIsGroupModalOpen(true);
+                }}
+                className="p-1.5 bg-slate-50 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 rounded-xl border border-slate-200 text-center transition cursor-pointer"
+              >
+                + Group
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSetForm({ id: '', name: '', category: 'Outing / Trip', budget: '', startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '' });
+                  setIsSetModalOpen(true);
+                }}
+                className="p-1.5 bg-slate-50 hover:bg-purple-50 text-slate-700 hover:text-purple-700 rounded-xl border border-slate-200 text-center transition cursor-pointer"
+              >
+                + Set
+              </button>
+            </div>
+          </div>
 
-          <button
-            onClick={() => {
-              setCategoryForm({ id: '', name: '', color: '#6366f1' });
-              setIsCategoryModalOpen(true);
-            }}
-            className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-          >
-            <Tag className="w-4 h-4" />
-            + Category
-          </button>
-
-          <button
-            onClick={() => {
-              setSetForm({ id: '', name: '', category: 'Outing / Trip', budget: '', startDate: new Date().toISOString().slice(0, 10), endDate: '', notes: '' });
-              setIsSetModalOpen(true);
-            }}
-            className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-          >
-            <Layers className="w-4 h-4" />
-            New Expense Set
-          </button>
-
-          {/* Notification Alerts Status / Trigger */}
-          {notificationPermission !== 'granted' ? (
+          {/* Footer refresh & alerts */}
+          <div className="pt-2 flex items-center justify-between border-t border-slate-100 text-xs text-slate-500">
             <button
-              onClick={requestNotificationPermission}
-              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 shadow-sm transition"
-              title="Enable notifications for overdue returns and borrow deadlines"
+              type="button"
+              onClick={fetchAllData}
+              className="flex items-center gap-1.5 text-slate-600 hover:text-indigo-600 font-semibold cursor-pointer"
             >
-              <Bell className="w-4 h-4" />
-              Enable Due Alerts
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
+              Refresh
             </button>
-          ) : (
-            <button
-              onClick={() => checkAndSendDueNotifications(true)}
-              className="p-2 border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition"
-              title="System Notifications Active: Click to check & send overdue alerts now"
-            >
-              <BellRing className="w-4 h-4" />
-            </button>
+            {notificationPermission !== 'granted' ? (
+              <button
+                type="button"
+                onClick={requestNotificationPermission}
+                className="text-amber-600 hover:underline font-bold text-[11px] flex items-center gap-1 cursor-pointer"
+              >
+                <Bell className="w-3 h-3" />
+                Alerts Off
+              </button>
+            ) : (
+              <span className="text-emerald-600 font-bold text-[11px] flex items-center gap-1">
+                <BellRing className="w-3 h-3" />
+                Alerts Active
+              </span>
+            )}
+          </div>
+        </aside>
+
+        {/* Content Pane */}
+        <main className="flex-1 min-w-0 space-y-6 w-full">
+          {/* Toast / Notification Banner */}
+          {notiBannerMsg && (
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl text-xs font-semibold text-indigo-900 flex items-center justify-between shadow-xs">
+              <span className="flex items-center gap-2">
+                <BellRing className="w-4 h-4 text-indigo-600 shrink-0" />
+                {notiBannerMsg}
+              </span>
+              <button onClick={() => setNotiBannerMsg(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           )}
-
-          <button
-            onClick={fetchAllData}
-            title="Refresh Data"
-            className="p-2 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-xl transition"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-      {/* Toast / Notification Banner */}
-      {notiBannerMsg && (
-        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl text-xs font-semibold text-indigo-900 flex items-center justify-between shadow-xs">
-          <span className="flex items-center gap-2">
-            <BellRing className="w-4 h-4 text-indigo-600 shrink-0" />
-            {notiBannerMsg}
-          </span>
-          <button onClick={() => setNotiBannerMsg(null)} className="text-slate-400 hover:text-slate-600 p-1">
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
-
-      {/* Sub-Navigation Tabs */}
-      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b border-slate-200 pb-2">
-        {[
-          { key: 'overview', label: 'Overview', icon: TrendingUp },
-          { key: 'expenses', label: 'Expenses', icon: CreditCard, count: expenses.length },
-          { key: 'sets', label: 'Expense Sets', icon: Layers, count: expenseSets.length },
-          { key: 'lends', label: 'Lends (Money Given)', icon: ArrowUpRight, count: lends.filter(l => l.status !== 'returned').length },
-          { key: 'borrows', label: 'Borrows (Money Taken)', icon: ArrowDownLeft, count: borrows.filter(b => b.status !== 'repaid').length },
-          { key: 'people', label: 'People & Groups', icon: User, count: sanitizedPeople.length },
-          { key: 'categories', label: 'Categories', icon: Tag, count: categories.length },
-          { key: 'settings', label: 'Settings', icon: Settings }
-        ].map(tab => {
-          const Icon = tab.icon;
-          const isActive = activeSubTab === tab.key;
-          return (
-            <button
-              key={tab.key}
-              onClick={() => setActiveSubTab(tab.key as any)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition ${
-                isActive
-                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              {tab.label}
-              {tab.count !== undefined && (
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
-                  isActive ? 'bg-indigo-800 text-white' : 'bg-slate-100 text-slate-500'
-                }`}>
-                  {tab.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* 1. OVERVIEW TAB */}
@@ -2028,7 +2328,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900">
-                Rs. {(overview?.totalSpentThisMonth || 0).toLocaleString()}
+                {formatMoney(overview?.totalSpentThisMonth || 0)}
               </div>
               <div className="text-[11px] text-slate-500">
                 Excludes dummy rotation transfers
@@ -2044,7 +2344,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </span>
               </div>
               <div className="text-2xl font-black text-emerald-600">
-                Rs. {(overview?.totalLentBalance || 0).toLocaleString()}
+                {formatMoney(overview?.totalLentBalance || 0)}
               </div>
               <div className="text-[11px] text-slate-500">
                 {lends.filter(l => l.status !== 'returned').length} pending return
@@ -2060,7 +2360,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </span>
               </div>
               <div className="text-2xl font-black text-amber-600">
-                Rs. {(overview?.totalBorrowedBalance || 0).toLocaleString()}
+                {formatMoney(overview?.totalBorrowedBalance || 0)}
               </div>
               <div className="text-[11px] text-slate-500">
                 {borrows.filter(b => b.status !== 'repaid').length} active borrowings
@@ -2076,18 +2376,121 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </span>
               </div>
               <div className="text-2xl font-black text-slate-900">
-                {people.length} <span className="text-xs font-normal text-slate-500">contacts</span>
+                {sanitizedPeople.length} <span className="text-xs font-normal text-slate-500">contacts</span>
               </div>
               <div className="text-[11px] text-slate-500 flex justify-between items-center">
-                <span>Net: Rs. {people.reduce((s, p) => s + (p.netBalance || 0), 0).toLocaleString()}</span>
+                <span>Net: {formatMoney(sanitizedPeople.reduce((s, p) => s + (p.netBalance || 0), 0))}</span>
                 <button
                   type="button"
                   onClick={() => setActiveSubTab('people')}
-                  className="text-indigo-600 font-bold hover:underline"
+                  className="text-indigo-600 font-bold hover:underline cursor-pointer"
                 >
                   View Ledgers
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* Local Visualizations: 14-Day Spending Velocity & Cashflow Balance */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2 bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <LineChart className="w-4 h-4 text-indigo-600" />
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">14-Day Spending Velocity</h3>
+                </div>
+                <span className="text-[11px] text-slate-400 font-semibold">in {viewCurrency}</span>
+              </div>
+              {/* Mini SVG Velocity Histogram */}
+              {(() => {
+                const now = new Date();
+                const pts: Array<{ date: string; label: string; amountBase: number }> = [];
+                for (let i = 13; i >= 0; i--) {
+                  const d = new Date(now);
+                  d.setDate(d.getDate() - i);
+                  const dStr = d.toISOString().slice(0, 10);
+                  const dayTotal = expenses.filter(e => !e.isRotation && e.date === dStr).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+                  pts.push({
+                    date: dStr,
+                    label: d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' }),
+                    amountBase: dayTotal
+                  });
+                }
+                const maxV = Math.max(...pts.map(p => convertBaseToTarget(p.amountBase)), 1);
+
+                return (
+                  <div className="w-full">
+                    <svg viewBox="0 0 420 80" className="w-full h-20 select-none">
+                      <line x1="10" y1="65" x2="410" y2="65" stroke="#e2e8f0" strokeWidth="1" />
+                      {pts.map((pt, i) => {
+                        const val = convertBaseToTarget(pt.amountBase);
+                        const barH = maxV > 0 ? (val / maxV) * 52 : 0;
+                        const x = 14 + i * 28.5;
+                        const y = 65 - barH;
+                        return (
+                          <g key={pt.date} className="group cursor-pointer">
+                            <title>{`${pt.date}: ${formatMoney(pt.amountBase)}`}</title>
+                            <rect
+                              x={x}
+                              y={y}
+                              width="16"
+                              height={Math.max(barH, val > 0 ? 2 : 0)}
+                              rx="2.5"
+                              fill={val > 0 ? "#6366f1" : "#e2e8f0"}
+                              className="transition-all"
+                            />
+                            <text
+                              x={x + 8}
+                              y="76"
+                              textAnchor="middle"
+                              className="text-[7.5px] fill-slate-400 font-bold"
+                            >
+                              {pt.label.split(' ')[0][0]}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Net Position Standings & Jump to Analytics */}
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-3 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <PieChart className="w-4 h-4 text-emerald-600" />
+                    Net Cashflow Standing
+                  </h3>
+                </div>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Lent (Receivable):</span>
+                    <span className="font-bold text-emerald-600">{formatMoney(overview?.totalLentBalance || 0)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Borrowed (Payable):</span>
+                    <span className="font-bold text-amber-600">{formatMoney(overview?.totalBorrowedBalance || 0)}</span>
+                  </div>
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between font-black">
+                    <span className="text-slate-700">Net Standing:</span>
+                    <span className={`${(overview?.totalLentBalance || 0) - (overview?.totalBorrowedBalance || 0) >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {formatMoney((overview?.totalLentBalance || 0) - (overview?.totalBorrowedBalance || 0))}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('analytics')}
+                className="w-full py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <span>Deep Analytics & Insights</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
 
@@ -2133,7 +2536,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         </span>
                       </div>
                       <div className="text-sm font-black text-slate-900">
-                        Rs. {item.amount.toLocaleString()}
+                        {formatMoney(item.amount)}
                       </div>
                     </div>
 
@@ -2243,12 +2646,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       <div className="space-y-1">
                         <div className="flex justify-between text-xs">
                           <span className="text-slate-500">Total Spent:</span>
-                          <span className="font-bold text-slate-900">Rs. {spent.toLocaleString()}</span>
+                          <span className="font-bold text-slate-900">{formatMoney(spent)}</span>
                         </div>
                         {budget > 0 && (
                           <div className="space-y-1">
                             <div className="flex justify-between text-[11px] text-slate-500">
-                              <span>Budget: Rs. {budget.toLocaleString()}</span>
+                              <span>Budget: {formatMoney(budget)}</span>
                               <span>{pct}%</span>
                             </div>
                             <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
@@ -2334,15 +2737,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       <div className="flex items-center gap-2">
                         <div className="text-right">
                           <div className={`text-sm font-black ${e.isRotation ? 'text-indigo-600' : 'text-slate-900'}`}>
-                            {e.currency && e.currency !== (settings.defaultCurrency || 'NPR') && e.originalAmount ? (
-                              <div>
-                                <span>{getCurrencySymbol(e.currency)} {e.originalAmount.toLocaleString()}</span>
-                                <div className="text-[10px] font-normal text-slate-500">
-                                  ≈ {getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}
-                                </div>
+                            <div>{formatMoney(e.amount)}</div>
+                            {e.currency && e.currency !== viewCurrency && (
+                              <div className="text-[10px] font-normal text-slate-400">
+                                orig: {getCurrencySymbol(e.currency)} {e.originalAmount || e.amount}
                               </div>
-                            ) : (
-                              <>{getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}</>
                             )}
                           </div>
                         </div>
@@ -2365,7 +2764,472 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 2. EXPENSES TAB */}
+      {/* 2. ANALYTICS & FINANCIAL INTELLIGENCE TAB (NEW) */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {activeSubTab === 'analytics' && (() => {
+        const ad = getFilteredAnalyticsData();
+        const maxDaily = Math.max(...ad.dailyPoints.map(p => convertBaseToTarget(p.amountBase)), 1);
+        const avgDaily = convertBaseToTarget(ad.dailyAverageBase);
+
+        // Donut calculations
+        const radius = 60;
+        const circumference = 2 * Math.PI * radius;
+        let cumulative = 0;
+
+        return (
+          <div className="space-y-6">
+            {/* Header & Timeframe Filter */}
+            <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <BarChart3 className="w-5 h-5 text-indigo-600" />
+                  Financial Analytics & Cashflow Insights
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Multi-currency intelligence, category distributions, trip burn rates, and companion treats in <strong className="text-indigo-600 font-bold">{viewCurrency}</strong>
+                </p>
+              </div>
+
+              {/* Timeframe pill selector */}
+              <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 text-xs font-bold shrink-0">
+                {[
+                  { id: '7d', label: '7 Days' },
+                  { id: 'month', label: 'This Month' },
+                  { id: '30d', label: '30 Days' },
+                  { id: '90d', label: '90 Days' },
+                  { id: 'all', label: 'All Time' }
+                ].map(tf => (
+                  <button
+                    key={tf.id}
+                    type="button"
+                    onClick={() => setAnalyticsTimeframe(tf.id as any)}
+                    className={`px-3 py-1.5 rounded-xl transition cursor-pointer ${
+                      analyticsTimeframe === tf.id
+                        ? 'bg-white text-indigo-700 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {tf.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* KPI Cards Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {/* Net Outflow */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Net Spend</span>
+                <div className="text-lg font-black text-slate-900 truncate">
+                  {formatMoney(ad.totalNetSpendBase)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium">Excl. rotations</div>
+              </div>
+
+              {/* Daily Burn Rate */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Daily Burn</span>
+                <div className="text-lg font-black text-indigo-600 truncate">
+                  {formatMoney(ad.dailyAverageBase)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium">Average/day</div>
+              </div>
+
+              {/* Peak Expense */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Peak Single</span>
+                <div className="text-lg font-black text-rose-600 truncate" title={ad.peakExpense?.description}>
+                  {ad.peakExpense ? formatMoney(ad.peakExpense.amount) : '—'}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium truncate">
+                  {ad.peakExpense ? ad.peakExpense.description : 'None'}
+                </div>
+              </div>
+
+              {/* Pending Receivables */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Receivables</span>
+                <div className="text-lg font-black text-emerald-600 truncate">
+                  {formatMoney(overview?.totalLentBalance || 0)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium">Owed to you</div>
+              </div>
+
+              {/* Generosity / Treated Gifts */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Treated / Gifts</span>
+                <div className="text-lg font-black text-amber-600 truncate">
+                  {formatMoney(ad.totalSponsoredBase)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium">No return needed</div>
+              </div>
+
+              {/* Dummy Rotation Transfers */}
+              <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Rotations</span>
+                <div className="text-lg font-black text-slate-600 truncate">
+                  {formatMoney(ad.totalRotationsBase)}
+                </div>
+                <div className="text-[10px] text-slate-400 font-medium">Bank contra</div>
+              </div>
+            </div>
+
+            {/* Daily Spending Velocity Histogram (SVG) */}
+            <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <LineChart className="w-4 h-4 text-indigo-600" />
+                    Daily Outflow Timeline
+                  </h3>
+                  <p className="text-[11px] text-slate-500">Day-by-day expenditure pattern across the timeframe</p>
+                </div>
+                <div className="flex items-center gap-4 text-[11px] text-slate-500 font-semibold">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-indigo-600 inline-block"></span>
+                    Daily Spend
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-4 border-t-2 border-dashed border-rose-500 inline-block"></span>
+                    Avg: {formatMoney(ad.dailyAverageBase)}/day
+                  </span>
+                </div>
+              </div>
+
+              {/* SVG Histogram */}
+              <div className="w-full overflow-x-auto no-scrollbar">
+                <div className="min-w-[500px]">
+                  <svg viewBox="0 0 540 160" className="w-full h-44 select-none">
+                    <defs>
+                      <linearGradient id="barGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#6366f1" />
+                        <stop offset="100%" stopColor="#4f46e5" />
+                      </linearGradient>
+                    </defs>
+
+                    {/* Horizontal grid lines */}
+                    <line x1="30" y1="20" x2="520" y2="20" stroke="#f1f5f9" strokeWidth="1" />
+                    <line x1="30" y1="70" x2="520" y2="70" stroke="#f1f5f9" strokeWidth="1" />
+                    <line x1="30" y1="120" x2="520" y2="120" stroke="#e2e8f0" strokeWidth="1" />
+
+                    {/* Average dashed guideline */}
+                    {maxDaily > 0 && avgDaily > 0 && (
+                      <line
+                        x1="30"
+                        y1={Math.max(25, 120 - (avgDaily / maxDaily) * 100)}
+                        x2="520"
+                        y2={Math.max(25, 120 - (avgDaily / maxDaily) * 100)}
+                        stroke="#f43f5e"
+                        strokeDasharray="4 4"
+                        strokeWidth="1.5"
+                      />
+                    )}
+
+                    {/* Bars */}
+                    {ad.dailyPoints.map((pt, idx) => {
+                      const val = convertBaseToTarget(pt.amountBase);
+                      const barH = maxDaily > 0 ? (val / maxDaily) * 95 : 0;
+                      const step = 480 / ad.dailyPoints.length;
+                      const barW = Math.max(10, Math.min(26, step - 6));
+                      const x = 38 + idx * step;
+                      const y = 120 - barH;
+
+                      return (
+                        <g key={pt.date} className="group cursor-pointer">
+                          <title>{`${pt.date}: ${formatMoney(pt.amountBase)}`}</title>
+                          {/* Background hover hit target */}
+                          <rect
+                            x={x - 2}
+                            y="15"
+                            width={barW + 4}
+                            height="110"
+                            fill="transparent"
+                            className="hover:fill-slate-50 transition"
+                          />
+                          {/* Visible Bar */}
+                          <rect
+                            x={x}
+                            y={y}
+                            width={barW}
+                            height={Math.max(barH, val > 0 ? 3 : 0)}
+                            rx="3"
+                            fill={val > 0 ? "url(#barGrad)" : "#e2e8f0"}
+                            className="transition-all duration-300"
+                          />
+                          {/* Amount on top if non-zero */}
+                          {val > 0 && (
+                            <text
+                              x={x + barW / 2}
+                              y={Math.max(15, y - 4)}
+                              textAnchor="middle"
+                              className="text-[8px] fill-indigo-700 font-black opacity-0 group-hover:opacity-100 transition"
+                            >
+                              {Math.round(val)}
+                            </text>
+                          )}
+                          {/* Date Label */}
+                          <text
+                            x={x + barW / 2}
+                            y="136"
+                            textAnchor="middle"
+                            className="text-[9px] fill-slate-400 font-bold"
+                          >
+                            {pt.label.split(' ')[0]}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </svg>
+                </div>
+              </div>
+            </div>
+
+            {/* Row 2: Category Donut & Payment Channels */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Category Spending Donut */}
+              <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <PieChart className="w-4 h-4 text-indigo-600" />
+                    Category Outflow Share
+                  </h3>
+                  <span className="text-[11px] text-slate-400 font-semibold">{ad.categoryBreakdown.length} categories</span>
+                </div>
+
+                {ad.categoryBreakdown.length === 0 ? (
+                  <div className="py-12 text-center text-xs text-slate-400">
+                    No expenses logged in this timeframe.
+                  </div>
+                ) : (
+                  <div className="flex flex-col sm:flex-row items-center gap-6">
+                    {/* SVG Circular Ring */}
+                    <div className="shrink-0 relative w-44 h-44 flex items-center justify-center">
+                      <svg viewBox="0 0 160 160" className="w-44 h-44 -rotate-90">
+                        {/* Background ring */}
+                        <circle cx="80" cy="80" r={radius} fill="transparent" stroke="#f1f5f9" strokeWidth="20" />
+                        {ad.categoryBreakdown.map((cat) => {
+                          const strokeLen = (cat.percentage / 100) * circumference;
+                          const offset = -cumulative;
+                          cumulative += strokeLen;
+                          return (
+                            <circle
+                              key={cat.name}
+                              cx="80"
+                              cy="80"
+                              r={radius}
+                              fill="transparent"
+                              stroke={cat.color || '#6366f1'}
+                              strokeWidth="20"
+                              strokeDasharray={`${strokeLen} ${circumference}`}
+                              strokeDashoffset={offset}
+                              className="transition-all duration-500"
+                            >
+                              <title>{`${cat.name}: ${formatMoney(cat.totalBase)} (${cat.percentage.toFixed(1)}%)`}</title>
+                            </circle>
+                          );
+                        })}
+                      </svg>
+                      {/* Center Info */}
+                      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Total</span>
+                        <span className="text-xs font-black text-slate-900 px-2 truncate max-w-[120px]">
+                          {formatMoney(ad.totalNetSpendBase)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Category Legend & List */}
+                    <div className="flex-1 w-full space-y-2 max-h-48 overflow-y-auto no-scrollbar">
+                      {ad.categoryBreakdown.map(cat => (
+                        <div key={cat.name} className="space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="flex items-center gap-2 truncate">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat.color || '#6366f1' }} />
+                              <span className="font-bold text-slate-800 truncate">{cat.name}</span>
+                            </span>
+                            <div className="text-right shrink-0">
+                              <strong className="text-slate-900 font-black">{formatMoney(cat.totalBase)}</strong>
+                              <span className="text-[10px] text-slate-400 ml-1.5 font-semibold">({cat.percentage.toFixed(0)}%)</span>
+                            </div>
+                          </div>
+                          <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-500"
+                              style={{ width: `${cat.percentage}%`, backgroundColor: cat.color || '#6366f1' }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Payment Methods Breakdown */}
+              <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-indigo-600" />
+                    Payment Channel Distribution
+                  </h3>
+                  <span className="text-[11px] text-slate-400 font-semibold">{ad.paymentBreakdown.length} channels</span>
+                </div>
+
+                {/* Segmented multi-color bar */}
+                <div className="w-full h-4 rounded-full overflow-hidden flex bg-slate-100">
+                  {ad.paymentBreakdown.map((pm, i) => {
+                    const colors = ['bg-indigo-600', 'bg-emerald-500', 'bg-amber-500', 'bg-purple-600', 'bg-cyan-500'];
+                    return (
+                      <div
+                        key={pm.method}
+                        className={`${colors[i % colors.length]} h-full transition-all`}
+                        style={{ width: `${pm.percentage}%` }}
+                        title={`${pm.method}: ${formatMoney(pm.totalBase)} (${pm.percentage.toFixed(1)}%)`}
+                      />
+                    );
+                  })}
+                </div>
+
+                {/* Grid of payment cards */}
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                  {ad.paymentBreakdown.map((pm, i) => {
+                    const colors = ['text-indigo-600', 'text-emerald-600', 'text-amber-600', 'text-purple-600', 'text-cyan-600'];
+                    const bgColors = ['bg-indigo-50', 'bg-emerald-50', 'bg-amber-50', 'bg-purple-50', 'bg-cyan-50'];
+                    return (
+                      <div key={pm.method} className={`p-3 rounded-2xl border border-slate-100 ${bgColors[i % bgColors.length]} space-y-1`}>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-bold text-slate-800">{pm.method}</span>
+                          <span className={`text-[10px] font-black ${colors[i % colors.length]}`}>
+                            {pm.percentage.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="text-sm font-black text-slate-900">
+                          {formatMoney(pm.totalBase)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Row 3: Expense Sets Comparison & Companion Matrix */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+              {/* Expense Sets / Trips Comparison */}
+              <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-indigo-600" />
+                    Trip & Set Burn Rates
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('sets')}
+                    className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                  >
+                    View All Sets
+                  </button>
+                </div>
+
+                {ad.setComparison.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    No active expense sets with spending yet.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {ad.setComparison.map(s => {
+                      const pct = s.budgetBase > 0 ? Math.min(100, Math.round((s.spentBase / s.budgetBase) * 100)) : null;
+                      return (
+                        <div key={s.id} className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2">
+                          <div className="flex items-center justify-between text-xs">
+                            <div className="font-bold text-slate-900 truncate">
+                              {s.name}
+                              <span className="ml-2 text-[10px] font-semibold text-slate-400">({s.entriesCount} entries)</span>
+                            </div>
+                            <div className="font-black text-slate-900">
+                              {formatMoney(s.spentBase)}
+                            </div>
+                          </div>
+                          {s.budgetBase > 0 && (
+                            <div className="space-y-1">
+                              <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                <span>Budget: {formatMoney(s.budgetBase)}</span>
+                                <span className={pct! >= 100 ? 'text-rose-600 font-bold' : 'text-slate-600 font-bold'}>{pct}%</span>
+                              </div>
+                              <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                                <div
+                                  className={`h-full ${pct! >= 100 ? 'bg-rose-500' : pct! >= 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Companion Outing & Generosity Matrix */}
+              <div className="bg-white border border-slate-200/90 rounded-3xl p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-indigo-600" />
+                    Companion Outings & Generosity Matrix
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSubTab('people')}
+                    className="text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                  >
+                    View People
+                  </button>
+                </div>
+
+                {ad.companionMatrix.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    No companions recorded in split or sponsored expenses yet.
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-72 overflow-y-auto no-scrollbar">
+                    {ad.companionMatrix.map(cp => (
+                      <div key={cp.name} className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-black flex items-center justify-center shrink-0 text-xs">
+                            {cp.name.slice(0, 2).toUpperCase()}
+                          </div>
+                          <div className="truncate">
+                            <div className="font-bold text-slate-900 truncate">{cp.name}</div>
+                            <div className="text-[10px] text-slate-400">{cp.outingCount} shared outings</div>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0 space-y-0.5">
+                          <div className="font-black text-slate-900">
+                            Total: {formatMoney(cp.totalOutingBase)}
+                          </div>
+                          <div className="text-[10px] text-slate-500">
+                            Split: <strong className="text-slate-700">{formatMoney(cp.splitBase)}</strong>
+                            {cp.sponsoredBase > 0 && (
+                              <span className="ml-1 text-amber-600 font-bold">
+                                • Gift: {formatMoney(cp.sponsoredBase)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* 3. EXPENSES TAB */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'expenses' && (
         <div className="space-y-4">
@@ -2426,7 +3290,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
             </div>
 
             <div className="text-xs font-bold text-slate-600">
-              {filteredExpenses.length} entries • Total: Rs. {filteredExpenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()}
+              {filteredExpenses.length} entries • Total: {formatMoney(filteredExpenses.reduce((sum, e) => sum + e.amount, 0))}
             </div>
           </div>
 
@@ -2466,15 +3330,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <td className="py-3 px-4 text-slate-500">{setName || '—'}</td>
                           <td className="py-3 px-4 text-slate-600">{e.paymentMethod}</td>
                           <td className="py-3 px-4 text-right font-black text-slate-900 whitespace-nowrap">
-                            {e.currency && e.currency !== (settings.defaultCurrency || 'NPR') && e.originalAmount ? (
-                              <div>
-                                <span>{getCurrencySymbol(e.currency)} {e.originalAmount.toLocaleString()}</span>
-                                <div className="text-[10px] font-normal text-slate-500">
-                                  ≈ {getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}
-                                </div>
+                            <div>{formatMoney(e.amount)}</div>
+                            {e.currency && e.currency !== viewCurrency && (
+                              <div className="text-[10px] font-normal text-slate-400">
+                                orig: {getCurrencySymbol(e.currency)} {e.originalAmount || e.amount}
                               </div>
-                            ) : (
-                              <>{getCurrencySymbol(settings.defaultCurrency)} {e.amount.toLocaleString()}</>
                             )}
                           </td>
                           <td className="py-3 px-4 text-right">
@@ -2561,12 +3421,12 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <div className="pt-2 border-t border-slate-100 space-y-1.5">
                       <div className="flex justify-between text-xs">
                         <span className="text-slate-500">Total Spent:</span>
-                        <span className="font-black text-slate-900 text-sm">Rs. {spent.toLocaleString()}</span>
+                        <span className="font-black text-slate-900 text-sm">{formatMoney(spent)}</span>
                       </div>
                       {budget > 0 && (
                         <div className="space-y-1">
                           <div className="flex justify-between text-[11px] text-slate-500">
-                            <span>Budget: Rs. {budget.toLocaleString()}</span>
+                            <span>Budget: {formatMoney(budget)}</span>
                             <span>{pct}%</span>
                           </div>
                           <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
@@ -2582,12 +3442,11 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
 
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
                     <button
-                      onClick={() => {
-                        setFilterSetId(set.id);
-                        setActiveSubTab('expenses');
-                      }}
-                      className="font-bold text-slate-600 hover:text-slate-900"
+                      type="button"
+                      onClick={() => setViewSetEntriesTarget(set)}
+                      className="font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-1.5 cursor-pointer"
                     >
+                      <Eye className="w-3.5 h-3.5" />
                       View {set.entryCount || 0} Entries
                     </button>
                     <div className="flex items-center gap-2">
@@ -2626,10 +3485,39 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
       )}
 
       {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 4. LENDS TAB (Money Given to Others) */}
+      {/* 5. LENDS TAB (Money Given to Others) */}
       {/* ─────────────────────────────────────────────────────────────────── */}
       {activeSubTab === 'lends' && (
         <div className="space-y-4">
+          {/* Top Counterparties Exposure */}
+          {consolidatedLends.length > 0 && (
+            <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs space-y-2.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-black text-slate-900 flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-indigo-600" />
+                  Counterparty Lending Exposure
+                </span>
+                <span className="text-slate-500 font-semibold">Total to collect: {formatMoney(consolidatedLends.reduce((s, g) => s + g.remaining, 0))}</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {consolidatedLends.slice(0, 3).map(g => (
+                  <div key={g.groupKey} className="p-2.5 bg-slate-50 border border-slate-200/70 rounded-xl flex items-center justify-between text-xs">
+                    <div>
+                      <div className="font-bold text-slate-800">{g.personName}</div>
+                      <div className="text-[10px] text-slate-400">{g.setName}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-black text-emerald-700">{formatMoney(g.remaining)}</div>
+                      {g.totalSponsored > 0 && (
+                        <div className="text-[9px] text-amber-600 font-semibold">Treated: {formatMoney(g.totalSponsored)}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 className="text-sm font-bold text-slate-900">Lends Tracker (Money Given Out)</h2>
@@ -2695,7 +3583,6 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 </div>
               ) : (
                 consolidatedLends.map(grp => {
-                  const isExpanded = Boolean(expandedConsolidatedKeys[grp.groupKey]);
                   return (
                     <div key={grp.groupKey} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
                       <div className="space-y-3">
@@ -2736,7 +3623,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           {grp.totalSponsored > 0 && (
                             <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 bg-amber-50 text-amber-800 border border-amber-200">
                               <Gift className="w-3 h-3 text-amber-600" />
-                              Sponsored: Rs. {grp.totalSponsored.toLocaleString()}
+                              Sponsored: {formatMoney(grp.totalSponsored)}
                             </span>
                           )}
                         </div>
@@ -2746,115 +3633,34 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <div>
                             <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining Balance</span>
                             <div className="text-xl font-black text-emerald-600">
-                              Rs. {grp.remaining.toLocaleString()}
+                              {formatMoney(grp.remaining)}
                             </div>
                           </div>
                           <div className="text-right">
                             <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Total Lent</span>
                             <div className="text-xs font-bold text-slate-700">
-                              Rs. {grp.totalAmount.toLocaleString()}
+                              {formatMoney(grp.totalAmount)}
                             </div>
                             {grp.totalRepaid > 0 && (
                               <div className="text-[10px] text-slate-400">
-                                Repaid: Rs. {grp.totalRepaid.toLocaleString()}
+                                Repaid: {formatMoney(grp.totalRepaid)}
                               </div>
                             )}
                           </div>
                         </div>
 
-                        {/* Expand / Collapse Sub-entries */}
+                        {/* View Breakdown as Popup Modal Button */}
                         <button
                           type="button"
-                          onClick={() => setExpandedConsolidatedKeys(prev => ({ ...prev, [grp.groupKey]: !prev[grp.groupKey] }))}
-                          className="w-full py-1.5 px-3 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
+                          onClick={() => setViewConsolidatedBreakdownTarget(grp)}
+                          className="w-full py-2 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 rounded-xl text-xs font-bold text-indigo-700 flex items-center justify-between transition cursor-pointer active:scale-[0.99]"
                         >
-                          <span>
-                            {isExpanded
-                              ? 'Hide Breakdown'
-                              : `View Breakdown (${grp.items.length} ${grp.items.length === 1 ? 'entry' : 'entries'}${grp.totalSponsored > 0 ? ` • ${grp.sponsoredItems.length} sponsored` : ''})`}
+                          <span className="flex items-center gap-1.5 truncate">
+                            <Eye className="w-3.5 h-3.5 shrink-0" />
+                            View Breakdown ({grp.items.length} {grp.items.length === 1 ? 'entry' : 'entries'}{grp.totalSponsored > 0 ? ` • ${grp.sponsoredItems.length} sponsored` : ''})
                           </span>
-                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          <ChevronRight className="w-3.5 h-3.5 shrink-0" />
                         </button>
-
-                        {/* Expanded Sub-items List */}
-                        {isExpanded && (
-                          <div className="space-y-3 pt-2 border-t border-slate-100 animate-fade-in text-xs">
-                            {grp.items.length > 0 && (
-                              <div className="space-y-2">
-                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                  Shared Entries to Return ({grp.items.length})
-                                </span>
-                                {grp.items.map(subItem => {
-                                  const subRepaid = (subItem.repayments || []).reduce((s, r) => s + (Number(r.amount) || 0), 0);
-                                  const subRemaining = Math.max(0, subItem.amount - subRepaid);
-                                  return (
-                                    <div key={subItem.id} className="p-2.5 bg-slate-50/80 border border-slate-200 rounded-xl space-y-1">
-                                      <div className="flex items-center justify-between font-bold text-slate-800">
-                                        <span className="truncate max-w-[200px]" title={subItem.notes || ''}>
-                                          {subItem.notes || `Lend on ${subItem.lentDate}`}
-                                        </span>
-                                        <span className="text-emerald-700 whitespace-nowrap">Rs. {subItem.amount.toLocaleString()}</span>
-                                      </div>
-                                      <div className="flex items-center justify-between text-[11px] text-slate-500">
-                                        <span>Date: {subItem.lentDate}</span>
-                                        <span>Remaining: Rs. {subRemaining.toLocaleString()}</span>
-                                      </div>
-                                      <div className="flex items-center justify-end gap-2 pt-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setRepayTarget({ type: 'lend', item: subItem });
-                                            setRepayAmount(subRemaining.toString());
-                                          }}
-                                          className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
-                                        >
-                                          Record Repayment
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => handleEditLend(subItem)}
-                                          className="text-slate-400 hover:text-emerald-600 p-0.5 cursor-pointer transition"
-                                          title="Edit this entry"
-                                        >
-                                          <Edit2 className="w-3 h-3" />
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() => handleDeleteLend(subItem.id)}
-                                          className="text-slate-400 hover:text-red-600 p-0.5 cursor-pointer transition"
-                                          title="Delete this entry"
-                                        >
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-
-                            {grp.sponsoredItems && grp.sponsoredItems.length > 0 && (
-                              <div className="space-y-1.5 pt-1">
-                                <div className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider flex items-center gap-1">
-                                  <Gift className="w-3 h-3" />
-                                  Treated / Sponsored by You ({grp.sponsoredItems.length})
-                                </div>
-                                {grp.sponsoredItems.map(sp => (
-                                  <div key={sp.id} className="p-2.5 bg-indigo-50/70 border border-indigo-200/80 rounded-xl flex items-center justify-between">
-                                    <div>
-                                      <div className="font-bold text-slate-800 text-xs">{sp.description}</div>
-                                      <div className="text-[10px] text-slate-500">{sp.date} • Covered by Shudarsan</div>
-                                    </div>
-                                    <div className="text-right">
-                                      <div className="font-bold text-indigo-700 text-xs">Rs. {sp.amount.toLocaleString()}</div>
-                                      <span className="text-[9px] font-semibold text-indigo-500">No return needed</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
 
                       {!grp.allComplete && (
@@ -2953,13 +3759,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <div>
                             <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining</span>
                             <div className="text-xl font-black text-emerald-600">
-                              Rs. {remaining.toLocaleString()}
+                              {formatMoney(remaining)}
                             </div>
                           </div>
                           <div className="text-right">
                             <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Initial</span>
                             <div className="text-xs font-bold text-slate-700">
-                              Rs. {item.amount.toLocaleString()}
+                              {formatMoney(item.amount)}
                             </div>
                           </div>
                         </div>
@@ -3120,13 +3926,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         <div>
                           <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Remaining Debt</span>
                           <div className="text-xl font-black text-amber-600">
-                            Rs. {remaining.toLocaleString()}
+                            {formatMoney(remaining)}
                           </div>
                         </div>
                         <div className="text-right">
                           <span className="text-[10px] text-slate-450 uppercase font-bold tracking-wider">Borrowed</span>
                           <div className="text-xs font-bold text-slate-700">
-                            Rs. {item.amount.toLocaleString()}
+                            {formatMoney(item.amount)}
                           </div>
                         </div>
                       </div>
@@ -3267,13 +4073,13 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
                   <span className="text-[11px] font-semibold text-slate-500">Total Receivables (Others Owe You)</span>
                   <div className="text-xl font-black text-emerald-600">
-                    Rs. {sanitizedPeople.reduce((sum, p) => sum + (p.netReceivable || 0), 0).toLocaleString()}
+                    {formatMoney(sanitizedPeople.reduce((sum, p) => sum + (p.netReceivable || 0), 0))}
                   </div>
                 </div>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
                   <span className="text-[11px] font-semibold text-slate-500">Total Payables (You Owe Others)</span>
                   <div className="text-xl font-black text-amber-600">
-                    Rs. {sanitizedPeople.reduce((sum, p) => sum + (p.netPayable || 0), 0).toLocaleString()}
+                    {formatMoney(sanitizedPeople.reduce((sum, p) => sum + (p.netPayable || 0), 0))}
                   </div>
                 </div>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-1">
@@ -3282,7 +4088,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     const net = sanitizedPeople.reduce((sum, p) => sum + (p.netBalance || 0), 0);
                     return (
                       <div className={`text-xl font-black ${net >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
-                        {net >= 0 ? `+ Rs. ${net.toLocaleString()}` : `- Rs. ${Math.abs(net).toLocaleString()}`}
+                        {net >= 0 ? `+ ${formatMoney(net)}` : `- ${formatMoney(Math.abs(net))}`}
                       </div>
                     );
                   })()}
@@ -3384,7 +4190,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           {totalSponsored > 0 && (
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 flex items-center gap-1">
                               <Gift className="w-3 h-3 text-purple-600" />
-                              Rs. {Math.round(totalSponsored).toLocaleString()} treated
+                              {formatMoney(totalSponsored)} treated
                             </span>
                           )}
 
@@ -3393,7 +4199,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             <div className={`text-sm font-black ${
                               balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-rose-600' : 'text-slate-600'
                             }`}>
-                              {balance > 0 ? `+ Rs. ${balance.toLocaleString()}` : balance < 0 ? `- Rs. ${Math.abs(balance).toLocaleString()}` : 'Rs. 0'}
+                              {balance > 0 ? `+ ${formatMoney(balance)}` : balance < 0 ? `- ${formatMoney(Math.abs(balance))}` : formatMoney(0)}
                             </div>
                             <div className="text-[10px] text-slate-400 font-semibold">
                               {balance > 0 ? 'Owes you' : balance < 0 ? 'You owe' : 'All Settled'}
@@ -3569,10 +4375,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                               balance > 0 ? 'text-emerald-700' : balance < 0 ? 'text-amber-700' : 'text-slate-700'
                             }`}>
                               {balance > 0
-                                ? `Rs. ${balance.toLocaleString()}`
+                                ? formatMoney(balance)
                                 : balance < 0
-                                ? `Rs. ${Math.abs(balance).toLocaleString()}`
-                                : 'Rs. 0 (All Settled)'}
+                                ? formatMoney(Math.abs(balance))
+                                : `${formatMoney(0)} (All Settled)`}
                             </div>
                             <div className="text-[10px] text-slate-500 mt-0.5">
                               {relatedTxsCount} transactions recorded
@@ -3585,7 +4391,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                                 <Gift className="w-3.5 h-3.5 text-indigo-600" />
                                 Treats / Sponsored by You:
                               </span>
-                              <span className="font-black text-indigo-900">Rs. {Math.round(totalSponsored).toLocaleString()}</span>
+                              <span className="font-black text-indigo-900">{formatMoney(totalSponsored)}</span>
                             </div>
                           )}
                         </div>
@@ -3700,7 +4506,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <div>
                             <span className="text-[10px] text-slate-450 uppercase font-bold">Total Spent</span>
                             <div className="font-black text-slate-800">
-                              Rs. {(group.totalSpent || 0).toLocaleString()}
+                              {formatMoney(group.totalSpent || 0)}
                             </div>
                           </div>
                           <div className="text-right">
@@ -4115,6 +4921,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
           </form>
         </div>
       )}
+        </main>
+      </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* MODAL: ADD / EDIT EXPENSE GROUP */}
@@ -5793,7 +6601,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       <span className="font-bold text-slate-800">{reconcileTarget.bank || 'City Union Bank'}</span>
                     </div>
                     <div className="text-base font-black text-slate-900">
-                      Rs. {reconcileTarget.amount.toLocaleString()}
+                      {formatMoney(reconcileTarget.amount)}
                     </div>
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -5895,7 +6703,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     {reconcileForm.splitMode === 'custom' && (
                       <div className="grid grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your Share (Rs.)</label>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Your Share ({viewCurrency})</label>
                           <input
                             type="number"
                             placeholder="0.00"
@@ -5912,7 +6720,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Friend's Share (Rs.)</label>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Friend's Share ({viewCurrency})</label>
                           <input
                             type="number"
                             placeholder="0.00"
@@ -5936,21 +6744,21 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       <div className="flex justify-between text-slate-700">
                         <span>Your personal expense:</span>
                         <span className="font-black">
-                          Rs. {reconcileForm.splitMode === '100_them'
-                            ? '0'
+                          {reconcileForm.splitMode === '100_them'
+                            ? formatMoney(0)
                             : reconcileForm.splitMode === '50_50'
-                            ? (reconcileTarget.amount / 2).toLocaleString()
-                            : (parseFloat(reconcileForm.customMyAmount) || 0).toLocaleString()}
+                            ? formatMoney(reconcileTarget.amount / 2)
+                            : formatMoney(parseFloat(reconcileForm.customMyAmount) || 0)}
                         </span>
                       </div>
                       <div className="flex justify-between text-emerald-700">
                         <span>Added to {reconcileForm.splitPersonName || 'Friend'}'s ledger (Lend):</span>
                         <span className="font-black">
-                          Rs. {reconcileForm.splitMode === '100_them'
-                            ? reconcileTarget.amount.toLocaleString()
+                          {reconcileForm.splitMode === '100_them'
+                            ? formatMoney(reconcileTarget.amount)
                             : reconcileForm.splitMode === '50_50'
-                            ? (reconcileTarget.amount / 2).toLocaleString()
-                            : (parseFloat(reconcileForm.customTheirAmount) || 0).toLocaleString()}
+                            ? formatMoney(reconcileTarget.amount / 2)
+                            : formatMoney(parseFloat(reconcileForm.customTheirAmount) || 0)}
                         </span>
                       </div>
                     </div>
@@ -6204,20 +7012,20 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                   <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3">
                     <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Owed To You</div>
                     <div className="text-base font-black text-emerald-700 mt-0.5">
-                      Rs. {(outstandingLent + totalSplitForThem).toLocaleString()}
+                      {formatMoney(outstandingLent + totalSplitForThem)}
                     </div>
                     <div className="text-[9px] text-emerald-600 mt-0.5">
-                      Lent: Rs. {outstandingLent.toLocaleString()} • Splits: Rs. {totalSplitForThem.toLocaleString()}
+                      Lent: {formatMoney(outstandingLent)} • Splits: {formatMoney(totalSplitForThem)}
                     </div>
                   </div>
 
                   <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3">
                     <div className="text-[10px] font-bold text-amber-800 uppercase tracking-wider">You Owe</div>
                     <div className="text-base font-black text-amber-700 mt-0.5">
-                      Rs. {(outstandingBorrowed + totalPaidByThem).toLocaleString()}
+                      {formatMoney(outstandingBorrowed + totalPaidByThem)}
                     </div>
                     <div className="text-[9px] text-amber-600 mt-0.5">
-                      Borrow: Rs. {outstandingBorrowed.toLocaleString()} • Paid: Rs. {totalPaidByThem.toLocaleString()}
+                      Borrow: {formatMoney(outstandingBorrowed)} • Paid: {formatMoney(totalPaidByThem)}
                     </div>
                   </div>
 
@@ -6228,7 +7036,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     <div className={`text-base font-black mt-0.5 ${
                       netLedger > 0 ? 'text-emerald-700' : netLedger < 0 ? 'text-rose-600' : 'text-slate-700'
                     }`}>
-                      {netLedger > 0 ? `+ Rs. ${netLedger.toLocaleString()}` : netLedger < 0 ? `- Rs. ${Math.abs(netLedger).toLocaleString()}` : 'Rs. 0'}
+                      {netLedger > 0 ? `+ ${formatMoney(netLedger)}` : netLedger < 0 ? `- ${formatMoney(Math.abs(netLedger))}` : formatMoney(0)}
                     </div>
                     <div className="text-[9px] text-slate-500 mt-0.5">
                       {netLedger > 0 ? `${p.name} owes you` : netLedger < 0 ? `You owe ${p.name}` : 'Settled'}
@@ -6241,7 +7049,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       Sponsored / Treats
                     </div>
                     <div className="text-base font-black text-purple-700 mt-0.5">
-                      Rs. {totalSponsored.toLocaleString()}
+                      {formatMoney(totalSponsored)}
                     </div>
                     <div className="text-[9px] text-purple-600 mt-0.5">
                       Treated by you • No return needed
@@ -6258,7 +7066,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                         Sponsored & Treats Given (Not a Debt • You Paid)
                       </span>
                       <span className="text-[11px] font-black text-purple-700">
-                        Total: Rs. {totalSponsored.toLocaleString()}
+                        Total: {formatMoney(totalSponsored)}
                       </span>
                     </div>
                     <div className="space-y-1.5">
@@ -6275,7 +7083,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           </div>
                           <div className="text-right">
                             <div className="font-black text-purple-800">
-                              Rs. {sp.amount.toLocaleString()}
+                              {formatMoney(sp.amount)}
                             </div>
                             <span className="text-[9px] px-1.5 py-0.2 rounded font-bold bg-purple-100 text-purple-800 border border-purple-200">
                               Gift / Treat
@@ -6309,10 +7117,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-black text-emerald-700">Rs. {l.amount.toLocaleString()}</div>
+                            <div className="font-black text-emerald-700">{formatMoney(l.amount)}</div>
                             {l.repayments?.length > 0 && (
                               <div className="text-[10px] text-slate-500">
-                                Returned: Rs. {l.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                                Returned: {formatMoney(l.repayments.reduce((s, r) => s + r.amount, 0))}
                               </div>
                             )}
                           </div>
@@ -6333,10 +7141,10 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-black text-amber-700">Rs. {b.amount.toLocaleString()}</div>
+                            <div className="font-black text-amber-700">{formatMoney(b.amount)}</div>
                             {b.repayments?.length > 0 && (
                               <div className="text-[10px] text-slate-500">
-                                Repaid: Rs. {b.repayments.reduce((s, r) => s + r.amount, 0).toLocaleString()}
+                                Repaid: {formatMoney(b.repayments.reduce((s, r) => s + r.amount, 0))}
                               </div>
                             )}
                           </div>
@@ -6356,8 +7164,8 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-black text-emerald-700">+ Rs. {(e.splitAmount || 0).toLocaleString()}</div>
-                            <div className="text-[10px] text-slate-400">Total Bill: Rs. {e.amount.toLocaleString()}</div>
+                            <div className="font-black text-emerald-700">+ {formatMoney(e.splitAmount || 0)}</div>
+                            <div className="text-[10px] text-slate-400">Total Bill: {formatMoney(e.amount)}</div>
                           </div>
                         </div>
                       ))}
@@ -6375,7 +7183,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                             </div>
                           </div>
                           <div className="text-right">
-                            <div className="font-black text-rose-600">- Rs. {e.amount.toLocaleString()}</div>
+                            <div className="font-black text-rose-600">- {formatMoney(e.amount)}</div>
                             <div className="text-[10px] text-slate-400">You owe {p.name}</div>
                           </div>
                         </div>
@@ -6445,7 +7253,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div className="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
                   <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">Amount to Settle</div>
                   <div className="text-lg font-black text-emerald-800">
-                    Rs. {emailReminderTarget.totalReceivable.toLocaleString()}
+                    {formatMoney(emailReminderTarget.totalReceivable)}
                   </div>
                   <div className="text-[10px] text-emerald-600 mt-0.5">
                     {emailReminderTarget.items.length} payable expense{emailReminderTarget.items.length === 1 ? '' : 's'}
@@ -6458,7 +7266,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                     Treated / Sponsored
                   </div>
                   <div className="text-lg font-black text-purple-800">
-                    Rs. {emailReminderTarget.totalSponsored.toLocaleString()}
+                    {formatMoney(emailReminderTarget.totalSponsored)}
                   </div>
                   <div className="text-[10px] text-purple-600 mt-0.5">
                     {emailReminderTarget.sponsoredItems.length} gift treat{emailReminderTarget.sponsoredItems.length === 1 ? '' : 's'} (No return)
@@ -6502,7 +7310,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                 <div className="space-y-1.5">
                   <div className="font-bold text-slate-700 text-[11px] flex items-center justify-between">
                     <span>Payable Items</span>
-                    <span className="text-slate-400 font-normal">Total: Rs. {emailReminderTarget.totalReceivable.toLocaleString()}</span>
+                    <span className="text-slate-400 font-normal">Total: {formatMoney(emailReminderTarget.totalReceivable)}</span>
                   </div>
                   <div className="bg-slate-50 border border-slate-200 rounded-xl divide-y divide-slate-100 max-h-36 overflow-y-auto">
                     {emailReminderTarget.items.map((item, idx) => (
@@ -6511,7 +7319,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <div className="font-semibold text-slate-800">{item.description}</div>
                           <div className="text-[10px] text-slate-400">{item.date}</div>
                         </div>
-                        <div className="font-bold text-emerald-700">Rs. {item.amount.toLocaleString()}</div>
+                        <div className="font-bold text-emerald-700">{formatMoney(item.amount)}</div>
                       </div>
                     ))}
                   </div>
@@ -6526,7 +7334,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       <Gift className="w-3 h-3 text-purple-600" />
                       Treated / Sponsored (Included in summary as gift)
                     </span>
-                    <span className="text-purple-600 font-normal">Rs. {emailReminderTarget.totalSponsored.toLocaleString()}</span>
+                    <span className="text-purple-600 font-normal">{formatMoney(emailReminderTarget.totalSponsored)}</span>
                   </div>
                   <div className="bg-purple-50/50 border border-purple-200 rounded-xl divide-y divide-purple-100 max-h-28 overflow-y-auto">
                     {emailReminderTarget.sponsoredItems.map((item, idx) => (
@@ -6535,7 +7343,7 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                           <div className="font-semibold text-slate-800">{item.description}</div>
                           <div className="text-[10px] text-purple-500">{item.date} • Sponsored treat</div>
                         </div>
-                        <div className="font-bold text-purple-700 line-through">Rs. {item.amount.toLocaleString()}</div>
+                        <div className="font-bold text-purple-700 line-through">{formatMoney(item.amount)}</div>
                       </div>
                     ))}
                   </div>
@@ -6589,6 +7397,353 @@ export const Finance: React.FC<FinanceProps> = ({ authToken }) => {
                       Send Email
                     </>
                   )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* POPUP MODAL: EXPENSE SET ENTRIES */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {viewSetEntriesTarget && (() => {
+        const setExp = expenses.filter(e => e.expenseSetId === viewSetEntriesTarget.id);
+        const spentBase = setExp.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+        const budgetBase = Number(viewSetEntriesTarget.budget) || 0;
+        const pct = budgetBase > 0 ? Math.min(100, Math.round((spentBase / budgetBase) * 100)) : null;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
+            <div className="bg-white border border-slate-200/90 rounded-3xl max-w-2xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+              {/* Header */}
+              <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div className="flex items-center gap-3">
+                  <span className="p-2.5 bg-indigo-600 text-white rounded-2xl shadow-sm">
+                    <Layers className="w-5 h-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900 leading-tight">
+                      {viewSetEntriesTarget.name}
+                    </h3>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mt-0.5">
+                      <span className="font-semibold text-indigo-700">{viewSetEntriesTarget.category}</span>
+                      <span>•</span>
+                      <span>{viewSetEntriesTarget.startDate}{viewSetEntriesTarget.endDate ? ` to ${viewSetEntriesTarget.endDate}` : ''}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetSetId = viewSetEntriesTarget.id;
+                      setViewSetEntriesTarget(null);
+                      resetExpenseForm(targetSetId);
+                      setIsExpenseModalOpen(true);
+                    }}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs flex items-center gap-1 shadow-sm transition cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Entry</span>
+                  </button>
+                  <button
+                    onClick={() => setViewSetEntriesTarget(null)}
+                    className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Budget vs Spent Banner */}
+              <div className="p-4 bg-slate-50/50 border-b border-slate-100 space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Spent</span>
+                    <div className="text-xl font-black text-slate-900">
+                      {formatMoney(spentBase)}
+                    </div>
+                  </div>
+                  {budgetBase > 0 && (
+                    <div className="text-right">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Budget: {formatMoney(budgetBase)}</span>
+                      <div className={`text-sm font-black ${pct! >= 100 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        {pct}% utilized
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {pct !== null && (
+                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-full ${pct >= 100 ? 'bg-rose-500' : pct >= 80 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Scrollable list of entries */}
+              <div className="p-4 sm:p-5 overflow-y-auto space-y-2.5 flex-1">
+                {setExp.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 text-xs">
+                    No expense entries logged under this set yet.
+                  </div>
+                ) : (
+                  setExp.map(entry => (
+                    <div key={entry.id} className="p-3 bg-white border border-slate-200/90 rounded-2xl flex items-center justify-between gap-3 hover:border-slate-300 transition">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-slate-900 text-xs truncate">{entry.description}</span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                            {entry.category}
+                          </span>
+                          {entry.paymentMethod && (
+                            <span className="text-[10px] font-semibold text-slate-400">
+                              • {entry.paymentMethod}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-slate-500">
+                          <span>{entry.date} {entry.time || ''}</span>
+                          {entry.splits && entry.splits.length > 0 && (
+                            <span className="truncate max-w-[240px]">
+                              • Split: {entry.splits.map(s => `${(s as any).personName || (s as any).name || ''}${s.isSponsored ? ' (sponsored)' : ''}`).join(', ')}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="text-right">
+                          <div className="font-black text-slate-900 text-sm">
+                            {formatMoney(entry.amount)}
+                          </div>
+                          {entry.currency && entry.currency !== viewCurrency && (
+                            <div className="text-[10px] text-slate-400">
+                              orig: {getCurrencySymbol(entry.currency)} {entry.originalAmount || entry.amount}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setViewSetEntriesTarget(null);
+                              handleEditExpense(entry);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                            title="Edit expense"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteExpense(entry.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                            title="Delete expense"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">
+                  {setExp.length} {setExp.length === 1 ? 'entry' : 'entries'} in total
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setViewSetEntriesTarget(null)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {/* POPUP MODAL: CONSOLIDATED LENDS BREAKDOWN */}
+      {/* ─────────────────────────────────────────────────────────────────── */}
+      {viewConsolidatedBreakdownTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white border border-slate-200/90 rounded-3xl max-w-xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-3">
+                <span className="p-2.5 bg-emerald-50 text-emerald-600 rounded-2xl shadow-xs">
+                  <Users className="w-5 h-5" />
+                </span>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    {viewConsolidatedBreakdownTarget.personName}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    {viewConsolidatedBreakdownTarget.setName} • {viewConsolidatedBreakdownTarget.items.length} payable {viewConsolidatedBreakdownTarget.items.length === 1 ? 'entry' : 'entries'}
+                    {viewConsolidatedBreakdownTarget.totalSponsored > 0 && ` • ${viewConsolidatedBreakdownTarget.sponsoredItems.length} treated gifts`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewConsolidatedBreakdownTarget(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Outstanding Balance Banner */}
+            <div className="p-4 bg-emerald-50/60 border-b border-emerald-100 flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">Outstanding Balance</span>
+                <div className="text-2xl font-black text-emerald-700">
+                  {formatMoney(viewConsolidatedBreakdownTarget.remaining)}
+                </div>
+              </div>
+              <div className="text-right text-xs">
+                <span className="text-slate-500 font-medium">Total Lent: </span>
+                <span className="font-bold text-slate-800">{formatMoney(viewConsolidatedBreakdownTarget.totalAmount)}</span>
+                {viewConsolidatedBreakdownTarget.totalRepaid > 0 && (
+                  <div className="text-slate-500">
+                    Repaid: <span className="font-bold text-emerald-600">{formatMoney(viewConsolidatedBreakdownTarget.totalRepaid)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Scrollable list of entries */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
+              {/* Payable entries */}
+              <div className="space-y-2">
+                <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <ArrowUpRight className="w-3.5 h-3.5 text-indigo-500" />
+                  Shared Entries to Settle ({viewConsolidatedBreakdownTarget.items.length})
+                </span>
+                {viewConsolidatedBreakdownTarget.items.map((subItem: any) => {
+                  const subRepaid = (subItem.repayments || []).reduce((s: number, r: any) => s + (Number(r.amount) || 0), 0);
+                  const subRemaining = Math.max(0, subItem.amount - subRepaid);
+                  return (
+                    <div key={subItem.id} className="p-3 bg-slate-50/80 border border-slate-200/80 rounded-2xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800 text-xs">
+                          {subItem.notes || `Lend on ${subItem.lentDate}`}
+                        </span>
+                        <span className="font-black text-emerald-700 text-xs">
+                          {formatMoney(subItem.amount)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Date: {subItem.lentDate}</span>
+                        <span>Remaining: <strong className="text-slate-700">{formatMoney(subRemaining)}</strong></span>
+                      </div>
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-200/50">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRepayTarget({ type: 'lend', item: subItem });
+                            setRepayAmount(subRemaining.toString());
+                          }}
+                          className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold cursor-pointer"
+                        >
+                          Record Repayment
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setViewConsolidatedBreakdownTarget(null);
+                            handleEditLend(subItem);
+                          }}
+                          className="text-slate-400 hover:text-emerald-600 p-1 cursor-pointer transition"
+                          title="Edit entry"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleDeleteLend(subItem.id);
+                            setViewConsolidatedBreakdownTarget(null);
+                          }}
+                          className="text-slate-400 hover:text-red-600 p-1 cursor-pointer transition"
+                          title="Delete entry"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Sponsored items */}
+              {viewConsolidatedBreakdownTarget.sponsoredItems && viewConsolidatedBreakdownTarget.sponsoredItems.length > 0 && (
+                <div className="space-y-2 pt-2 border-t border-slate-100">
+                  <span className="text-[11px] font-black uppercase tracking-wider text-amber-700 flex items-center gap-1.5">
+                    <Gift className="w-3.5 h-3.5 text-amber-600" />
+                    Treated & Sponsored Gifts ({viewConsolidatedBreakdownTarget.sponsoredItems.length})
+                  </span>
+                  {viewConsolidatedBreakdownTarget.sponsoredItems.map((sp: any) => (
+                    <div key={sp.id} className="p-3 bg-amber-50/50 border border-amber-200/60 rounded-2xl flex items-center justify-between text-xs">
+                      <div>
+                        <div className="font-bold text-slate-800">{sp.description}</div>
+                        <div className="text-[10px] text-slate-500">{sp.date} • Covered as treat</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-black text-amber-700">{formatMoney(sp.amount)}</div>
+                        <span className="text-[9px] font-semibold text-amber-600">No repayment needed</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Actions */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const text = generateReminderText(viewConsolidatedBreakdownTarget);
+                  navigator.clipboard.writeText(text);
+                  setNotiBannerMsg('Copied settlement summary to clipboard!');
+                  setTimeout(() => setNotiBannerMsg(null), 3000);
+                }}
+                className="px-3 py-2 border border-slate-200 bg-white rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5 transition cursor-pointer"
+                title="Copy settlement text for WhatsApp"
+              >
+                <Copy className="w-3.5 h-3.5 text-slate-500" />
+                <span>Copy Text</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = viewConsolidatedBreakdownTarget;
+                    setViewConsolidatedBreakdownTarget(null);
+                    handleOpenConsolidatedReminder(target);
+                  }}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+                >
+                  <Mail className="w-3.5 h-3.5" />
+                  Settlement Email
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewConsolidatedBreakdownTarget(null)}
+                  className="px-3.5 py-2 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                >
+                  Close
                 </button>
               </div>
             </div>
