@@ -33,7 +33,8 @@ import {
   Wallet,
   Hourglass,
   Shield,
-  Bell
+  Bell,
+  Activity
 } from 'lucide-react';
 
 export interface AppDefinition {
@@ -49,6 +50,17 @@ export interface AppDefinition {
 }
 
 export const ALL_APPS: AppDefinition[] = [
+  {
+    id: 'lifemosaic',
+    label: 'Life Mosaic',
+    description: 'Macro time, activity & focus tapestry across weeks, months & years (काल)',
+    icon: Activity,
+    category: 'Knowledge & Vaults',
+    requiresLogin: false,
+    colorBg: 'bg-emerald-50',
+    colorText: 'text-emerald-700',
+    colorBorder: 'border-emerald-200'
+  },
   {
     id: 'caretaker',
     label: 'The Sentinel',

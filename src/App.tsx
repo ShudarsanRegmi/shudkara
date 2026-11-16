@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
   ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, Bell, FileCode, Workflow,
-  Flame, Search, Wallet, Hourglass, Shield
+  Flame, Search, Wallet, Hourglass, Shield, Activity
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -29,6 +29,7 @@ import { Streaks } from './components/Streaks';
 import { Notes } from './components/Notes';
 import { Finance } from './components/Finance';
 import { LifeOdyssey } from './components/LifeOdyssey';
+import { LifeMosaic } from './components/LifeMosaic';
 import { CaretakerDrawer } from './components/CaretakerDrawer';
 import { CommandPalette } from './components/CommandPalette';
 import { OfflineSyncIndicator } from './components/OfflineSyncIndicator';
@@ -56,6 +57,7 @@ const NAV_GROUPS = [
     category: 'Knowledge & Vaults',
     icon: Layers,
     items: [
+      { key: 'lifemosaic', label: 'Life Mosaic', description: 'Macro time, activity & focus tapestry across weeks, months & years (काल)', icon: Activity, requiresLogin: false },
       { key: 'lifeodyssey', label: 'Life Odyssey', description: 'Age visualization, milestones, life matrix & gamified countdowns', icon: Hourglass, requiresLogin: false },
       { key: 'notes', label: 'Notes', description: 'Categorized notes, markdown support & quick organization', icon: FileText, requiresLogin: false },
       { key: 'finance', label: 'Finance', description: 'Expense sets, lends, borrows & cashflow', icon: Wallet, requiresLogin: true },
@@ -74,6 +76,7 @@ const NAV_GROUPS = [
 // Flat tab config for route checks
 const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: any }> = {
   dashboard: { requiresLogin: false, label: 'Dashboard', icon: LayoutDashboard },
+  lifemosaic: { requiresLogin: false, label: 'Life Mosaic', icon: Activity },
   caretaker: { requiresLogin: false, label: 'The Sentinel', icon: Shield },
   lifeodyssey: { requiresLogin: false, label: 'Life Odyssey', icon: Hourglass },
   finance: { requiresLogin: true, label: 'Finance', icon: Wallet },
@@ -482,6 +485,8 @@ function App() {
         return <CaretakerDrawer isOpen={true} onClose={() => setActiveTab('dashboard')} setActiveTab={setActiveTab} />;
       case 'lifeodyssey':
         return <LifeOdyssey authToken={authToken} />;
+      case 'lifemosaic':
+        return <LifeMosaic authToken={authToken} onNavigate={setActiveTab} />;
       case 'timeline':
         return <LifetimeLine authToken={authToken} />;
       case 'links':

@@ -24,7 +24,8 @@ import {
   Shield,
   Wallet,
   Hourglass,
-  X
+  X,
+  Activity
 } from 'lucide-react';
 
 export interface CommandItem {
@@ -77,6 +78,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Master command registry
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
+    {
+      id: 'app-lifemosaic',
+      title: 'Life Mosaic (Kāla / काल)',
+      subtitle: 'Macro time, activity & focus tapestry across weeks, months & years',
+      category: 'Applications',
+      icon: Activity,
+      colorBg: 'bg-emerald-50',
+      colorText: 'text-emerald-600',
+      badge: 'New',
+      action: () => {
+        setActiveTab('lifemosaic');
+        onClose();
+      }
+    },
     {
       id: 'app-caretaker',
       title: 'The Sentinel (AI Caretaker)',
@@ -373,6 +388,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     },
 
     // ── Quick Actions ──
+    {
+      id: 'action-log-mosaic',
+      title: 'Log Daily Time Mosaic',
+      subtitle: 'Open natural stream-of-consciousness activity & time logger',
+      category: 'Quick Actions',
+      icon: Activity,
+      colorBg: 'bg-emerald-100',
+      colorText: 'text-emerald-700',
+      action: () => {
+        setActiveTab('lifemosaic');
+        onClose();
+      }
+    },
     {
       id: 'action-checkin',
       title: 'Check-In Today’s Streak',

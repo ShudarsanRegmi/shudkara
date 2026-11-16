@@ -29,6 +29,7 @@ const { timelineHandler } = require('./dist/src/functions/timeline');
 const { shortcutsHandler } = require('./dist/src/functions/shortcuts');
 const { streaksHandler } = require('./dist/src/functions/streaks');
 const { notificationsHandler } = require('./dist/src/functions/notifications');
+const { mosaicHandler } = require('./dist/src/functions/mosaic');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
@@ -79,6 +80,13 @@ const server = http.createServer(async (req, res) => {
     handlerToUse = streaksHandler;
   } else if (resource === 'notifications') {
     handlerToUse = notificationsHandler;
+  } else if (resource === 'mosaic') {
+    handlerToUse = mosaicHandler;
+    params = {
+      subpath: parts.slice(baseIndex + 1).join('/'),
+      sub1: parts[baseIndex + 1] || null,
+      sub2: parts[baseIndex + 2] || null
+    };
   }
 
   if (!handlerToUse) {
