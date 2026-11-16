@@ -127,6 +127,7 @@ interface LifeMosaicProps {
   onNavigate?: (tab: string) => void;
 }
 
+// Strictly adheres to Shudkara's warm editorial design and badge conventions
 export const DOMAIN_CONFIG: Record<
   LifeDomain,
   {
@@ -137,6 +138,8 @@ export const DOMAIN_CONFIG: Record<
     textPill: string;
     borderPill: string;
     barBg: string;
+    cardBg: string;
+    cardBorder: string;
     icon: React.ComponentType<{ className?: string }>;
   }
 > = {
@@ -144,60 +147,72 @@ export const DOMAIN_CONFIG: Record<
     label: 'Craft & Deep Work',
     description: 'Algorithms, Architecture, Deep Coding, Math & Study',
     hex: '#10b981',
-    bgPill: 'bg-emerald-500/10',
-    textPill: 'text-emerald-400',
-    borderPill: 'border-emerald-500/30',
+    bgPill: 'bg-emerald-50',
+    textPill: 'text-emerald-700',
+    borderPill: 'border-emerald-200',
     barBg: 'bg-emerald-500',
+    cardBg: 'bg-emerald-50/50',
+    cardBorder: 'border-emerald-200',
     icon: Laptop
   },
   explore: {
     label: 'Exploration & R&D',
     description: 'WebAuthn, Passkeys, Sidecars, Prototyping & Tinkering',
     hex: '#8b5cf6',
-    bgPill: 'bg-violet-500/10',
-    textPill: 'text-violet-400',
-    borderPill: 'border-violet-500/30',
-    barBg: 'bg-violet-500',
+    bgPill: 'bg-purple-50',
+    textPill: 'text-purple-700',
+    borderPill: 'border-purple-200',
+    barBg: 'bg-purple-500',
+    cardBg: 'bg-purple-50/50',
+    cardBorder: 'border-purple-200',
     icon: Compass
   },
   social: {
     label: 'Social & Interpersonal',
     description: 'Family, Friends, Networking, Dinners & Calls',
     hex: '#f59e0b',
-    bgPill: 'bg-amber-500/10',
-    textPill: 'text-amber-400',
-    borderPill: 'border-amber-500/30',
+    bgPill: 'bg-amber-50',
+    textPill: 'text-amber-700',
+    borderPill: 'border-amber-200',
     barBg: 'bg-amber-500',
+    cardBg: 'bg-amber-50/50',
+    cardBorder: 'border-amber-200',
     icon: Users
   },
   play: {
     label: 'Play & Leisure',
     description: 'Gaming (CS2, Steam), Films, Anime & Quality Rest',
     hex: '#3b82f6',
-    bgPill: 'bg-blue-500/10',
-    textPill: 'text-blue-400',
-    borderPill: 'border-blue-500/30',
+    bgPill: 'bg-blue-50',
+    textPill: 'text-blue-700',
+    borderPill: 'border-blue-200',
     barBg: 'bg-blue-500',
+    cardBg: 'bg-blue-50/50',
+    cardBorder: 'border-blue-200',
     icon: Gamepad2
   },
   vitality: {
     label: 'Vitality & Health',
     description: 'Gym, Push/Pull/Legs, Running, Walks, Health & Sleep',
-    hex: '#06b6d4',
-    bgPill: 'bg-cyan-500/10',
-    textPill: 'text-cyan-400',
-    borderPill: 'border-cyan-500/30',
-    barBg: 'bg-cyan-500',
+    hex: '#0d9488',
+    bgPill: 'bg-teal-50',
+    textPill: 'text-teal-700',
+    borderPill: 'border-teal-200',
+    barBg: 'bg-teal-500',
+    cardBg: 'bg-teal-50/50',
+    cardBorder: 'border-teal-200',
     icon: Dumbbell
   },
   drift: {
     label: 'Drift & Distraction',
     description: 'Mindless Scrolling, Procrastination & Aimless Loops',
     hex: '#f43f5e',
-    bgPill: 'bg-rose-500/10',
-    textPill: 'text-rose-400',
-    borderPill: 'border-rose-500/30',
+    bgPill: 'bg-rose-50',
+    textPill: 'text-rose-700',
+    borderPill: 'border-rose-200',
     barBg: 'bg-rose-500',
+    cardBg: 'bg-rose-50/50',
+    cardBorder: 'border-rose-200',
     icon: AlertTriangle
   }
 };
@@ -245,11 +260,10 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
   // Bikram Sambat conversion for selected month/date
   const bsHeaderInfo = useMemo(() => {
     try {
-      // Pick mid-month day to show BS month range
       const midDate = new Date(selectedYear, selectedMonth - 1, 15);
       const bs = adToBs(midDate);
-      return `${bs.monthName} / ${bs.year} BS`;
-    } catch (e) {
+      return `${bs.monthName} ${bs.year} BS`;
+    } catch {
       return 'Bikram Sambat 2083';
     }
   }, [selectedYear, selectedMonth]);
@@ -260,13 +274,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     setError(null);
     const cacheKey = `shudkara_mosaic_${year}_${month}`;
 
-    // Load from local storage cache first for instant render
     try {
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
         setMosaicData(JSON.parse(cached));
       }
-    } catch (e) {}
+    } catch {}
 
     try {
       const headers: Record<string, string> = {};
@@ -284,9 +297,8 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       }
     } catch (err: any) {
       console.warn('LifeMosaic API fetch error:', err);
-      // If we had no cache, display an error
       if (!mosaicData) {
-        setError('Working offline or failed to reach server. Showing cached or synthesized lineage.');
+        setError('Working offline or failed to reach server. Displaying local cached lineage.');
       }
     } finally {
       setIsLoading(false);
@@ -328,7 +340,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
           description: `Logged Mosaic: ${textToLog.slice(0, 30)}...`,
           subapp: 'lifemosaic'
         });
-        setLogSuccessMessage('Offline: Stored in Action Outbox. Telemetry will sync when reconnected.');
+        setLogSuccessMessage('Saved to Action Outbox (Offline). Telemetry will sync when reconnected.');
         setIsParsing(false);
         return;
       }
@@ -342,7 +354,6 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       if (res.ok) {
         const data = await res.json();
         setLogSuccessMessage(`✓ Logged ${data.count || 'tracks'} successfully into your timeline!`);
-        // Refresh view
         await fetchMonthData(selectedYear, selectedMonth);
       } else {
         throw new Error('Server returned an error');
@@ -386,7 +397,6 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       setModalNewTopic('');
       await fetchMonthData(selectedYear, selectedMonth);
 
-      // Re-read updated day summary
       if (mosaicData) {
         const updated = mosaicData.days.find(d => d.date === selectedDaySummary.date);
         if (updated) setSelectedDaySummary(updated);
@@ -422,7 +432,6 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     }
   };
 
-  // Month navigation
   const handlePrevMonth = () => {
     if (selectedMonth === 1) {
       setSelectedYear(selectedYear - 1);
@@ -457,7 +466,6 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isModalOpen]);
 
-  // Open modal for a specific day
   const handleOpenDay = (daySummary: MosaicDaySummary) => {
     setSelectedDaySummary(daySummary);
     setIsModalOpen(true);
@@ -475,12 +483,9 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     const n = points.length;
     const stepX = width / Math.max(1, n - 1);
 
-    // Compute max day total to normalize height nicely
     const maxTotal = Math.max(...points.map(p => p.total), 8);
     const domainOrder: LifeDomain[] = ['vitality', 'craft', 'explore', 'social', 'play', 'drift'];
 
-    // Layer stack calculation for each day
-    // yBottom[i] and yTop[i] for each domain
     const dayStacks = points.map(pt => {
       let currentY = 0;
       const stack: Record<LifeDomain, { y0: number; y1: number }> = {
@@ -502,7 +507,6 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       return { total: currentY, stack };
     });
 
-    // Generate smooth SVG paths with cubic bezier curves
     const paths: Record<LifeDomain, string> = {
       vitality: '',
       craft: '',
@@ -513,25 +517,21 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     };
 
     const toSvgY = (val: number) => {
-      // Streamgraph centered vertically or baseline anchored
-      const normalized = (val / maxTotal) * (height - 20);
-      return Math.max(8, height - 10 - normalized);
+      const normalized = (val / maxTotal) * (height - 30);
+      return Math.max(10, height - 15 - normalized);
     };
 
     for (const dom of domainOrder) {
-      // Top curve points
       const topPoints = points.map((_, i) => ({
         x: i * stepX,
         y: toSvgY(dayStacks[i].stack[dom].y1)
       }));
 
-      // Bottom curve points (reversed for closing polygon)
       const bottomPoints = points.map((_, i) => ({
         x: i * stepX,
         y: toSvgY(dayStacks[i].stack[dom].y0)
       }));
 
-      // Build SVG cubic spline
       let d = `M ${topPoints[0].x},${topPoints[0].y}`;
       for (let i = 0; i < topPoints.length - 1; i++) {
         const p0 = topPoints[i];
@@ -543,11 +543,9 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
         d += ` C ${cx1},${cy1} ${cx2},${cy2} ${p1.x},${p1.y}`;
       }
 
-      // Line to bottom of last point
       const lastBottom = bottomPoints[bottomPoints.length - 1];
       d += ` L ${lastBottom.x},${lastBottom.y}`;
 
-      // Spline back along bottom points
       for (let i = bottomPoints.length - 1; i > 0; i--) {
         const p0 = bottomPoints[i];
         const p1 = bottomPoints[i - 1];
@@ -565,96 +563,85 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
     return { paths, width, height, stepX, points };
   }, [mosaicData, streamFilterDomain]);
 
-  // Calendar matrix starting offset calculation (0=Sun, 1=Mon, ..., 6=Sat)
+  // Calendar matrix starting offset (0=Sun, 1=Mon, ..., 6=Sat)
   const calendarPaddingDays = useMemo(() => {
     const firstDay = new Date(selectedYear, selectedMonth - 1, 1).getDay();
     return Array.from({ length: firstDay }, (_, i) => i);
   }, [selectedYear, selectedMonth]);
 
   return (
-    <div className="bg-slate-950 text-slate-100 min-h-screen selection:bg-indigo-500 selection:text-white p-3 sm:p-6 space-y-6">
-      {/* ── Top Header Bar ────────────────────────────────────────────────── */}
-      <header className="border-b border-slate-800/80 bg-slate-900/60 backdrop-blur rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-xl">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-emerald-500 via-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
-            <Activity className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-                Shudkara
-              </h1>
-              <span className="text-emerald-400 font-mono text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20">
-                LIFE MOSAIC
-              </span>
-              <span className="text-xs font-semibold text-slate-400 font-mono">
-                (काल / Kāla)
-              </span>
-            </div>
-            <p className="text-xs text-slate-400 mt-0.5">
-              The Living Tapestry of Time • Macro Activity, Focus & Life-Track Telemetry
-            </p>
-          </div>
+    <div className="space-y-6 pb-20 animate-fade-in">
+      {/* ── Top Header Bar (Follows Shudkara Convention) ────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2.5">
+            <span className="p-2 bg-emerald-600 text-white rounded-xl shadow-md shadow-emerald-600/20">
+              <Activity className="w-5 h-5" />
+            </span>
+            Life Mosaic
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+              काल / Kāla
+            </span>
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            The Living Tapestry of Time • Macro activity, focus & life-track telemetry across weeks, months & years
+          </p>
         </div>
 
-        {/* Date Window & Month Controls */}
-        <div className="flex items-center gap-2 flex-wrap self-end md:self-auto">
-          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 gap-1">
+        {/* Date Window Controls */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
             <button
               onClick={handlePrevMonth}
               title="Previous Month"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              className="p-1.5 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-white transition"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <span className="px-3 text-xs font-bold text-white font-mono min-w-28 text-center">
+            <span className="px-3 text-xs font-bold text-slate-800 min-w-28 text-center">
               {MONTH_NAMES[selectedMonth - 1]} {selectedYear}
             </span>
             <button
               onClick={handleNextMonth}
               title="Next Month"
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              className="p-1.5 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-white transition"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="text-right pl-3 border-l border-slate-800 hidden sm:block">
-            <span className="text-xs font-bold text-emerald-300 block">{bsHeaderInfo}</span>
-            <span className="text-[10px] text-slate-400 font-mono">
-              Bikram Sambat Dual Calendar
-            </span>
+          <div className="text-right pl-3 border-l border-slate-200 hidden sm:block">
+            <span className="text-xs font-bold text-slate-800 block">{bsHeaderInfo}</span>
+            <span className="text-[10px] text-slate-500 font-mono">Bikram Sambat</span>
           </div>
         </div>
-      </header>
+      </div>
 
       {error && (
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-300 flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600" />
           <span>{error}</span>
         </div>
       )}
 
       {isLoading && !mosaicData && (
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
-          <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+          <RefreshCw className="w-4 h-4 animate-spin text-slate-600" />
           <span>Loading macro time tapestry telemetry...</span>
         </div>
       )}
 
       {/* ── 1. Zero-Friction Conversational Quick-Dump Bar ───────────────────── */}
-      <section className="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden">
-        <div className="absolute -right-16 -top-16 w-52 h-52 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none"></div>
-
-        <div className="flex items-center justify-between mb-2">
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs relative">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping"></span>
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-200 flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping"></span>
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+              <Zap className="w-3.5 h-3.5 text-emerald-600" />
               Natural Stream-of-Consciousness Logger
             </span>
           </div>
-          <span className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+          <span className="text-[11px] text-slate-500 font-medium">
             Zero Stopwatches • AI Structured
           </span>
         </div>
@@ -667,10 +654,10 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               value={quickInput}
               onChange={e => setQuickInput(e.target.value)}
               placeholder="Type naturally: 'Studied Dynamic Programming 3.5h, explored WebAuthn, played CS2 with Sahil, afternoon gym...'"
-              className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition pr-20"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-slate-400 focus:ring-2 focus:ring-slate-200 transition pr-20"
             />
             <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              <span className="text-[10px] bg-slate-800 text-slate-400 font-mono px-1.5 py-0.5 rounded border border-slate-700 hidden sm:inline-block">
+              <span className="text-[10px] bg-slate-200 text-slate-600 font-mono px-1.5 py-0.5 rounded border border-slate-300 hidden sm:inline-block">
                 Cmd+K
               </span>
             </div>
@@ -679,16 +666,16 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
           <button
             type="submit"
             disabled={isParsing || !quickInput.trim()}
-            className="px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-bold text-xs sm:text-sm transition shadow-lg shadow-emerald-900/30 flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+            className="px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs sm:text-sm transition shadow-xs flex items-center justify-center gap-2 cursor-pointer active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
           >
             {isParsing ? (
               <>
-                <RefreshCw className="w-4 h-4 animate-spin text-emerald-200" />
+                <RefreshCw className="w-4 h-4 animate-spin text-white" />
                 <span>AI Structuring...</span>
               </>
             ) : (
               <>
-                <Sparkles className="w-4 h-4 text-emerald-200" />
+                <Sparkles className="w-4 h-4 text-amber-300" />
                 <span>AI Parse & Log</span>
               </>
             )}
@@ -696,90 +683,93 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
         </form>
 
         {logSuccessMessage && (
-          <div className="mt-2 text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-1.5 flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <div className="mt-2 text-xs font-semibold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{logSuccessMessage}</span>
           </div>
         )}
 
-        {/* Real-time AI Extracted Breakdown Pills Preview */}
-        <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-800/60 text-xs">
-          <span className="text-[11px] font-bold text-slate-400">Extracted Domains:</span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span> Craft & Study (~3.5h)
+        {/* Real-time Domain Pill Badges (Using Shudkara Badge Conventions) */}
+        <div className="mt-3 flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100 text-xs">
+          <span className="text-[11px] font-bold text-slate-500">Extracted Domains:</span>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 font-medium">
+            <span className="w-2 h-2 rounded-full bg-emerald-500"></span> Craft & Study (~3.5h)
           </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-500/10 border border-violet-500/30 text-violet-400 font-medium">
-            <span className="w-2 h-2 rounded-full bg-violet-400"></span> Exploration: Passkeys (~1.5h)
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-50 border border-purple-200 text-purple-700 font-medium">
+            <span className="w-2 h-2 rounded-full bg-purple-500"></span> Exploration (~1.5h)
           </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 font-medium">
-            <span className="w-2 h-2 rounded-full bg-blue-400"></span> Play: CS2 Gaming (~1.0h)
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 font-medium">
+            <span className="w-2 h-2 rounded-full bg-blue-500"></span> Play & Gaming (~1.0h)
           </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium">
-            <span className="w-2 h-2 rounded-full bg-amber-400"></span> Social: Sahil Co-op
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 font-medium">
+            <span className="w-2 h-2 rounded-full bg-amber-500"></span> Social: Sahil
           </span>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 font-medium">
-            <span className="w-2 h-2 rounded-full bg-cyan-400"></span> Vitality: Gym Push Day (~1.2h)
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-700 font-medium">
+            <span className="w-2 h-2 rounded-full bg-teal-500"></span> Vitality: Gym (~1.2h)
           </span>
-          <span className="ml-auto text-[11px] text-slate-400 font-mono flex items-center gap-1">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="ml-auto text-[11px] text-slate-500 font-medium flex items-center gap-1">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
             Magic Layer: Auto-Synchronized
           </span>
         </div>
       </section>
 
-      {/* ── 2. Macro AI Chronicle Banner ────────────────────────────────────── */}
+      {/* ── 2. Macro AI Chronicle Banner (Warm Ivory / Toast Card) ──────────── */}
       {mosaicData?.chronicle && (
-        <section className="bg-gradient-to-r from-indigo-950/60 via-slate-900 to-slate-900/80 border border-indigo-800/40 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
+        <section className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="space-y-1.5 max-w-2xl">
             <div className="flex items-center gap-2">
-              <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-700 border border-slate-200">
                 Monthly Chapter
               </span>
-              <span className="text-xs text-slate-400">{mosaicData.chronicle.chapterSubtitle}</span>
+              <span className="text-xs text-slate-500 font-medium">
+                {mosaicData.chronicle.chapterSubtitle}
+              </span>
             </div>
-            <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+            <h2 className="text-xl font-bold font-serif text-slate-900 tracking-tight">
               &ldquo;{mosaicData.chronicle.title}&rdquo;
             </h2>
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="text-xs text-slate-600 leading-relaxed">
               {mosaicData.chronicle.narrative}
-              {mosaicData.chronicle.warningAlert && (
-                <span className="text-amber-300 font-semibold ml-1.5">
-                  {mosaicData.chronicle.warningAlert}
-                </span>
-              )}
             </p>
+            {mosaicData.chronicle.warningAlert && (
+              <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5 font-medium mt-1">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>{mosaicData.chronicle.warningAlert}</span>
+              </div>
+            )}
           </div>
 
           {/* Macro Key Stats Cards */}
-          <div className="grid grid-cols-3 gap-3 w-full md:w-auto shrink-0 border-t md:border-t-0 md:border-l border-slate-800 pt-3 md:pt-0 md:pl-5">
-            <div className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-xl text-center">
-              <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+          <div className="grid grid-cols-3 gap-3 w-full md:w-auto shrink-0 border-t md:border-t-0 md:border-l border-slate-200 pt-3 md:pt-0 md:pl-6">
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-center min-w-24">
+              <span className="text-[10px] text-slate-500 font-semibold block uppercase">
                 Intentionality
               </span>
-              <span className="text-lg font-black text-emerald-400 font-mono">
+              <span className="text-xl font-black text-emerald-700 font-mono">
                 {mosaicData.chronicle.intentionalityRatio}%
               </span>
-              <span className="text-[9px] text-emerald-500 block">Top 10% month</span>
+              <span className="text-[9px] text-emerald-600 block font-medium">Top 10% month</span>
             </div>
-            <div className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-xl text-center">
-              <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-center min-w-24">
+              <span className="text-[10px] text-slate-500 font-semibold block uppercase">
                 Deep Focus
               </span>
-              <span className="text-lg font-black text-indigo-400 font-mono">
+              <span className="text-xl font-black text-slate-900 font-mono">
                 {mosaicData.chronicle.deepFocusHours}h
               </span>
-              <span className="text-[9px] text-indigo-400 block">
+              <span className="text-[9px] text-slate-500 block font-medium">
                 {mosaicData.chronicle.focusComparisonText}
               </span>
             </div>
-            <div className="bg-slate-950/80 border border-slate-800/80 p-3 rounded-xl text-center">
-              <span className="text-[10px] text-slate-400 font-semibold block uppercase">
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl text-center min-w-24">
+              <span className="text-[10px] text-slate-500 font-semibold block uppercase">
                 Streak Proofs
               </span>
-              <span className="text-lg font-black text-amber-400 font-mono">
+              <span className="text-xl font-black text-amber-700 font-mono">
                 {mosaicData.chronicle.streakProofsRatio}
               </span>
-              <span className="text-[9px] text-amber-500 block">
+              <span className="text-[9px] text-amber-600 block font-medium">
                 {mosaicData.chronicle.habitsStatusText}
               </span>
             </div>
@@ -791,48 +781,48 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       <section className="space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <Layers className="w-4 h-4 text-indigo-400" />
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Layers className="w-4 h-4 text-slate-700" />
               Multi-Track Lineage Visualizer
             </h3>
-            <span className="text-[11px] text-slate-400 font-mono">
+            <span className="text-[11px] text-slate-500 font-medium">
               (Switch perspectives below)
             </span>
           </div>
 
-          {/* View Switcher Tabs */}
-          <div className="bg-slate-900 border border-slate-800 p-1 rounded-xl flex items-center gap-1 text-xs font-bold text-slate-300">
+          {/* View Switcher Tabs (Matches Shudkara Pill Tab Switchers) */}
+          <div className="bg-slate-100 border border-slate-200 p-1 rounded-xl flex items-center gap-1 text-xs font-bold">
             <button
               onClick={() => setActiveTab('river')}
               className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
                 activeTab === 'river'
-                  ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                  : 'hover:text-white'
+                  ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Activity className="w-3.5 h-3.5" />
+              <Activity className="w-3.5 h-3.5 text-emerald-600" />
               River of Time (Streamgraph)
             </button>
             <button
               onClick={() => setActiveTab('mosaic')}
               className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
                 activeTab === 'mosaic'
-                  ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                  : 'hover:text-white'
+                  ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Calendar className="w-3.5 h-3.5" />
+              <Calendar className="w-3.5 h-3.5 text-slate-700" />
               Mosaic Month Grid
             </button>
             <button
               onClick={() => setActiveTab('treemap')}
               className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 ${
                 activeTab === 'treemap'
-                  ? 'bg-indigo-600 text-white font-bold shadow-sm'
-                  : 'hover:text-white'
+                  ? 'bg-white text-slate-900 shadow-xs border border-slate-200/80'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Layers className="w-3.5 h-3.5" />
+              <Layers className="w-3.5 h-3.5 text-purple-600" />
               Topic Treemap (Semantic Weights)
             </button>
           </div>
@@ -840,24 +830,24 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
         {/* ── VIEW 1: RIVER OF TIME (STREAMGRAPH) ───────────────────────────── */}
         {activeTab === 'river' && (
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
               <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wide">
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
                   Continuous Time Flow Streamgraph
                 </h4>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-500">
                   Thickness of each ribbon represents active hours dedicated to that life track
                   across days of the month.
                 </p>
               </div>
 
-              {/* Interactive Domain Filter Pills */}
+              {/* Domain Filter Badges */}
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {streamFilterDomain && (
                   <button
                     onClick={() => setStreamFilterDomain(null)}
-                    className="px-2 py-0.5 rounded text-[11px] bg-slate-800 text-slate-300 hover:text-white font-semibold transition flex items-center gap-1"
+                    className="px-2 py-0.5 rounded text-[11px] bg-slate-200 text-slate-700 hover:text-slate-900 font-semibold transition flex items-center gap-1"
                   >
                     <X className="w-3 h-3" /> Reset Filter
                   </button>
@@ -874,8 +864,8 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                         }
                         className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] transition cursor-pointer ${
                           isSelected
-                            ? `${cfg.bgPill} ${cfg.textPill} ${cfg.borderPill} font-bold ring-2 ring-indigo-500/40`
-                            : 'bg-slate-950/60 border-slate-800 text-slate-300 hover:border-slate-700'
+                            ? `${cfg.bgPill} ${cfg.textPill} ${cfg.borderPill} font-bold ring-2 ring-slate-400`
+                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                         }`}
                       >
                         <span
@@ -891,7 +881,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
             </div>
 
             {/* SVG Streamgraph Canvas */}
-            <div className="relative w-full h-72 bg-slate-950/90 rounded-xl border border-slate-800/80 overflow-hidden flex flex-col justify-between p-3 select-none">
+            <div className="relative w-full h-72 bg-slate-50 rounded-xl border border-slate-200 overflow-hidden flex flex-col justify-between p-3 select-none">
               {streamSvgData && (
                 <svg
                   className="w-full h-full"
@@ -902,33 +892,27 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                   <defs>
                     <linearGradient id="gradCraft" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#059669" stopOpacity="0.8" />
-                      <stop offset="50%" stopColor="#10b981" stopOpacity="0.9" />
-                      <stop offset="100%" stopColor="#34d399" stopOpacity="0.85" />
+                      <stop offset="100%" stopColor="#10b981" stopOpacity="0.85" />
                     </linearGradient>
                     <linearGradient id="gradExplore" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.8" />
-                      <stop offset="50%" stopColor="#8b5cf6" stopOpacity="0.9" />
-                      <stop offset="100%" stopColor="#a78bfa" stopOpacity="0.85" />
+                      <stop offset="100%" stopColor="#8b5cf6" stopOpacity="0.85" />
                     </linearGradient>
                     <linearGradient id="gradSocial" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#d97706" stopOpacity="0.75" />
-                      <stop offset="50%" stopColor="#f59e0b" stopOpacity="0.85" />
-                      <stop offset="100%" stopColor="#fbbf24" stopOpacity="0.8" />
+                      <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.85" />
                     </linearGradient>
                     <linearGradient id="gradPlay" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#2563eb" stopOpacity="0.75" />
-                      <stop offset="50%" stopColor="#3b82f6" stopOpacity="0.85" />
-                      <stop offset="100%" stopColor="#60a5fa" stopOpacity="0.8" />
+                      <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.85" />
                     </linearGradient>
                     <linearGradient id="gradVitality" x1="0%" y1="0%" x2="100%" y2="0%">
-                      <stop offset="0%" stopColor="#0891b2" stopOpacity="0.8" />
-                      <stop offset="50%" stopColor="#06b6d4" stopOpacity="0.9" />
-                      <stop offset="100%" stopColor="#22d3ee" stopOpacity="0.8" />
+                      <stop offset="0%" stopColor="#0f766e" stopOpacity="0.8" />
+                      <stop offset="100%" stopColor="#0d9488" stopOpacity="0.85" />
                     </linearGradient>
                     <linearGradient id="gradDrift" x1="0%" y1="0%" x2="100%" y2="0%">
                       <stop offset="0%" stopColor="#e11d48" stopOpacity="0.65" />
-                      <stop offset="50%" stopColor="#f43f5e" stopOpacity="0.8" />
-                      <stop offset="100%" stopColor="#fb7185" stopOpacity="0.7" />
+                      <stop offset="100%" stopColor="#f43f5e" stopOpacity="0.8" />
                     </linearGradient>
                   </defs>
 
@@ -936,7 +920,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                   <path
                     d={streamSvgData.paths.vitality}
                     fill="url(#gradVitality)"
-                    className="transition-opacity duration-200 hover:opacity-100 opacity-80 cursor-pointer"
+                    className="transition-opacity duration-200 hover:opacity-100 opacity-85 cursor-pointer"
                     onClick={() => setStreamFilterDomain('vitality')}
                   />
                   <path
@@ -970,7 +954,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                     onClick={() => setStreamFilterDomain('drift')}
                   />
 
-                  {/* Hover guideline and interactive hover columns */}
+                  {/* Hover Columns */}
                   {streamSvgData.points.map((pt, i) => {
                     const x = i * streamSvgData.stepX;
                     return (
@@ -999,7 +983,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                       y1={0}
                       x2={hoveredDayIndex * streamSvgData.stepX}
                       y2={streamSvgData.height}
-                      stroke="#818cf8"
+                      stroke="#475569"
                       strokeWidth="2"
                       strokeDasharray="4 2"
                       className="pointer-events-none"
@@ -1011,7 +995,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               {/* Hover Floating Tooltip */}
               {hoveredDayIndex !== null && mosaicData?.streamData[hoveredDayIndex] && (
                 <div
-                  className="absolute top-4 bg-slate-900/95 border border-indigo-500/50 rounded-xl p-3 shadow-2xl backdrop-blur pointer-events-none z-20 text-xs space-y-1.5 min-w-48 transition-all"
+                  className="absolute top-4 bg-white border border-slate-200 rounded-xl p-3 shadow-lg pointer-events-none z-20 text-xs space-y-1.5 min-w-48 transition-all"
                   style={{
                     left: `${Math.min(
                       75,
@@ -1022,32 +1006,32 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                     )}%`
                   }}
                 >
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-1">
-                    <span className="font-bold text-white font-mono">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1">
+                    <span className="font-bold text-slate-900 font-mono">
                       {MONTH_NAMES[selectedMonth - 1].slice(0, 3)}{' '}
                       {mosaicData.streamData[hoveredDayIndex].day}
                     </span>
-                    <span className="text-[10px] text-indigo-400 font-mono">
+                    <span className="text-[10px] text-slate-600 font-bold font-mono">
                       Total: {mosaicData.streamData[hoveredDayIndex].total}h
                     </span>
                   </div>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-                    <span className="text-emerald-400">
+                    <span className="text-emerald-700 font-semibold">
                       Craft: {mosaicData.streamData[hoveredDayIndex].craft}h
                     </span>
-                    <span className="text-violet-400">
+                    <span className="text-purple-700 font-semibold">
                       Explore: {mosaicData.streamData[hoveredDayIndex].explore}h
                     </span>
-                    <span className="text-amber-400">
+                    <span className="text-amber-700 font-semibold">
                       Social: {mosaicData.streamData[hoveredDayIndex].social}h
                     </span>
-                    <span className="text-blue-400">
+                    <span className="text-blue-700 font-semibold">
                       Play: {mosaicData.streamData[hoveredDayIndex].play}h
                     </span>
-                    <span className="text-cyan-400">
+                    <span className="text-teal-700 font-semibold">
                       Vitality: {mosaicData.streamData[hoveredDayIndex].vitality}h
                     </span>
-                    <span className="text-rose-400">
+                    <span className="text-rose-700 font-semibold">
                       Drift: {mosaicData.streamData[hoveredDayIndex].drift}h
                     </span>
                   </div>
@@ -1058,11 +1042,11 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               )}
 
               {/* Day Labels Axis */}
-              <div className="flex justify-between text-[10px] text-slate-500 font-mono pt-2 border-t border-slate-800">
+              <div className="flex justify-between text-[10px] text-slate-500 font-mono pt-2 border-t border-slate-200">
                 <span>{MONTH_NAMES[selectedMonth - 1].slice(0, 3)} 1</span>
                 <span>{MONTH_NAMES[selectedMonth - 1].slice(0, 3)} 6</span>
                 <span>{MONTH_NAMES[selectedMonth - 1].slice(0, 3)} 11</span>
-                <span className="text-emerald-400 font-bold">
+                <span className="text-emerald-700 font-bold">
                   {MONTH_NAMES[selectedMonth - 1].slice(0, 3)} 16 (Sprint)
                 </span>
                 <span>{MONTH_NAMES[selectedMonth - 1].slice(0, 3)} 21</span>
@@ -1074,13 +1058,13 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               </div>
             </div>
 
-            <div className="text-xs text-slate-400 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="text-xs text-slate-500 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                 <strong>Insight:</strong> Craft & Study river surged between Day 10 - Day 16
                 during the Shudkara Multi-Agent sprint.
               </span>
-              <span className="text-indigo-400 font-semibold cursor-pointer hover:underline">
+              <span className="text-slate-700 font-semibold cursor-pointer hover:underline">
                 Click any wave layer to filter • Click any vertical column to open day popup →
               </span>
             </div>
@@ -1089,18 +1073,18 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
         {/* ── VIEW 2: MULTI-TRACK MOSAIC GRID ──────────────────────────────── */}
         {activeTab === 'mosaic' && (
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wide">
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
                   {MONTH_NAMES[selectedMonth - 1]} {selectedYear} Multi-Track Mosaic Calendar
                 </h4>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-500">
                   Each cell represents a day, divided by the exact percentage of your time spent
                   across tracks.
                 </p>
               </div>
-              <span className="text-xs text-slate-400 font-mono hidden sm:inline">
+              <span className="text-xs text-slate-500 font-mono hidden sm:inline">
                 Click any tile for day breakdown & logs
               </span>
             </div>
@@ -1113,12 +1097,10 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                 </div>
               ))}
 
-              {/* Empty padding tiles for first day of month */}
               {calendarPaddingDays.map(pad => (
-                <div key={`pad-${pad}`} className="h-20 rounded-xl bg-slate-950/20 border border-transparent"></div>
+                <div key={`pad-${pad}`} className="h-20 rounded-xl bg-slate-50/40 border border-transparent"></div>
               ))}
 
-              {/* Day Tiles */}
               {mosaicData?.days.map(daySummary => {
                 const isToday =
                   selectedYear === currentDate.getFullYear() &&
@@ -1132,47 +1114,47 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                   <div
                     key={daySummary.date}
                     onClick={() => handleOpenDay(daySummary)}
-                    className={`h-20 bg-slate-950 border rounded-xl p-1.5 flex flex-col justify-between hover:scale-105 transition cursor-pointer relative group ${
+                    className={`h-20 bg-slate-50 border rounded-xl p-2 flex flex-col justify-between hover:scale-105 hover:shadow-xs transition cursor-pointer relative ${
                       isToday
-                        ? 'border-2 border-emerald-400 ring-4 ring-emerald-400/20 shadow-lg shadow-emerald-500/20'
+                        ? 'border-2 border-emerald-600 bg-emerald-50/40 shadow-xs ring-2 ring-emerald-500/20'
                         : isDeepCraft
-                        ? 'border-emerald-500/40 ring-1 ring-emerald-500/20 hover:border-emerald-400'
+                        ? 'border-emerald-300 bg-emerald-50/20 hover:border-emerald-400'
                         : isDriftDay
-                        ? 'border-rose-500/40 ring-1 ring-rose-500/20 hover:border-rose-400'
-                        : 'border-slate-800 hover:border-indigo-500'
+                        ? 'border-rose-300 bg-rose-50/20 hover:border-rose-400'
+                        : 'border-slate-200 hover:border-slate-400'
                     }`}
                   >
                     <div className="flex items-center justify-between text-[10px]">
                       <span
                         className={`font-mono font-bold ${
                           isToday
-                            ? 'text-emerald-400 font-black'
+                            ? 'text-emerald-700 font-black'
                             : isDeepCraft
-                            ? 'text-emerald-400'
+                            ? 'text-emerald-700'
                             : isDriftDay
-                            ? 'text-rose-400'
-                            : 'text-slate-400'
+                            ? 'text-rose-700'
+                            : 'text-slate-600'
                         }`}
                       >
                         {daySummary.day} {isToday ? '(Today)' : ''}
                       </span>
                       {isToday ? (
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-600 animate-ping"></span>
                       ) : isDeepCraft ? (
-                        <span className="text-[8px] bg-emerald-500/20 text-emerald-300 font-mono px-1 rounded">
+                        <span className="text-[8px] bg-emerald-100 text-emerald-800 font-mono px-1 rounded font-semibold">
                           {daySummary.totalHours}h
                         </span>
                       ) : isDriftDay ? (
-                        <span className="text-[8px] bg-rose-500/20 text-rose-300 font-mono px-1 rounded">
+                        <span className="text-[8px] bg-rose-100 text-rose-800 font-mono px-1 rounded font-semibold">
                           ⚠️ Drift
                         </span>
                       ) : (
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-300"></span>
                       )}
                     </div>
 
                     {/* Segmented Color Stack Bar */}
-                    <div className="w-full h-3 rounded-md overflow-hidden flex bg-slate-900 border border-slate-800/80">
+                    <div className="w-full h-2.5 rounded-sm overflow-hidden flex bg-slate-200">
                       {daySummary.domainPercentages.craft > 0 && (
                         <div
                           style={{ width: `${daySummary.domainPercentages.craft}%` }}
@@ -1183,7 +1165,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                       {daySummary.domainPercentages.explore > 0 && (
                         <div
                           style={{ width: `${daySummary.domainPercentages.explore}%` }}
-                          className="bg-violet-500 transition-all"
+                          className="bg-purple-500 transition-all"
                           title={`Explore: ${daySummary.domainPercentages.explore}%`}
                         />
                       )}
@@ -1204,7 +1186,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                       {daySummary.domainPercentages.vitality > 0 && (
                         <div
                           style={{ width: `${daySummary.domainPercentages.vitality}%` }}
-                          className="bg-cyan-500 transition-all"
+                          className="bg-teal-500 transition-all"
                           title={`Vitality: ${daySummary.domainPercentages.vitality}%`}
                         />
                       )}
@@ -1221,12 +1203,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                     <span
                       className={`text-[9px] truncate block ${
                         isToday
-                          ? 'text-emerald-300 font-bold'
+                          ? 'text-emerald-800 font-bold'
                           : isDeepCraft
-                          ? 'text-emerald-300 font-semibold'
+                          ? 'text-emerald-800 font-medium'
                           : isDriftDay
-                          ? 'text-rose-300'
-                          : 'text-slate-400'
+                          ? 'text-rose-800 font-medium'
+                          : 'text-slate-500'
                       }`}
                     >
                       {daySummary.topTopic}
@@ -1240,18 +1222,18 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
         {/* ── VIEW 3: TOPIC TREEMAP (SEMANTIC WEIGHTS) ────────────────────── */}
         {activeTab === 'treemap' && (
-          <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wide">
+                <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wide">
                   Monthly Cognitive Footprint (Weighted Treemap)
                 </h4>
-                <p className="text-[11px] text-slate-400">
+                <p className="text-[11px] text-slate-500">
                   Proportional box dimensions reflect the total hours poured into specific subjects
                   and domains.
                 </p>
               </div>
-              <span className="text-xs text-slate-400 font-mono">
+              <span className="text-xs text-slate-500 font-mono">
                 Total Tracked: {mosaicData?.totalHours} Hours
               </span>
             </div>
@@ -1260,13 +1242,13 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
             <div className="grid grid-cols-12 gap-3 min-h-96">
               {/* Domain 1: Craft (Emerald - Dominant block 7 cols) */}
               {mosaicData?.treemap.find(t => t.domain === 'craft') && (
-                <div className="col-span-12 md:col-span-7 bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-3 flex flex-col justify-between group hover:border-emerald-400 transition">
+                <div className="col-span-12 md:col-span-7 bg-emerald-50/50 border border-emerald-200 rounded-xl p-4 flex flex-col justify-between group hover:border-emerald-300 transition shadow-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-300 uppercase flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+                    <span className="text-xs font-bold text-emerald-800 uppercase flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
                       Craft & Deep Engineering
                     </span>
-                    <span className="text-xs font-mono font-bold text-emerald-400">
+                    <span className="text-xs font-mono font-bold text-emerald-800">
                       {mosaicData.treemap.find(t => t.domain === 'craft')?.totalHours}h (
                       {mosaicData.treemap.find(t => t.domain === 'craft')?.percentage}%)
                     </span>
@@ -1281,14 +1263,14 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                           key={sub.name}
                           className={`${
                             idx === 2 ? 'col-span-2' : ''
-                          } bg-emerald-900/40 border border-emerald-600/30 rounded-lg p-2.5 flex flex-col justify-between hover:bg-emerald-900/60 transition`}
+                          } bg-white border border-emerald-200/80 rounded-lg p-3 flex flex-col justify-between hover:border-emerald-300 transition shadow-xs`}
                         >
-                          <span className="text-xs font-bold text-white block truncate">
+                          <span className="text-xs font-bold text-slate-900 block truncate">
                             {sub.name}
                           </span>
-                          <div className="flex justify-between items-end text-[10px] text-emerald-300 font-mono mt-1">
+                          <div className="flex justify-between items-end text-[10px] text-emerald-700 font-mono mt-1">
                             <span>{sub.sessionCount} Sessions</span>
-                            <span className="font-bold text-emerald-400">{sub.hours} hrs</span>
+                            <span className="font-bold text-emerald-800">{sub.hours} hrs</span>
                           </div>
                         </div>
                       ))}
@@ -1300,13 +1282,13 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               <div className="col-span-12 md:col-span-5 flex flex-col gap-3">
                 {/* Exploration Block */}
                 {mosaicData?.treemap.find(t => t.domain === 'explore') && (
-                  <div className="flex-1 bg-violet-950/40 border border-violet-500/40 rounded-xl p-3 flex flex-col justify-between hover:border-violet-400 transition">
+                  <div className="flex-1 bg-purple-50/50 border border-purple-200 rounded-xl p-4 flex flex-col justify-between hover:border-purple-300 transition shadow-xs">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-violet-300 uppercase flex items-center gap-1.5">
-                        <span className="w-2.5 h-2.5 rounded-full bg-violet-400"></span>
+                      <span className="text-xs font-bold text-purple-800 uppercase flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
                         Exploration & R&D
                       </span>
-                      <span className="text-xs font-mono font-bold text-violet-400">
+                      <span className="text-xs font-mono font-bold text-purple-800">
                         {mosaicData.treemap.find(t => t.domain === 'explore')?.totalHours}h (
                         {mosaicData.treemap.find(t => t.domain === 'explore')?.percentage}%)
                       </span>
@@ -1319,12 +1301,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                         .map(sub => (
                           <div
                             key={sub.name}
-                            className="flex-1 bg-violet-900/30 border border-violet-700/30 rounded-lg p-2"
+                            className="flex-1 bg-white border border-purple-200/80 rounded-lg p-2.5 shadow-xs"
                           >
-                            <span className="text-[11px] font-bold text-white block truncate">
+                            <span className="text-[11px] font-bold text-slate-900 block truncate">
                               {sub.name}
                             </span>
-                            <span className="text-[10px] text-violet-300 font-mono">
+                            <span className="text-[10px] text-purple-700 font-mono font-semibold">
                               {sub.hours} hrs
                             </span>
                           </div>
@@ -1336,30 +1318,30 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                 {/* Sub-blocks for Gaming, Social, Drift */}
                 <div className="grid grid-cols-3 gap-2 min-h-28">
                   {/* Play */}
-                  <div className="bg-blue-950/40 border border-blue-500/30 rounded-xl p-2.5 flex flex-col justify-between">
-                    <span className="text-[10px] font-bold text-blue-300 uppercase">Gaming</span>
-                    <span className="text-sm font-black text-blue-400 font-mono">
+                  <div className="bg-blue-50/50 border border-blue-200 rounded-xl p-3 flex flex-col justify-between shadow-xs">
+                    <span className="text-[10px] font-bold text-blue-800 uppercase">Gaming</span>
+                    <span className="text-base font-black text-blue-800 font-mono">
                       {mosaicData?.treemap.find(t => t.domain === 'play')?.totalHours || 0}h
                     </span>
-                    <span className="text-[9px] text-slate-400 truncate">CS2 & Steam</span>
+                    <span className="text-[9px] text-slate-500 truncate">CS2 & Steam</span>
                   </div>
 
                   {/* Social */}
-                  <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-2.5 flex flex-col justify-between">
-                    <span className="text-[10px] font-bold text-amber-300 uppercase">Social</span>
-                    <span className="text-sm font-black text-amber-400 font-mono">
+                  <div className="bg-amber-50/50 border border-amber-200 rounded-xl p-3 flex flex-col justify-between shadow-xs">
+                    <span className="text-[10px] font-bold text-amber-800 uppercase">Social</span>
+                    <span className="text-base font-black text-amber-800 font-mono">
                       {mosaicData?.treemap.find(t => t.domain === 'social')?.totalHours || 0}h
                     </span>
-                    <span className="text-[9px] text-slate-400 truncate">Calls & Meetups</span>
+                    <span className="text-[9px] text-slate-500 truncate">Calls & Meetups</span>
                   </div>
 
                   {/* Drift */}
-                  <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-2.5 flex flex-col justify-between">
-                    <span className="text-[10px] font-bold text-rose-300 uppercase">Drift</span>
-                    <span className="text-sm font-black text-rose-400 font-mono">
+                  <div className="bg-rose-50/50 border border-rose-200 rounded-xl p-3 flex flex-col justify-between shadow-xs">
+                    <span className="text-[10px] font-bold text-rose-800 uppercase">Drift</span>
+                    <span className="text-base font-black text-rose-800 font-mono">
                       {mosaicData?.treemap.find(t => t.domain === 'drift')?.totalHours || 0}h
                     </span>
-                    <span className="text-[9px] text-rose-400 truncate">YouTube Loops</span>
+                    <span className="text-[9px] text-slate-500 truncate">YouTube Loops</span>
                   </div>
                 </div>
               </div>
@@ -1369,17 +1351,17 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
       </section>
 
       {/* ── 4. The Magic Layer Integration Card ─────────────────────────────── */}
-      <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 space-y-3">
+      <section className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold text-xs">
+            <div className="w-6 h-6 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center font-bold text-xs">
               ✨
             </div>
-            <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
               Automated Magic Layer Correlation
             </h3>
           </div>
-          <span className="text-[11px] text-slate-400">
+          <span className="text-[11px] text-slate-500 font-medium">
             Zero extra entry • Derived from Shudkara ecosystem
           </span>
         </div>
@@ -1387,17 +1369,17 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
           <div
             onClick={() => onNavigate && onNavigate('streaks')}
-            className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl flex items-center gap-3 hover:border-orange-500/40 cursor-pointer transition"
+            className="bg-orange-50/40 border border-orange-200/80 p-3.5 rounded-xl flex items-center gap-3 hover:border-orange-300 cursor-pointer transition shadow-xs"
           >
-            <div className="w-10 h-10 rounded-lg bg-orange-500/20 text-orange-400 flex items-center justify-center font-bold shrink-0">
+            <div className="w-10 h-10 rounded-lg bg-orange-100 text-orange-600 flex items-center justify-center font-bold shrink-0">
               🔥
             </div>
             <div>
-              <span className="font-bold text-white block">
+              <span className="font-bold text-slate-900 block">
                 Streaks Habit Proof Cross-Reference (
                 {mosaicData?.magicSummary.streakHabitProofsCount || 28} Verified)
               </span>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-600 mt-0.5">
                 Gym & LeetCode photo proofs automatically anchored your 07:30 AM Vitality and
                 10:00 PM Coding blocks without stopwatches.
               </p>
@@ -1406,17 +1388,17 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
           <div
             onClick={() => onNavigate && onNavigate('timeline')}
-            className="bg-slate-950 border border-slate-800 p-3.5 rounded-xl flex items-center gap-3 hover:border-indigo-500/40 cursor-pointer transition"
+            className="bg-indigo-50/40 border border-indigo-200/80 p-3.5 rounded-xl flex items-center gap-3 hover:border-indigo-300 cursor-pointer transition shadow-xs"
           >
-            <div className="w-10 h-10 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold shrink-0">
+            <div className="w-10 h-10 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold shrink-0">
               📸
             </div>
             <div>
-              <span className="font-bold text-white block">
+              <span className="font-bold text-slate-900 block">
                 LifetimeLine Memory Tag Anchor (
                 {mosaicData?.magicSummary.timelineMomentsCount || 6} Moments)
               </span>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-600 mt-0.5">
                 LifetimeLine moments pinned exact social dates and hackathon milestones into your
                 monthly tapestry.
               </p>
@@ -1427,21 +1409,21 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
       {/* ── Interactive Day Detail Modal ────────────────────────────────────── */}
       {isModalOpen && selectedDaySummary && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-5 space-y-4 shadow-2xl relative max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white border border-slate-200 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-xl relative max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
               <div>
-                <h3 className="text-sm font-bold text-white">
+                <h3 className="text-base font-bold text-slate-900">
                   Day Breakdown: {selectedDaySummary.date}
                 </h3>
-                <span className="text-xs text-slate-400 font-mono">
+                <span className="text-xs text-slate-500 font-mono">
                   Bikram Sambat: {adToBs(new Date(selectedDaySummary.date)).formattedBs} (
                   {adToBs(new Date(selectedDaySummary.date)).monthName})
                 </span>
               </div>
               <button
                 onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold p-1 rounded-lg hover:bg-slate-800 transition"
+                className="text-slate-400 hover:text-slate-700 text-lg font-bold p-1 rounded-lg hover:bg-slate-100 transition"
               >
                 ✕
               </button>
@@ -1449,15 +1431,15 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
             <div className="space-y-3">
               {/* Day Key Metrics */}
-              <div className="flex items-center justify-between text-xs bg-slate-950 p-3 rounded-xl border border-slate-800">
-                <span className="text-slate-300 font-semibold">Total Active Hours</span>
-                <span className="font-mono font-bold text-indigo-400">
+              <div className="flex items-center justify-between text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="text-slate-700 font-semibold">Total Active Hours</span>
+                <span className="font-mono font-bold text-slate-900 text-sm">
                   {selectedDaySummary.totalHours} hrs
                 </span>
               </div>
 
               {/* Logged Activities */}
-              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                 Logged Activities
               </h4>
               <div className="space-y-2 text-xs">
@@ -1481,10 +1463,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-white">{entry.durationHours} hrs</span>
+                          <span className="font-mono text-slate-800 font-semibold">
+                            {entry.durationHours} hrs
+                          </span>
                           <button
                             onClick={() => handleDeleteEntry(entry.id)}
-                            className="text-slate-500 hover:text-rose-400 p-1 transition"
+                            className="text-slate-400 hover:text-rose-600 p-1 transition"
                             title="Remove Entry"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -1496,9 +1480,9 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                 )}
               </div>
 
-              {/* Add Activity Mini-Form inside modal */}
-              <div className="bg-slate-950/70 border border-slate-800 p-3 rounded-xl space-y-2 pt-3">
-                <span className="text-[11px] font-bold text-slate-300 uppercase block">
+              {/* Add Activity Mini-Form */}
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl space-y-2">
+                <span className="text-[11px] font-bold text-slate-700 uppercase block">
                   Add Activity to this Day
                 </span>
                 <div className="flex gap-2">
@@ -1507,12 +1491,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                     value={modalNewTopic}
                     onChange={e => setModalNewTopic(e.target.value)}
                     placeholder="Topic (e.g. Tree DP, Gym Push...)"
-                    className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                    className="flex-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 placeholder-slate-400 focus:outline-hidden focus:border-slate-400"
                   />
                   <select
                     value={modalNewDomain}
                     onChange={e => setModalNewDomain(e.target.value as LifeDomain)}
-                    className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:border-slate-400"
                   >
                     <option value="craft">Craft</option>
                     <option value="explore">Explore</option>
@@ -1527,12 +1511,12 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
                     min="0.2"
                     value={modalNewHours}
                     onChange={e => setModalNewHours(e.target.value)}
-                    className="w-14 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
+                    className="w-14 bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs text-slate-900 text-center focus:outline-hidden focus:border-slate-400"
                   />
                   <button
                     onClick={handleModalAddEntry}
                     disabled={!modalNewTopic.trim()}
-                    className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs disabled:opacity-50"
                   >
                     Add
                   </button>
@@ -1540,9 +1524,9 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
               </div>
 
               {/* Magic Layer Correlated Box */}
-              <div className="p-3 bg-indigo-950/40 border border-indigo-800/40 rounded-xl text-xs text-indigo-200">
-                <strong className="block mb-1 text-indigo-300 font-bold flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> Magic Layer Correlated:
+              <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-xs text-amber-900">
+                <strong className="block mb-1 text-amber-900 font-bold flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-600" /> Magic Layer Correlated:
                 </strong>
                 Streaks photo proofs validated. LifetimeLine moments anchored into your monthly
                 chronicle without double entry.
@@ -1551,7 +1535,7 @@ export const LifeMosaic: React.FC<LifeMosaicProps> = ({ authToken, onNavigate })
 
             <button
               onClick={() => setIsModalOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs transition"
+              className="w-full py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-xs transition"
             >
               Close Breakdown
             </button>
