@@ -99,6 +99,83 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       const publicId = pathParts[1];
       const action = pathParts[2]; // undefined | 'react' | 'comment'
 
+      // 0.0 GET /api/timeline/public/day/:dateKey or /api/timeline/public/day:YYYY-MM-DD (Read Public Day Chronicle)
+      const isDayRequest = publicId === 'day' || (publicId && (publicId.startsWith('day:') || publicId.startsWith('day_')));
+      if (isDayRequest && method === 'GET') {
+        let dateKey = '';
+        if (publicId === 'day') {
+          dateKey = pathParts[2] || '';
+        } else if (publicId.startsWith('day:')) {
+          dateKey = publicId.substring(4);
+        } else if (publicId.startsWith('day_')) {
+          dateKey = publicId.substring(4);
+        }
+
+        // Validate dateKey format YYYY-MM-DD
+        if (!dateKey || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid date format. Expected YYYY-MM-DD.' } };
+        }
+
+        // Broad window covering any timezone offsets (+/- 36 hours)
+        const centerDate = new Date(`${dateKey}T12:00:00Z`);
+        const windowStart = new Date(centerDate.getTime() - 36 * 3600 * 1000);
+        const windowEnd = new Date(centerDate.getTime() + 36 * 3600 * 1000);
+
+        const candidatePosts = await col.find({
+          $and: [
+            { $or: [{ clearanceLevel: 0 }, { clearanceLevel: { $exists: false } }] },
+            {
+              $or: [
+                { timestamp: { $gte: windowStart, $lte: windowEnd } },
+                { timestamp: { $regex: `^${dateKey}` } }
+              ]
+            }
+          ]
+        }).sort({ timestamp: 1, createdAt: 1 }).toArray();
+
+        // Exact calendar date filter matching local date key or prefix
+        const matchingPosts = candidatePosts.filter(p => {
+          const d = new Date(p.timestamp);
+          if (isNaN(d.getTime())) return false;
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          const localKey = `${y}-${m}-${day}`;
+          return localKey === dateKey || String(p.timestamp).startsWith(dateKey);
+        });
+
+        if (matchingPosts.length === 0) {
+          return {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+            jsonBody: { error: `No public moments found for ${dateKey}.` }
+          };
+        }
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            isDay: true,
+            date: dateKey,
+            total: matchingPosts.length,
+            posts: matchingPosts.map(post => ({
+              _id: post._id,
+              title: post.title || '',
+              content: post.content || '',
+              timestamp: post.timestamp,
+              createdAt: post.createdAt,
+              category: post.category || 'General',
+              tags: post.tags || [],
+              media: post.media || [],
+              reactions: post.reactions || [],
+              comments: post.comments || []
+            }))
+          }
+        };
+      }
+
       if (!publicId || !ObjectId.isValid(publicId)) {
         return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid post ID.' } };
       }

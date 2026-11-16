@@ -10,6 +10,16 @@ import {
   toNepaliDigits 
 } from '../utils/bikramSambat';
 import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
+import { ModernTimeWheelPicker, getCurrentLocalTime24 } from './ModernTimeWheelPicker';
+
+export function getLocalIsoString(d: Date = new Date()): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
 
 export interface DraftMediaItem {
   name: string;
@@ -645,8 +655,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   
   // Date & Time states
   const [timestamp, setTimestamp] = useState<string>(() => {
-    const d = new Date();
-    return d.toISOString().substring(0, 16);
+    return getLocalIsoString();
   });
   const [dateMode, setDateMode] = useState<'AD' | 'BS'>('AD');
   
@@ -956,11 +965,22 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     }
 
     const adDate = bsToAd(year, month, validDay);
-    const currentTimeStr = timestamp ? timestamp.substring(11, 16) : '12:00';
+    const currentTimeStr = timestamp && timestamp.length >= 16 ? timestamp.substring(11, 16) : getCurrentLocalTime24();
     const yyyy = adDate.getFullYear();
     const mm = String(adDate.getMonth() + 1).padStart(2, '0');
     const dd = String(adDate.getDate()).padStart(2, '0');
     setTimestamp(`${yyyy}-${mm}-${dd}T${currentTimeStr}`);
+  };
+
+  const handleAdDateOnlyChange = (newDateStr: string) => {
+    if (!newDateStr) return;
+    const timePart = timestamp && timestamp.length >= 16 ? timestamp.substring(11, 16) : getCurrentLocalTime24();
+    handleAdTimestampChange(`${newDateStr}T${timePart}`);
+  };
+
+  const handleTimeChange = (newTime24: string) => {
+    const datePart = timestamp && timestamp.length >= 10 ? timestamp.substring(0, 10) : getLocalIsoString().substring(0, 10);
+    setTimestamp(`${datePart}T${newTime24}`);
   };
 
   const setQuickDate = (type: 'today' | 'yesterday') => {
@@ -968,8 +988,11 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     if (type === 'yesterday') {
       d.setDate(d.getDate() - 1);
     }
-    const isoStr = d.toISOString().substring(0, 16);
-    handleAdTimestampChange(isoStr);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const timePart = timestamp && timestamp.length >= 16 ? timestamp.substring(11, 16) : getCurrentLocalTime24();
+    handleAdTimestampChange(`${yyyy}-${mm}-${dd}T${timePart}`);
   };
 
   // File Upload Handlers (Handles Images, Videos, GIFs)
@@ -1680,71 +1703,92 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                 </div>
 
                 {dateMode === 'AD' ? (
-                  <div className="space-y-2">
-                    <input
-                      type="datetime-local"
-                      value={timestamp}
-                      onChange={e => handleAdTimestampChange(e.target.value)}
-                      className="w-full px-3.5 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-xl"
-                    />
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => setQuickDate('today')}
-                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-100"
-                      >
-                        Today
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setQuickDate('yesterday')}
-                        className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-100"
-                      >
-                        Yesterday
-                      </button>
-                      <span className="text-[10px] text-amber-700 ml-auto font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                        = {currentFormBs.formattedBsNp}
-                      </span>
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Date (Gregorian)</label>
+                        <span className="text-[10px] text-amber-700 font-bold bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                          = {currentFormBs.formattedBsNp}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="date"
+                          value={timestamp.substring(0, 10)}
+                          onChange={e => handleAdDateOnlyChange(e.target.value)}
+                          className="flex-1 px-3.5 py-2 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setQuickDate('today')}
+                          className="px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-bold text-slate-700 hover:bg-slate-100 shadow-2xs transition active:scale-95"
+                        >
+                          Today
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setQuickDate('yesterday')}
+                          className="px-2.5 py-2 bg-white border border-slate-200 rounded-xl text-[11px] font-bold text-slate-700 hover:bg-slate-100 shadow-2xs transition active:scale-95"
+                        >
+                          Yesterday
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Modern Wheel Time Picker */}
+                    <ModernTimeWheelPicker
+                      value={timestamp && timestamp.length >= 16 ? timestamp.substring(11, 16) : getCurrentLocalTime24()}
+                      onChange={handleTimeChange}
+                    />
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-2">
-                      <select
-                        value={formBsYear}
-                        onChange={e => handleBsDateChange(parseInt(e.target.value, 10), formBsMonth, formBsDay)}
-                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
-                      >
-                        {getAvailableBsYears().map(y => (
-                          <option key={y} value={y}>{y} BS</option>
-                        ))}
-                      </select>
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Nepali Date (BS)</label>
+                        <span className="text-[10px] font-bold text-amber-800">{currentFormBs.formattedBsNp}</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <select
+                          value={formBsYear}
+                          onChange={e => handleBsDateChange(parseInt(e.target.value, 10), formBsMonth, formBsDay)}
+                          className="px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900 focus:border-amber-500 outline-none"
+                        >
+                          {getAvailableBsYears().map(y => (
+                            <option key={y} value={y}>{y} BS</option>
+                          ))}
+                        </select>
 
-                      <select
-                        value={formBsMonth}
-                        onChange={e => handleBsDateChange(formBsYear, parseInt(e.target.value, 10), formBsDay)}
-                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
-                      >
-                        {BS_MONTHS.map(m => (
-                          <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
-                        ))}
-                      </select>
+                        <select
+                          value={formBsMonth}
+                          onChange={e => handleBsDateChange(formBsYear, parseInt(e.target.value, 10), formBsDay)}
+                          className="px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900 focus:border-amber-500 outline-none"
+                        >
+                          {BS_MONTHS.map(m => (
+                            <option key={m.id} value={m.id}>{m.np} ({m.en})</option>
+                          ))}
+                        </select>
 
-                      <select
-                        value={formBsDay}
-                        onChange={e => handleBsDateChange(formBsYear, formBsMonth, parseInt(e.target.value, 10))}
-                        className="px-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900"
-                      >
-                        {Array.from({ length: getMonthDays(formBsYear, formBsMonth) }, (_, i) => i + 1).map(d => (
-                          <option key={d} value={d}>{toNepaliDigits(d)} गते</option>
-                        ))}
-                      </select>
+                        <select
+                          value={formBsDay}
+                          onChange={e => handleBsDateChange(formBsYear, formBsMonth, parseInt(e.target.value, 10))}
+                          className="px-2 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-amber-900 focus:border-amber-500 outline-none"
+                        >
+                          {Array.from({ length: getMonthDays(formBsYear, formBsMonth) }, (_, i) => i + 1).map(d => (
+                            <option key={d} value={d}>{toNepaliDigits(d)} गते</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="text-[10px] text-slate-500 pt-0.5">
+                        Mapped Gregorian AD: <strong className="text-slate-700">{timestamp.slice(0, 10)}</strong>
+                      </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Mapped Gregorian AD: <strong className="text-slate-700">{timestamp.slice(0, 10)}</strong></span>
-                      <span className="text-[10px] font-bold text-amber-700">{currentFormBs.formattedBsNp}</span>
-                    </div>
+                    {/* Modern Wheel Time Picker */}
+                    <ModernTimeWheelPicker
+                      value={timestamp && timestamp.length >= 16 ? timestamp.substring(11, 16) : getCurrentLocalTime24()}
+                      onChange={handleTimeChange}
+                    />
                   </div>
                 )}
               </div>
