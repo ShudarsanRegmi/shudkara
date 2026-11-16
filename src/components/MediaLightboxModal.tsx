@@ -22,13 +22,6 @@ interface MediaLightboxModalProps {
   onClose: () => void;
 }
 
-function formatFileSize(bytes?: number): string {
-  if (!bytes || bytes <= 0 || isNaN(bytes)) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function extractDriveId(item: LightboxMediaItem): string | null {
   if (item.googleDriveId) return item.googleDriveId;
   const match1 = item.url?.match(/id=([a-zA-Z0-9_-]+)/);
@@ -214,7 +207,6 @@ export const MediaLightboxModal: React.FC<MediaLightboxModalProps> = ({
   };
 
   const isWhite = theme === 'white';
-  const fileSizeLabel = formatFileSize(current.size);
 
   return (
     <div 
@@ -241,11 +233,6 @@ export const MediaLightboxModal: React.FC<MediaLightboxModalProps> = ({
           {current.name && (
             <span className="truncate max-w-[140px] sm:max-w-xs text-xs font-semibold">
               {current.name}
-            </span>
-          )}
-          {fileSizeLabel && (
-            <span className="hidden sm:inline px-2 py-0.5 rounded bg-black/60 backdrop-blur-xs text-white text-[11px] font-mono shadow-xs">
-              {fileSizeLabel}
             </span>
           )}
         </div>
@@ -390,11 +377,6 @@ export const MediaLightboxModal: React.FC<MediaLightboxModalProps> = ({
                   className="max-h-full max-w-full object-contain"
                 />
               )}
-              {fileSizeLabel && (
-                <div className="absolute bottom-3 right-3 px-2 py-0.5 rounded bg-black/70 backdrop-blur-xs text-white text-[11px] font-mono shadow pointer-events-none z-10">
-                  {fileSizeLabel}
-                </div>
-              )}
             </div>
           ) : (
             /* ── Pinch-to-Zoom / Double-Tap Zoom Image Stage ── */
@@ -425,13 +407,6 @@ export const MediaLightboxModal: React.FC<MediaLightboxModalProps> = ({
                 }}
                 className="max-h-[76vh] max-w-full rounded-2xl object-contain shadow-2xl select-none"
               />
-
-              {/* File size badge overlay (white text on transparent black background) */}
-              {fileSizeLabel && scale === 1 && (
-                <div className="absolute bottom-3 right-3 px-2 py-0.5 rounded bg-black/70 backdrop-blur-xs text-white text-[11px] font-mono shadow pointer-events-none z-10">
-                  {fileSizeLabel}
-                </div>
-              )}
             </div>
           )}
         </div>
