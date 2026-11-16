@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ArrowLeft, Share2, MessageCircle, Send, Calendar, Clock, Tag, Check, 
-  User, Edit3, X, AlertCircle, Loader2
+  User, Edit3, X, AlertCircle, Loader2, Sparkles, Layers
 } from 'lucide-react';
 import { adToBs } from '../utils/bikramSambat';
 import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal';
@@ -16,6 +16,7 @@ export interface PublicMediaItem {
   thumbnailUrl: string;
   previewUrl?: string;
   streamUrl?: string;
+  size?: number;
 }
 
 export interface PublicReaction {
@@ -66,12 +67,19 @@ function setCookie(name: string, value: string, days = 365) {
 
 export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ postId, onBack }) => {
   const [post, setPost] = useState<PublicTimelinePost | null>(null);
+  const [dayPosts, setDayPosts] = useState<PublicTimelinePost[]>([]);
+  const [dayDate, setDayDate] = useState<string>('');
+  const [isDayMode, setIsDayMode] = useState<boolean>(() => {
+    return postId.startsWith('day:') || postId.startsWith('day_');
+  });
+
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
 
   // Media Lightbox Modal
   const [showLightbox, setShowLightbox] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [activeLightboxItems, setActiveLightboxItems] = useState<LightboxMediaItem[]>([]);
 
   // Link copy toast
   const [copiedLink, setCopiedLink] = useState(false);
@@ -90,10 +98,11 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
 
   // Commenting
   const [commentText, setCommentText] = useState('');
+  const [activePostComments, setActivePostComments] = useState<Record<string, string>>({});
   const [submittingComment, setSubmittingComment] = useState(false);
   const commentInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Fetch Public Post
+  // Fetch Public Post or Public Day Chronicle
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
@@ -103,12 +112,22 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
       .then(async res => {
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to load shared memory post.');
+          throw new Error(data.error || 'Failed to load shared memory.');
         }
         return res.json();
       })
       .then(data => {
-        if (isMounted) {
+        if (!isMounted) return;
+        if (data.isDay || data.posts) {
+          setIsDayMode(true);
+          const sorted = (data.posts || []).sort(
+            (a: PublicTimelinePost, b: PublicTimelinePost) =>
+              new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+          setDayPosts(sorted);
+          setDayDate(data.date || postId.replace(/^day[:_]/, ''));
+        } else {
+          setIsDayMode(false);
           setPost(data.post);
         }
       })
@@ -155,39 +174,43 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
   };
 
   // Handle Reaction Selection (Facebook Style)
-  const handleSelectReaction = (reactionKey: string) => {
+  const handleSelectReaction = (reactionKey: string, targetPostId?: string) => {
+    const effectivePostId = targetPostId || postId;
     executeWithName(async () => {
       const activeName = guestName.trim() || nameInput.trim();
-      if (!activeName || !post) return;
+      if (!activeName) return;
 
-      const existingReactions = post.reactions || [];
-      const matchIdx = existingReactions.findIndex(r => r.name.toLowerCase() === activeName.toLowerCase());
-      let updatedReactions = [...existingReactions];
-
-      if (matchIdx >= 0) {
-        if (getReactionConfig(existingReactions[matchIdx].emoji).id === reactionKey) {
-          // Toggle off
-          updatedReactions.splice(matchIdx, 1);
+      const updateReactionsArray = (existingReactions: PublicReaction[] = []) => {
+        const matchIdx = existingReactions.findIndex(r => r.name.toLowerCase() === activeName.toLowerCase());
+        let updated = [...existingReactions];
+        if (matchIdx >= 0) {
+          if (getReactionConfig(existingReactions[matchIdx].emoji).id === reactionKey) {
+            updated.splice(matchIdx, 1);
+          } else {
+            updated[matchIdx] = {
+              emoji: reactionKey,
+              name: activeName,
+              createdAt: new Date().toISOString()
+            };
+          }
         } else {
-          // Change reaction
-          updatedReactions[matchIdx] = {
+          updated.push({
             emoji: reactionKey,
             name: activeName,
             createdAt: new Date().toISOString()
-          };
+          });
         }
+        return updated;
+      };
+
+      if (isDayMode) {
+        setDayPosts(prev => prev.map(p => p._id === effectivePostId ? { ...p, reactions: updateReactionsArray(p.reactions) } : p));
       } else {
-        updatedReactions.push({
-          emoji: reactionKey,
-          name: activeName,
-          createdAt: new Date().toISOString()
-        });
+        setPost(prev => prev ? { ...prev, reactions: updateReactionsArray(prev.reactions) } : null);
       }
 
-      setPost(prev => prev ? { ...prev, reactions: updatedReactions } : null);
-
       try {
-        const res = await fetch(`/api/timeline/public/${postId}/react`, {
+        const res = await fetch(`/api/timeline/public/${effectivePostId}/react`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emoji: reactionKey, name: activeName })
@@ -195,7 +218,11 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
         if (res.ok) {
           const data = await res.json();
           if (data.reactions) {
-            setPost(prev => prev ? { ...prev, reactions: data.reactions } : null);
+            if (isDayMode) {
+              setDayPosts(prev => prev.map(p => p._id === effectivePostId ? { ...p, reactions: data.reactions } : p));
+            } else {
+              setPost(prev => prev ? { ...prev, reactions: data.reactions } : null);
+            }
           }
         }
       } catch (err) {
@@ -205,47 +232,67 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
   };
 
   // Quick toggle (clicks main Like button)
-  const handleQuickToggleLike = () => {
-    if (!post) return;
+  const handleQuickToggleLike = (targetPost?: PublicTimelinePost) => {
+    const effectiveTarget = targetPost || post;
+    if (!effectiveTarget) return;
     const activeName = guestName.trim();
-    const existing = (post.reactions || []).find(r => r.name.toLowerCase() === activeName.toLowerCase());
+    const existing = (effectiveTarget.reactions || []).find(r => r.name.toLowerCase() === activeName.toLowerCase());
     if (existing) {
-      handleSelectReaction(getReactionConfig(existing.emoji).id);
+      handleSelectReaction(getReactionConfig(existing.emoji).id, effectiveTarget._id);
     } else {
-      handleSelectReaction('like');
+      handleSelectReaction('like', effectiveTarget._id);
     }
   };
 
   // Submit Comment
-  const handlePostComment = (e?: React.FormEvent) => {
+  const handlePostComment = (e?: React.FormEvent, targetPostId?: string) => {
     if (e) e.preventDefault();
-    if (!commentText.trim()) return;
+    const effectivePostId = targetPostId || postId;
+    const textToSubmit = (isDayMode && targetPostId ? activePostComments[targetPostId] : commentText) || '';
+    if (!textToSubmit.trim()) return;
 
     executeWithName(async () => {
       const activeName = guestName.trim() || nameInput.trim();
-      if (!activeName || !post) return;
+      if (!activeName) return;
 
       setSubmittingComment(true);
       try {
-        const res = await fetch(`/api/timeline/public/${postId}/comment`, {
+        const res = await fetch(`/api/timeline/public/${effectivePostId}/comment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: activeName, text: commentText.trim() })
+          body: JSON.stringify({ name: activeName, text: textToSubmit.trim() })
         });
 
         if (res.ok) {
           const data = await res.json();
-          setPost(prev => prev ? { ...prev, comments: data.comments } : null);
-          setCommentText('');
+          if (isDayMode && targetPostId) {
+            setDayPosts(prev => prev.map(p => p._id === targetPostId ? { ...p, comments: data.comments } : p));
+            setActivePostComments(prev => ({ ...prev, [targetPostId]: '' }));
+          } else {
+            setPost(prev => prev ? { ...prev, comments: data.comments } : null);
+            setCommentText('');
+          }
         } else {
           alert('Failed to post comment.');
         }
-      } catch (err) {
+      } catch {
         alert('Network error while posting comment.');
       } finally {
         setSubmittingComment(false);
       }
     });
+  };
+
+  // Open Lightbox for Media items
+  const handleOpenLightbox = (mediaItems: PublicMediaItem[], initialIdx: number) => {
+    setActiveLightboxItems(mediaItems.map(m => ({
+      url: m.viewUrl,
+      thumbnailUrl: m.thumbnailUrl,
+      name: m.fileName,
+      type: m.mimeType
+    })));
+    setLightboxIndex(initialIdx);
+    setShowLightbox(true);
   };
 
   // Copy Public Link
@@ -267,7 +314,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
     );
   }
 
-  if (errorMsg || !post) {
+  if (errorMsg || (!isDayMode && !post) || (isDayMode && dayPosts.length === 0)) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
         <div className="bg-white border border-slate-200 p-8 rounded-3xl text-center max-w-sm space-y-4 shadow-xl">
@@ -282,7 +329,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
           </div>
           <button
             onClick={onBack}
-            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md shadow-blue-500/20"
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md shadow-blue-500/20 cursor-pointer"
           >
             Go to Shudkara Hub
           </button>
@@ -291,14 +338,330 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
     );
   }
 
-  const dt = new Date(post.timestamp);
-  const bsDate = adToBs(post.timestamp);
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MODE A: PUBLIC DAY STORY CHRONICLE (MULTIPLE MOMENTS IN ONE DAY)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (isDayMode) {
+    const referenceDate = dayPosts.length > 0 ? new Date(dayPosts[0].timestamp) : new Date(dayDate);
+    const dayBs = adToBs(referenceDate);
+    const totalSnaps = dayPosts.reduce((acc, p) => acc + (p.media?.length || 0), 0);
 
-  const reactions = post.reactions || [];
+    return (
+      <div className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col items-center p-2 sm:p-4 md:p-6 font-sans">
+        
+        {/* ── Top Bar / Header ── */}
+        <header className="w-full max-w-2xl flex items-center justify-between mb-4 px-2">
+          <button
+            onClick={onBack}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Shudkara Hub</span>
+          </button>
+
+          <div className="flex items-center gap-2">
+            {guestName && (
+              <button
+                onClick={() => {
+                  setNameInput(guestName);
+                  setShowNameModal(true);
+                }}
+                className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl hover:border-blue-400 transition cursor-pointer"
+                title="Click to edit your display name"
+              >
+                <User className="w-3.5 h-3.5 text-blue-600" />
+                <span>{guestName}</span>
+                <Edit3 className="w-3 h-3 text-slate-400" />
+              </button>
+            )}
+
+            <button
+              onClick={handleCopyLink}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer ${
+                copiedLink 
+                  ? 'bg-emerald-600 text-white' 
+                  : 'bg-blue-600 hover:bg-blue-700 text-white active:scale-95'
+              }`}
+            >
+              {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Share2 className="w-3.5 h-3.5" />}
+              <span>{copiedLink ? 'Link Copied!' : 'Share Day'}</span>
+            </button>
+          </div>
+        </header>
+
+        {/* ── Day Hero Banner Card ── */}
+        <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 shadow-xl mb-6 relative overflow-hidden">
+          <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-blue-600 via-indigo-600 to-amber-500" />
+          
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-extrabold uppercase rounded-full flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-blue-600" />
+                  <span>Story of the Day</span>
+                </span>
+                <span className="px-2.5 py-0.5 bg-amber-50 border border-amber-200 text-amber-900 text-[10px] font-bold rounded-full flex items-center gap-1">
+                  <Calendar className="w-3 h-3 text-amber-700" />
+                  <span>{dayBs.formattedBsNp}</span>
+                </span>
+              </div>
+              <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                {referenceDate.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              </h1>
+              <p className="text-xs text-slate-500 font-medium">
+                A chronological chronicle containing {dayPosts.length} moments and {totalSnaps} photos & videos.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-2xl text-xs font-bold text-slate-700">
+              <Layers className="w-4 h-4 text-blue-600" />
+              <span>{dayPosts.length} Moments</span>
+              {totalSnaps > 0 && <span className="text-slate-400">• {totalSnaps} Snaps</span>}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Chronological Multi-Moment Timeline Stream ── */}
+        <div className="w-full max-w-2xl relative border-l-2 border-slate-300 ml-4 sm:ml-0 pl-6 sm:pl-8 space-y-8 mb-12">
+          {dayPosts.map((mPost, idx) => {
+            const mDt = new Date(mPost.timestamp);
+            const mReactions = mPost.reactions || [];
+            const myReac = guestName ? mReactions.find(r => r.name.toLowerCase() === guestName.toLowerCase()) : null;
+            const myReacKey = myReac ? myReac.emoji : null;
+
+            return (
+              <div key={mPost._id} className="relative space-y-3">
+                {/* Timeline Node Badge with Clock */}
+                <div className="absolute -left-[35px] sm:-left-[43px] top-4 w-7 h-7 bg-white border-2 border-blue-600 rounded-full flex items-center justify-center shadow-xs text-blue-700 font-black text-[9px] z-10">
+                  #{idx + 1}
+                </div>
+
+                {/* Moment Card */}
+                <article className="bg-white border border-slate-200/90 rounded-3xl shadow-lg overflow-hidden transition-all hover:shadow-xl">
+                  {/* Moment Header */}
+                  <div className="p-4 sm:p-5 border-b border-slate-100 flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-black text-sm shadow-md shadow-blue-500/20 shrink-0">
+                        S
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-sm text-slate-900 truncate">
+                            Shudarsan
+                          </span>
+                          <span className="text-xs text-slate-400 font-semibold">•</span>
+                          <span className="text-xs font-bold text-blue-600 flex items-center gap-1 font-mono">
+                            <Clock className="w-3 h-3 text-blue-500" />
+                            {mDt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-medium">
+                          Moment {idx + 1} of {dayPosts.length}
+                        </div>
+                      </div>
+                    </div>
+
+                    <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider rounded-lg border border-slate-200 shrink-0">
+                      {mPost.category || 'General'}
+                    </span>
+                  </div>
+
+                  {/* Moment Title & Content */}
+                  <div className="p-4 sm:p-5 space-y-2.5">
+                    {mPost.title && (
+                      <h2 className="text-base sm:text-lg font-black text-slate-900 tracking-tight leading-snug">
+                        {mPost.title}
+                      </h2>
+                    )}
+                    <p className="text-xs sm:text-sm text-slate-700 leading-relaxed whitespace-pre-wrap font-normal">
+                      {mPost.content}
+                    </p>
+
+                    {/* Tags */}
+                    {mPost.tags && mPost.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {mPost.tags.map((tag, tIdx) => (
+                          <span
+                            key={tIdx}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-200 text-blue-600 rounded-md text-[11px] font-semibold"
+                          >
+                            <Tag className="w-2.5 h-2.5 text-blue-400" />
+                            #{tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Photo / Video Collage Grid */}
+                  {mPost.media && mPost.media.length > 0 && (
+                    <div className="px-4 sm:p-5 pt-0 pb-4">
+                      <MediaCollageGrid
+                        media={mPost.media}
+                        onOpenLightbox={(imgIdx) => handleOpenLightbox(mPost.media || [], imgIdx)}
+                      />
+                    </div>
+                  )}
+
+                  {/* Facebook-Style Engagement Bar for this Moment */}
+                  <div className="border-t border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
+                    {(mReactions.length > 0 || (mPost.comments && mPost.comments.length > 0)) && (
+                      <div className="px-4 sm:px-5 py-2 flex items-center justify-between text-xs">
+                        <FBReactionSummary reactions={mReactions} />
+                        {mPost.comments && mPost.comments.length > 0 && (
+                          <span className="text-[11px] text-slate-500 font-semibold ml-auto">
+                            {mPost.comments.length} {mPost.comments.length === 1 ? 'Comment' : 'Comments'}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="px-4 sm:px-5 py-2 flex items-center justify-between gap-3">
+                      <FBReactionDock
+                        activeReactionKey={myReacKey}
+                        onSelectReaction={(key) => handleSelectReaction(key, mPost._id)}
+                        onQuickToggle={() => handleQuickToggleLike(mPost)}
+                      />
+                      {guestName && (
+                        <span className="text-[10px] text-slate-400 hidden sm:inline">
+                          Interacting as <strong className="text-slate-700">{guestName}</strong>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Moment Comments */}
+                  <div className="p-4 sm:p-5 space-y-3 bg-slate-50/30 border-t border-slate-100">
+                    <form onSubmit={(e) => handlePostComment(e, mPost._id)} className="space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={activePostComments[mPost._id] || ''}
+                          onChange={(e) => setActivePostComments(prev => ({ ...prev, [mPost._id]: e.target.value }))}
+                          placeholder={guestName ? `Comment as ${guestName}...` : 'Write a comment...'}
+                          className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl outline-none focus:border-blue-500 font-medium"
+                        />
+                        <button
+                          type="submit"
+                          disabled={submittingComment || !(activePostComments[mPost._id] || '').trim()}
+                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition shadow-2xs flex items-center gap-1 cursor-pointer"
+                        >
+                          <Send className="w-3 h-3" />
+                          <span>Post</span>
+                        </button>
+                      </div>
+                    </form>
+
+                    {mPost.comments && mPost.comments.length > 0 && (
+                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                        {mPost.comments.map(c => (
+                          <div key={c.id} className="p-2 bg-white rounded-xl border border-slate-100 text-xs space-y-0.5">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-extrabold text-slate-800 flex items-center gap-1">
+                                <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-700 font-bold text-[9px] flex items-center justify-center uppercase">
+                                  {c.name.slice(0, 1)}
+                                </span>
+                                {c.name}
+                              </span>
+                              <span className="text-[10px] text-slate-400">
+                                {new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                            <p className="text-slate-600 pl-5 text-[11px] whitespace-pre-wrap font-medium">
+                              {c.text}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                </article>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Guest Name Input Modal ── */}
+        {showNameModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+            <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-slate-200 space-y-4 animate-in zoom-in-95">
+              <div className="flex items-start justify-between">
+                <div className="space-y-1">
+                  <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                    <User className="w-5 h-5" />
+                  </div>
+                  <h3 className="text-base font-extrabold text-slate-900 pt-2">
+                    What's your name?
+                  </h3>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Just tell your name. No signup or login required! Your name will be remembered for your reactions and comments.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowNameModal(false)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveGuestName} className="space-y-3">
+                <input
+                  type="text"
+                  value={nameInput}
+                  onChange={e => setNameInput(e.target.value)}
+                  placeholder="e.g. Aayush, Sarah, Friend..."
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 focus:border-blue-500 focus:bg-white rounded-xl outline-hidden font-bold text-slate-800"
+                />
+
+                <div className="flex gap-2 justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowNameModal(false)}
+                    className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-xs font-semibold rounded-xl text-slate-600 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!nameInput.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition shadow-md shadow-blue-500/20 cursor-pointer"
+                  >
+                    Continue
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* ── Media Lightbox Modal ── */}
+        {showLightbox && (
+          <MediaLightboxModal
+            items={activeLightboxItems}
+            initialIndex={lightboxIndex}
+            onClose={() => setShowLightbox(false)}
+          />
+        )}
+
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MODE B: SINGLE MOMENT PUBLIC VIEW
+  // ═══════════════════════════════════════════════════════════════════════════
+  const dt = new Date(post!.timestamp);
+  const bsDate = adToBs(post!.timestamp);
+
+  const reactions = post!.reactions || [];
   const myReaction = guestName ? reactions.find(r => r.name.toLowerCase() === guestName.toLowerCase()) : null;
   const myReactionKey = myReaction ? myReaction.emoji : null;
 
-  const lightboxItems: LightboxMediaItem[] = (post.media || []).map(m => ({
+  const lightboxItems: LightboxMediaItem[] = (post!.media || []).map(m => ({
     url: m.viewUrl,
     thumbnailUrl: m.thumbnailUrl,
     name: m.fileName,
@@ -312,7 +675,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
       <header className="w-full max-w-2xl flex items-center justify-between mb-4 px-2">
         <button
           onClick={onBack}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl shadow-xs transition active:scale-95"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl shadow-xs transition active:scale-95 cursor-pointer"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           <span>Shudkara Hub</span>
@@ -326,7 +689,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
                 setNameInput(guestName);
                 setShowNameModal(true);
               }}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl hover:border-blue-400 transition"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-white border border-slate-200 text-slate-700 text-xs font-semibold rounded-xl hover:border-blue-400 transition cursor-pointer"
               title="Click to edit your display name"
             >
               <User className="w-3.5 h-3.5 text-blue-600" />
@@ -337,7 +700,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
 
           <button
             onClick={handleCopyLink}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition shadow-xs ${
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer ${
               copiedLink 
                 ? 'bg-emerald-600 text-white' 
                 : 'bg-blue-600 hover:bg-blue-700 text-white active:scale-95'
@@ -382,25 +745,25 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
           </div>
 
           <span className="px-2.5 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold uppercase tracking-wider rounded-lg border border-slate-200 shrink-0">
-            {post.category || 'General'}
+            {post!.category || 'General'}
           </span>
         </div>
 
         {/* Post Title & Content */}
         <div className="p-4 sm:p-6 space-y-3">
-          {post.title && (
+          {post!.title && (
             <h1 className="text-lg sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-              {post.title}
+              {post!.title}
             </h1>
           )}
           <p className="text-sm sm:text-base text-slate-700 leading-relaxed whitespace-pre-wrap font-normal">
-            {post.content}
+            {post!.content}
           </p>
 
           {/* Tags */}
-          {post.tags && post.tags.length > 0 && (
+          {post!.tags && post!.tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 pt-2">
-              {post.tags.map((tag, idx) => (
+              {post!.tags.map((tag, idx) => (
                 <span
                   key={idx}
                   className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-50 border border-slate-200 text-blue-600 rounded-lg text-xs font-semibold"
@@ -414,11 +777,12 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
         </div>
 
         {/* ── Photo / Video Collage Grid ── */}
-        {post.media && post.media.length > 0 && (
+        {post!.media && post!.media.length > 0 && (
           <div className="px-4 sm:px-6 pb-4">
             <MediaCollageGrid
-              media={post.media}
+              media={post!.media}
               onOpenLightbox={(idx) => {
+                setActiveLightboxItems(lightboxItems);
                 setLightboxIndex(idx);
                 setShowLightbox(true);
               }}
@@ -430,17 +794,17 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
         <div className="border-t border-slate-100 bg-slate-50/60 divide-y divide-slate-100">
           
           {/* Reaction Summary Counts & Comment Count */}
-          {(reactions.length > 0 || (post.comments && post.comments.length > 0)) && (
+          {(reactions.length > 0 || (post!.comments && post!.comments.length > 0)) && (
             <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between text-xs">
               <FBReactionSummary reactions={reactions} />
               
-              {post.comments && post.comments.length > 0 && (
+              {post!.comments && post!.comments.length > 0 && (
                 <button
                   type="button"
                   onClick={() => commentInputRef.current?.focus()}
-                  className="text-[11px] text-slate-500 hover:text-slate-800 hover:underline font-semibold ml-auto"
+                  className="text-[11px] text-slate-500 hover:text-slate-800 hover:underline font-semibold ml-auto cursor-pointer"
                 >
-                  {post.comments.length} {post.comments.length === 1 ? 'Comment' : 'Comments'}
+                  {post!.comments.length} {post!.comments.length === 1 ? 'Comment' : 'Comments'}
                 </button>
               )}
             </div>
@@ -451,13 +815,13 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
             <div className="flex items-center gap-2">
               <FBReactionDock
                 activeReactionKey={myReactionKey}
-                onSelectReaction={handleSelectReaction}
-                onQuickToggle={handleQuickToggleLike}
+                onSelectReaction={(key) => handleSelectReaction(key)}
+                onQuickToggle={() => handleQuickToggleLike()}
               />
               <button
                 type="button"
                 onClick={() => commentInputRef.current?.focus()}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition shadow-xs"
+                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
               >
                 <MessageCircle className="w-4 h-4 text-slate-600" />
                 <span>Comment</span>
@@ -481,12 +845,12 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
               <MessageCircle className="w-4 h-4 text-blue-600" />
-              Comments ({post.comments?.length || 0})
+              Comments ({post!.comments?.length || 0})
             </h3>
           </div>
 
           {/* Comment Form */}
-          <form onSubmit={handlePostComment} className="space-y-2">
+          <form onSubmit={(e) => handlePostComment(e)} className="space-y-2">
             <div className="relative">
               <textarea
                 ref={commentInputRef}
@@ -511,7 +875,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
                       setNameInput(guestName);
                       setShowNameModal(true);
                     }}
-                    className="text-blue-600 hover:underline text-[10px] font-bold"
+                    className="text-blue-600 hover:underline text-[10px] font-bold cursor-pointer"
                   >
                     (change)
                   </button>
@@ -525,7 +889,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
               <button
                 type="submit"
                 disabled={submittingComment || !commentText.trim()}
-                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition shadow-xs flex items-center gap-1.5"
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
               >
                 {submittingComment ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                 <span>Post</span>
@@ -535,8 +899,8 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
 
           {/* Comments List */}
           <div className="space-y-2.5 pt-2">
-            {post.comments && post.comments.length > 0 ? (
-              post.comments.map(c => (
+            {post!.comments && post!.comments.length > 0 ? (
+              post!.comments.map(c => (
                 <div key={c.id} className="p-3 bg-slate-50 border border-slate-100 rounded-2xl space-y-1">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-extrabold text-slate-800 flex items-center gap-1.5">
@@ -583,7 +947,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
               <button
                 type="button"
                 onClick={() => setShowNameModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -603,14 +967,14 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
                 <button
                   type="button"
                   onClick={() => setShowNameModal(false)}
-                  className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-xs font-semibold rounded-xl text-slate-600"
+                  className="px-3.5 py-2 border border-slate-200 hover:bg-slate-50 text-xs font-semibold rounded-xl text-slate-600 cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={!nameInput.trim()}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition shadow-md shadow-blue-500/20"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition shadow-md shadow-blue-500/20 cursor-pointer"
                 >
                   Continue
                 </button>
@@ -623,7 +987,7 @@ export const SharedTimelinePostView: React.FC<SharedTimelinePostViewProps> = ({ 
       {/* ── Media Lightbox Modal ── */}
       {showLightbox && (
         <MediaLightboxModal
-          items={lightboxItems}
+          items={activeLightboxItems}
           initialIndex={lightboxIndex}
           onClose={() => setShowLightbox(false)}
         />
