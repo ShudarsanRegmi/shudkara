@@ -7,12 +7,22 @@ export interface CollageMediaItem {
   mimeType?: string;
   viewUrl: string;
   thumbnailUrl?: string;
+  previewUrl?: string;
+  streamUrl?: string;
+  size?: number;
 }
 
 interface MediaCollageGridProps {
   media: CollageMediaItem[];
   onOpenLightbox: (index: number) => void;
   className?: string;
+}
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0 || isNaN(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
@@ -27,38 +37,57 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
   // ── 1 Photo or Video ──
   if (count === 1) {
     const item = media[0];
-    const isVideo = item.mimeType?.startsWith('video/');
+    const isVideo = item.mimeType?.startsWith('video/') || /\.(mp4|webm|mov|m4v|mkv)($|\?)/i.test(item.fileName || '');
+    const posterUrl = item.thumbnailUrl || (item.googleDriveId ? `https://lh3.googleusercontent.com/d/${item.googleDriveId}` : item.viewUrl);
+    const sizeStr = formatFileSize(item.size);
+
     return (
       <div 
         onClick={() => onOpenLightbox(0)}
-        className={`relative w-full rounded-2xl overflow-hidden bg-slate-950 aspect-video sm:aspect-[16/9] max-h-[460px] cursor-pointer group shadow-sm ${className}`}
+        className={`relative w-full rounded-2xl overflow-hidden bg-slate-950 aspect-video sm:aspect-[16/9] max-h-[460px] cursor-pointer group shadow-sm select-none ${className}`}
+        style={{ touchAction: 'pan-y' }}
       >
         {isVideo ? (
-          <div className="w-full h-full flex flex-col items-center justify-center relative">
-            <video
-              src={item.viewUrl}
-              playsInline
-              preload="metadata"
-              className="w-full h-full object-contain pointer-events-none"
+          <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-950">
+            <img
+              src={posterUrl}
+              alt={item.fileName || 'Video thumbnail'}
+              className="w-full h-full object-cover opacity-85 group-hover:scale-105 transition duration-300"
+              loading="lazy"
             />
             {/* Play Button Overlay */}
-            <div className="absolute inset-0 bg-black/30 group-hover:bg-black/20 flex items-center justify-center transition">
-              <div className="w-14 h-14 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition">
+            <div className="absolute inset-0 bg-black/25 group-hover:bg-black/15 flex items-center justify-center transition">
+              <div className="w-14 h-14 rounded-full bg-blue-600/90 text-white flex items-center justify-center shadow-2xl group-hover:scale-110 transition border border-white/20">
                 <Play className="w-6 h-6 ml-0.5 fill-white" />
               </div>
             </div>
-            <span className="text-[10px] font-mono text-slate-300 absolute bottom-3 left-3 bg-black/60 px-2 py-0.5 rounded truncate max-w-[80%] flex items-center gap-1">
-              <Film className="w-3 h-3 text-blue-400" />
-              {item.fileName}
+            {/* Video File Name */}
+            <span className="text-[10px] font-mono text-slate-300 absolute bottom-3 left-3 bg-black/70 backdrop-blur-xs px-2 py-0.5 rounded truncate max-w-[70%] flex items-center gap-1 shadow">
+              <Film className="w-3 h-3 text-blue-400 shrink-0" />
+              <span className="truncate">{item.fileName || 'Video'}</span>
             </span>
+            {/* File Size Layover Badge */}
+            {sizeStr && (
+              <span className="text-[10px] font-mono text-white absolute bottom-3 right-3 bg-black/70 backdrop-blur-xs px-2 py-0.5 rounded shadow pointer-events-none">
+                {sizeStr}
+              </span>
+            )}
           </div>
         ) : (
-          <img
-            src={item.viewUrl}
-            alt={item.fileName || 'Memory photo'}
-            className="w-full h-full object-contain group-hover:scale-[1.02] transition duration-300"
-            loading="lazy"
-          />
+          <div className="w-full h-full relative">
+            <img
+              src={item.viewUrl}
+              alt={item.fileName || 'Memory photo'}
+              className="w-full h-full object-contain group-hover:scale-[1.02] transition duration-300"
+              loading="lazy"
+            />
+            {/* File Size Layover Badge */}
+            {sizeStr && (
+              <span className="text-[10px] font-mono text-white absolute bottom-3 right-3 bg-black/70 backdrop-blur-xs px-2 py-0.5 rounded shadow pointer-events-none">
+                {sizeStr}
+              </span>
+            )}
+          </div>
         )}
         {item.mimeType === 'image/gif' && (
           <span className="absolute top-3 left-3 bg-purple-600/90 text-white text-[9px] font-black px-2 py-0.5 rounded shadow-sm">
@@ -71,15 +100,19 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
 
   // Helper tile renderer
   const renderTile = (item: CollageMediaItem, idx: number, extraOverlay?: React.ReactNode) => {
-    const isVideo = item.mimeType?.startsWith('video/');
+    const isVideo = item.mimeType?.startsWith('video/') || /\.(mp4|webm|mov|m4v|mkv)($|\?)/i.test(item.fileName || '');
+    const posterUrl = item.thumbnailUrl || (item.googleDriveId ? `https://lh3.googleusercontent.com/d/${item.googleDriveId}` : item.viewUrl);
+    const sizeStr = formatFileSize(item.size);
+
     return (
       <div
         key={item.googleDriveId || idx}
         onClick={() => onOpenLightbox(idx)}
         className="relative w-full h-full bg-slate-900 overflow-hidden cursor-pointer group select-none"
+        style={{ touchAction: 'pan-y' }}
       >
         <img
-          src={item.thumbnailUrl || item.viewUrl}
+          src={posterUrl}
           alt={item.fileName || `Photo ${idx + 1}`}
           className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
           loading="lazy"
@@ -98,6 +131,13 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
         {item.mimeType === 'image/gif' && (
           <span className="absolute top-2 left-2 bg-purple-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs">
             GIF
+          </span>
+        )}
+
+        {/* File Size Layover Badge */}
+        {sizeStr && !extraOverlay && (
+          <span className="absolute bottom-1.5 right-1.5 text-[9px] font-mono text-white bg-black/70 backdrop-blur-xs px-1.5 py-0.5 rounded shadow pointer-events-none">
+            {sizeStr}
           </span>
         )}
 

@@ -16,6 +16,14 @@ export interface DraftMediaItem {
   type: string;
   base64: string;
   rawFile?: File;
+  size?: number;
+}
+
+export function formatFileSize(bytes?: number): string {
+  if (!bytes || bytes <= 0 || isNaN(bytes)) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export interface TimelineDraftMeta {
@@ -449,7 +457,7 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file });
+      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file, size: file.size });
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
@@ -492,7 +500,12 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
       if (ctx) {
         ctx.drawImage(img, 0, 0, width, height);
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.88);
-        return { name: file.name.replace(/\.[^.]+$/, '.jpg'), type: 'image/jpeg', base64: compressedBase64 };
+        return { 
+          name: file.name.replace(/\.[^.]+$/, '.jpg'), 
+          type: 'image/jpeg', 
+          base64: compressedBase64,
+          size: Math.round((compressedBase64.length * 3) / 4)
+        };
       }
     } catch (e) {
       console.warn('Canvas optimization fallback to original:', e);
@@ -502,7 +515,7 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   // Default raw reader
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file });
+    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file, size: file.size });
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -522,7 +535,7 @@ async function processImageUrl(url: string, defaultName = 'dropped-image.jpg'): 
         if (!ctx) throw new Error('Could not get 2D canvas context');
         ctx.drawImage(img, 0, 0);
         const base64 = canvas.toDataURL('image/jpeg', 0.9);
-        resolve({ name: defaultName, type: 'image/jpeg', base64 });
+        resolve({ name: defaultName, type: 'image/jpeg', base64, size: Math.round((base64.length * 3) / 4) });
       } catch {
         fetch(url)
           .then(res => res.blob())
@@ -1548,7 +1561,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                         </div>
 
                         {/* Media Type Badge */}
-                        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
+                        <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 z-10">
                           {file.type.startsWith('video/') && (
                             <span className="px-1.5 py-0.5 bg-red-600/90 text-white text-[9px] font-bold rounded uppercase">
                               Video
@@ -1560,6 +1573,13 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                             </span>
                           )}
                         </div>
+
+                        {/* File Size Layover Badge (White text on transparent black background) */}
+                        {formatFileSize(file.size || (file.base64 ? Math.round((file.base64.length * 3) / 4) : 0)) && (
+                          <div className="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-white text-[10px] font-mono font-medium shadow pointer-events-none z-10">
+                            {formatFileSize(file.size || (file.base64 ? Math.round((file.base64.length * 3) / 4) : 0))}
+                          </div>
+                        )}
 
                         {/* Hover Overlay Controls */}
                         <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/media:opacity-100 transition flex items-center justify-center gap-2">
@@ -1836,8 +1856,14 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                       />
                     )}
                     {selectedFiles.length > 1 && (
-                      <span className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                      <span className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-10">
                         +{selectedFiles.length - 1} more snaps
+                      </span>
+                    )}
+                    {/* File Size Layover Badge */}
+                    {formatFileSize(selectedFiles[0].size || (selectedFiles[0].base64 ? Math.round((selectedFiles[0].base64.length * 3) / 4) : 0)) && (
+                      <span className="absolute bottom-2 left-2 bg-black/70 backdrop-blur-xs text-white text-[10px] font-mono font-medium px-2 py-0.5 rounded-md shadow z-10">
+                        {formatFileSize(selectedFiles[0].size || (selectedFiles[0].base64 ? Math.round((selectedFiles[0].base64.length * 3) / 4) : 0))}
                       </span>
                     )}
                   </div>

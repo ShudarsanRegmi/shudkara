@@ -513,14 +513,15 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           try {
             const publicRes = await ensureFilePublic(file.id);
             const isVideo = (file.mimeType || '').startsWith('video/');
+            const previewUrl = `https://drive.google.com/file/d/${file.id}/preview`;
             mediaItems.push({
               googleDriveId: file.id,
               fileName: file.name,
               mimeType: file.mimeType,
-              viewUrl: isVideo ? `https://drive.google.com/uc?export=download&id=${file.id}` : publicRes.viewUrl,
-              thumbnailUrl: publicRes.thumbnailUrl,
-              previewUrl: `https://drive.google.com/file/d/${file.id}/preview`,
-              streamUrl: `https://drive.google.com/uc?export=download&id=${file.id}`
+              viewUrl: isVideo ? previewUrl : publicRes.viewUrl,
+              thumbnailUrl: publicRes.thumbnailUrl || `https://lh3.googleusercontent.com/d/${file.id}`,
+              previewUrl,
+              streamUrl: previewUrl
             });
           } catch (fileErr: any) {
             context.error(`Failed to set permission on file ${file.name}:`, fileErr.message);
@@ -715,20 +716,19 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         }
 
         const isVideo = (session.mimeType || '').startsWith('video/');
-        const viewUrl = isVideo 
-          ? `https://drive.google.com/uc?export=download&id=${fileId}`
-          : publicRes.viewUrl;
         const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
-        const thumbnailUrl = chunkRes.fileData?.thumbnailLink || (isVideo ? previewUrl : viewUrl);
+        const viewUrl = isVideo ? previewUrl : publicRes.viewUrl;
+        const thumbnailUrl = chunkRes.fileData?.thumbnailLink || `https://lh3.googleusercontent.com/d/${fileId}`;
 
         const mediaItem = {
           googleDriveId: fileId,
           fileName: session.fileName,
           mimeType: session.mimeType,
+          size: session.size,
           viewUrl,
           thumbnailUrl,
           previewUrl,
-          streamUrl: `https://drive.google.com/uc?export=download&id=${fileId}`
+          streamUrl: previewUrl
         };
 
         const post = await col.findOne({ _id: new ObjectId(postId) });
@@ -791,14 +791,16 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         }
 
         const driveRes = await uploadToFolder(folderId, name, type || 'image/jpeg', base64);
+        const isVideo = (type || '').startsWith('video/');
         const mediaItem = {
           googleDriveId: driveRes.fileId,
           fileName: name,
           mimeType: type || 'image/jpeg',
-          viewUrl: driveRes.viewUrl,
+          size: base64 ? Math.round((base64.length * 3) / 4) : undefined,
+          viewUrl: isVideo ? driveRes.previewUrl : driveRes.viewUrl,
           thumbnailUrl: driveRes.thumbnailUrl,
           previewUrl: driveRes.previewUrl,
-          streamUrl: driveRes.streamUrl
+          streamUrl: driveRes.previewUrl
         };
 
         const currentMedia = Array.isArray(post.media) ? [...post.media, mediaItem] : [mediaItem];

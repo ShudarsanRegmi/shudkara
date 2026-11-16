@@ -96,6 +96,7 @@ export interface ActiveUploadState {
   totalMedia: number;
   errorMsg?: string;
   createdPostId?: string;
+  isMinimized?: boolean;
 }
 
 export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
@@ -835,6 +836,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
     // Fast single-request upload for small images
     if (size < CHUNK_THRESHOLD) {
+      onProgress?.(25, `Preparing ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
       const res = await fetch(`/api/timeline/${postId}/media`, {
         method: 'POST',
         headers: getAuthHeaders({
@@ -851,6 +853,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || `Failed to upload "${file.name}"`);
       }
+      onProgress?.(100, `Uploaded ${file.name} successfully!`);
       const data = await res.json();
       return data.mediaItem;
     }
@@ -1276,7 +1279,11 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       url: m.viewUrl,
       thumbnailUrl: m.thumbnailUrl,
       name: m.fileName,
-      type: m.mimeType
+      type: m.mimeType,
+      size: (m as any).size,
+      googleDriveId: m.googleDriveId,
+      previewUrl: (m as any).previewUrl,
+      streamUrl: (m as any).streamUrl
     })));
     setLightboxIndex(startIndex);
     setShowLightbox(true);
@@ -2091,96 +2098,126 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         </div>
       )}
 
-      {/* ── Floating Visual Upload Progress Bar (Bottom Right Corner) ── */}
-      {activeUpload && (
+      {/* ── Prominent Live Upload Progress Center Stage Banner ── */}
+      {activeUpload && !activeUpload.isMinimized && (
         <aside 
           aria-label="Upload progress feedback"
-          className={`fixed bottom-5 right-5 z-50 w-80 sm:w-96 rounded-2xl p-4 shadow-2xl border transition-all animate-in slide-in-from-bottom-5 duration-200 ${
-            activeUpload.status === 'error'
-              ? 'bg-white border-red-300 text-slate-900 shadow-red-500/10 ring-2 ring-red-500/20'
-              : activeUpload.status === 'completed'
-              ? 'bg-white border-emerald-300 text-slate-900 shadow-emerald-500/10'
-              : 'bg-slate-900 border-slate-800 text-white shadow-blue-500/20'
-          }`}
+          className="fixed top-5 left-1/2 -translate-x-1/2 z-[85] w-[94vw] max-w-lg rounded-3xl p-5 shadow-2xl border bg-slate-900/95 border-slate-700/80 text-white backdrop-blur-xl animate-in slide-in-from-top-4 duration-200"
         >
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${
+            <div className="flex items-center gap-3 min-w-0">
+              <div className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-md ${
                 activeUpload.status === 'error'
-                  ? 'bg-red-100 text-red-600'
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                   : activeUpload.status === 'completed'
-                  ? 'bg-emerald-100 text-emerald-600'
-                  : 'bg-blue-600 text-white'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
               }`}>
-                {activeUpload.status === 'uploading' && <Loader2 className="w-4 h-4 animate-spin" />}
-                {activeUpload.status === 'completed' && <Check className="w-4 h-4" />}
-                {activeUpload.status === 'error' && <AlertCircle className="w-4 h-4" />}
+                {activeUpload.status === 'uploading' && <Loader2 className="w-5 h-5 animate-spin" />}
+                {activeUpload.status === 'completed' && <Check className="w-5 h-5" />}
+                {activeUpload.status === 'error' && <AlertCircle className="w-5 h-5" />}
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-black truncate">
-                  {activeUpload.title || 'Timeline Moment'}
-                </p>
-                <p className={`text-[11px] truncate ${
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-extrabold truncate text-white">
+                    {activeUpload.title || 'Timeline Moment'}
+                  </h4>
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-blue-400 border border-slate-700 shrink-0">
+                    {activeUpload.totalMedia > 0 ? `${activeUpload.currentIndex}/${activeUpload.totalMedia}` : 'Writeup'}
+                  </span>
+                </div>
+                <p className={`text-xs truncate mt-0.5 ${
                   activeUpload.status === 'error' 
-                    ? 'text-red-600 font-semibold' 
-                    : (activeUpload.status === 'completed' ? 'text-emerald-600 font-semibold' : 'text-slate-300')
+                    ? 'text-red-400 font-semibold' 
+                    : (activeUpload.status === 'completed' ? 'text-emerald-400 font-semibold' : 'text-slate-300 font-mono text-[11px]')
                 }`}>
                   {activeUpload.status === 'error' ? activeUpload.errorMsg : activeUpload.stepText}
                 </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setActiveUpload(null)}
-              className="p-1 text-slate-400 hover:text-slate-600 rounded-lg shrink-0"
-              title="Close notification"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1.5 shrink-0">
+              {activeUpload.status === 'uploading' && (
+                <button
+                  type="button"
+                  onClick={() => setActiveUpload(prev => prev ? { ...prev, isMinimized: true } : null)}
+                  className="px-2.5 py-1 text-xs font-semibold text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
+                  title="Minimize to corner"
+                >
+                  Minimize
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveUpload(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
+                title="Dismiss"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
-          {/* Upload Progress Bar */}
+          {/* Large Dynamic Progress Bar */}
           {activeUpload.status === 'uploading' && (
-            <div className="mt-3 space-y-1">
-              <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+            <div className="mt-4 space-y-1.5">
+              <div className="w-full bg-slate-800/90 rounded-full h-3 overflow-hidden shadow-inner p-0.5 border border-slate-700/50">
                 <div 
-                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
-                  style={{ width: `${activeUpload.progressPercent}%` }}
-                />
+                  className="bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-400 h-full rounded-full transition-all duration-300 relative shadow-sm"
+                  style={{ width: `${Math.max(4, activeUpload.progressPercent)}%` }}
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />
+                </div>
               </div>
-              <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                <span>{activeUpload.totalMedia > 0 ? `${activeUpload.currentIndex} / ${activeUpload.totalMedia} files` : 'Processing'}</span>
-                <span>{activeUpload.progressPercent}%</span>
+              <div className="flex justify-between items-center text-xs font-mono text-slate-400 px-0.5">
+                <span>{activeUpload.totalMedia > 0 ? `File ${activeUpload.currentIndex} of ${activeUpload.totalMedia}` : 'Publishing post'}</span>
+                <span className="font-bold text-white text-sm">{activeUpload.progressPercent}%</span>
               </div>
             </div>
           )}
 
           {/* Action buttons if error - Never lose draft */}
           {activeUpload.status === 'error' && (
-            <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-              <span className="text-[10px] text-slate-500 font-medium">Draft preserved safely</span>
-              <div className="flex items-center gap-1.5">
+            <div className="mt-3 pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+              <span className="text-xs text-slate-400">Draft preserved safely</span>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
                     setSelectedDraftIdToOpen(activeUpload.draftId);
                     setShowWizard(true);
                   }}
-                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg transition"
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition"
                 >
                   Open Draft
                 </button>
                 <button
                   type="button"
                   onClick={() => handleWizardSubmit(activeUpload)}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold rounded-lg transition shadow-xs"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition shadow"
                 >
                   Retry Upload
                 </button>
               </div>
             </div>
           )}
+        </aside>
+      )}
+
+      {/* ── Minimized Floating Pill in Bottom Corner ── */}
+      {activeUpload && activeUpload.isMinimized && (
+        <aside
+          onClick={() => setActiveUpload(prev => prev ? { ...prev, isMinimized: false } : null)}
+          className="fixed bottom-5 right-5 z-50 bg-slate-900 border border-slate-700 text-white rounded-2xl p-3 shadow-2xl cursor-pointer hover:scale-105 transition flex items-center gap-3 backdrop-blur-md"
+          title="Click to expand upload progress"
+        >
+          <div className="w-8 h-8 rounded-xl bg-blue-600/30 text-blue-400 flex items-center justify-center shrink-0">
+            {activeUpload.status === 'uploading' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+          </div>
+          <div className="text-xs">
+            <p className="font-bold">{activeUpload.progressPercent}% Uploading</p>
+            <p className="text-[10px] text-slate-400">{activeUpload.currentIndex} / {activeUpload.totalMedia} files</p>
+          </div>
         </aside>
       )}
 
