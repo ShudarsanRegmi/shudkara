@@ -740,7 +740,7 @@ export async function computeMonthMosaicData(
     explore: { label: 'Exploration & R&D', color: '#8b5cf6' },
     social: { label: 'Social & Interpersonal', color: '#f59e0b' },
     play: { label: 'Play & Leisure', color: '#3b82f6' },
-    vitality: { label: 'Vitality & Health', color: '#06b6d4' },
+    vitality: { label: 'Vitality & Health', color: '#0d9488' },
     drift: { label: 'Drift & Distraction', color: '#f43f5e' }
   };
 
