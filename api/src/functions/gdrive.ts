@@ -296,7 +296,11 @@ export async function initiateResumableSession(
       }
     });
 
-    const location = (res.headers && (res.headers.location || (res.headers as any).Location)) as string | undefined;
+    const location = (
+      typeof res.headers?.get === 'function'
+        ? res.headers.get('location')
+        : (res.headers && (res.headers.location || (res.headers as any).Location))
+    ) as string | undefined;
     if (!location) {
       throw new Error(`Google Drive failed to create resumable upload session: missing location header`);
     }

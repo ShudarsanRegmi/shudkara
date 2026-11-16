@@ -4,7 +4,8 @@ import {
   Film, AlertCircle, 
   Loader2, Sparkles, BookOpen, Clock, Calendar,
   ChevronLeft, ChevronRight, Layers, List, SlidersHorizontal,
-  Camera, X, RefreshCw, Share2, Check, MessageCircle, ExternalLink, FileText
+  Camera, X, RefreshCw, Share2, Check, MessageCircle, ExternalLink, FileText,
+  GripVertical
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -1028,12 +1029,29 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     if (!authToken) return;
 
     const totalMedia = postData.mediaFiles.length;
+
+    // Check eager pre-uploaded media items from background staging
+    const stagedMedia = postData.mediaFiles
+      .filter(f => f.uploadStatus === 'uploaded' && f.googleDriveId)
+      .map(f => ({
+        googleDriveId: f.googleDriveId,
+        fileName: f.name,
+        mimeType: f.type,
+        size: f.size,
+        viewUrl: f.viewUrl,
+        thumbnailUrl: f.thumbnailUrl,
+        previewUrl: f.previewUrl,
+        streamUrl: f.streamUrl || f.previewUrl
+      }));
+
+    const pendingFiles = postData.mediaFiles.filter(f => !f.googleDriveId || f.uploadStatus !== 'uploaded');
+
     setActiveUpload({
       ...postData,
       status: 'uploading',
-      stepText: totalMedia > 0 ? 'Creating directory & post...' : 'Publishing moment...',
-      progressPercent: 5,
-      currentIndex: 0,
+      stepText: pendingFiles.length > 0 ? `Uploading ${pendingFiles.length} remaining media...` : 'Publishing moment...',
+      progressPercent: stagedMedia.length > 0 && pendingFiles.length === 0 ? 90 : 10,
+      currentIndex: stagedMedia.length,
       totalMedia
     });
 
@@ -1078,6 +1096,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           timestamp: postData.timestamp,
           clearanceLevel: postData.clearanceLevel || 0,
           clearanceTier: postData.clearanceTier || 'prakata',
+          media: stagedMedia,
           mediaFiles: [] // send empty so offline action fits in localStorage and never times out Azure Functions
         },
         description: `Timeline Moment: "${postData.title.trim() || 'Untitled'}"`,
@@ -1097,7 +1116,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     }
 
     try {
-      // Step 1: Create post on server with metadata and empty media list (fast!)
+      // Step 1: Create post on server with metadata and any pre-uploaded staged media
       const createRes = await fetch('/api/timeline', {
         method: 'POST',
         headers: getAuthHeaders({
@@ -1111,7 +1130,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           timestamp: postData.timestamp,
           clearanceLevel: postData.clearanceLevel || 0,
           clearanceTier: postData.clearanceTier || 'prakata',
-          mediaFiles: [] // send empty so creation is fast and avoids huge payload limits
+          media: stagedMedia,
+          mediaFiles: [] // staged media already provided
         })
       });
 
@@ -1124,20 +1144,21 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       const createData = await createRes.json();
       const postId = createData.postId;
 
-      // Step 2: Upload each media file 1-by-1 directly to the post folder
+      // Step 2: Upload only the remaining pending media files 1-by-1
       let mediaGlitch = false;
       let mediaGlitchMsg = '';
-      if (totalMedia > 0) {
-        for (let i = 0; i < totalMedia; i++) {
-          const file = postData.mediaFiles[i];
-          const baseFilePercent = Math.round((i / totalMedia) * 100);
+      if (pendingFiles.length > 0) {
+        for (let i = 0; i < pendingFiles.length; i++) {
+          const file = pendingFiles[i];
+          const fileIndex = stagedMedia.length + i + 1;
+          const baseFilePercent = Math.round((fileIndex / totalMedia) * 100);
 
           setActiveUpload(prev => prev ? {
             ...prev,
             createdPostId: postId,
-            currentIndex: i + 1,
+            currentIndex: fileIndex,
             progressPercent: baseFilePercent,
-            stepText: `Uploading file ${i + 1} of ${totalMedia}: ${file.name}...`
+            stepText: `Uploading file ${fileIndex} of ${totalMedia}: ${file.name}...`
           } : null);
 
           try {
@@ -1146,9 +1167,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
               setActiveUpload(prev => prev ? {
                 ...prev,
                 createdPostId: postId,
-                currentIndex: i + 1,
+                currentIndex: fileIndex,
                 progressPercent: Math.min(99, fileSliceProgress),
-                stepText: `[File ${i + 1}/${totalMedia}] ${stepText}`
+                stepText: `[File ${fileIndex}/${totalMedia}] ${stepText}`
               } : null);
             });
           } catch (fileErr: any) {
@@ -2026,6 +2047,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           categoriesList={categories}
           tagsList={tags}
           initialDraftId={selectedDraftIdToOpen || activeUpload?.draftId}
+          authToken={authToken}
         />
       )}
 
@@ -2555,6 +2577,9 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
 
   // Social Engagement State on Card
   const [showComments, setShowComments] = useState(false);
+  const [isEditDropTarget, setIsEditDropTarget] = useState(false);
+  const [editDraggedItem, setEditDraggedItem] = useState<{ type: 'existing' | 'new'; idx: number } | null>(null);
+  const editTouchStartRef = useRef<{ x: number; y: number; type: 'existing' | 'new'; idx: number } | null>(null);
   const reactions = post.reactions || [];
   const comments = post.comments || [];
 
@@ -2654,15 +2679,56 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           />
         </div>
 
-        {/* Media / Pictures Management in Edit Mode */}
-        <div className="space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+        {/* Media / Pictures Management in Edit Mode with Drag & Drop */}
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsEditDropTarget(true);
+          }}
+          onDragLeave={() => setIsEditDropTarget(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsEditDropTarget(false);
+            const files = e.dataTransfer.files ? Array.from(e.dataTransfer.files) : [];
+            for (const file of files) {
+              if (
+                file.type.startsWith('image/') ||
+                file.type.startsWith('video/') ||
+                file.name.match(/\.(jpe?g|png|gif|webp|mp4|webm|mov)$/i)
+              ) {
+                const reader = new FileReader();
+                reader.onload = ev => {
+                  const base64 = ev.target?.result as string;
+                  if (base64) {
+                    setEditNewMedia(prev => [...prev, {
+                      id: `edit_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      name: file.name,
+                      type: file.type || 'image/jpeg',
+                      base64,
+                      rawFile: file,
+                      size: file.size
+                    }]);
+                  }
+                };
+                reader.readAsDataURL(file);
+              }
+            }
+          }}
+          className={`space-y-2 p-3 rounded-2xl border transition ${
+            isEditDropTarget
+              ? 'border-blue-500 bg-blue-50/70 ring-2 ring-blue-400'
+              : 'border-slate-200 bg-slate-50/70'
+          }`}
+        >
           <div className="flex items-center justify-between">
             <div>
               <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                 <Camera className="w-3.5 h-3.5 text-blue-600" />
                 Attached Snaps ({editExistingMedia.length + editNewMedia.length})
               </span>
-              <p className="text-[10px] text-slate-400">Use arrows to rearrange display sequence</p>
+              <p className="text-[10px] text-slate-400">Drag & drop files to add, or use arrows/drag cards to reorder</p>
             </div>
             <label className="cursor-pointer px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1 transition">
               <Plus className="w-3.5 h-3.5" /> Add Snaps
@@ -2679,7 +2745,14 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
                     reader.onload = ev => {
                       const base64 = ev.target?.result as string;
                       if (base64) {
-                        setEditNewMedia(prev => [...prev, { name: file.name, type: file.type || 'image/jpeg', base64 }]);
+                        setEditNewMedia(prev => [...prev, {
+                          id: `edit_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                          name: file.name,
+                          type: file.type || 'image/jpeg',
+                          base64,
+                          rawFile: file,
+                          size: file.size
+                        }]);
                       }
                     };
                     reader.readAsDataURL(file);
@@ -2691,25 +2764,86 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
 
           {/* Pictures Preview Grid */}
           {(editExistingMedia.length > 0 || editNewMedia.length > 0) ? (
-            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2 pt-1">
-              {/* Existing Media with Reorder Buttons */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 pt-1">
+              {/* Existing Media with Drag & Drop and Touch Reordering */}
               {editExistingMedia.map((m, idx) => (
-                <div key={m.googleDriveId || idx} className="relative group rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-900">
+                <div
+                  key={m.googleDriveId || idx}
+                  draggable
+                  onDragStart={(e) => {
+                    setEditDraggedItem({ type: 'existing', idx });
+                    e.dataTransfer.setData('text/plain', String(idx));
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (editDraggedItem && editDraggedItem.type === 'existing') {
+                      const fromIdx = editDraggedItem.idx;
+                      if (fromIdx !== idx) {
+                        setEditExistingMedia(prev => {
+                          const copy = [...prev];
+                          const [item] = copy.splice(fromIdx, 1);
+                          copy.splice(idx, 0, item);
+                          return copy;
+                        });
+                      }
+                    }
+                    setEditDraggedItem(null);
+                  }}
+                  onTouchStart={(e) => {
+                    editTouchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, type: 'existing', idx };
+                  }}
+                  onTouchEnd={(e) => {
+                    if (editTouchStartRef.current?.type === 'existing' && editTouchStartRef.current.idx === idx) {
+                      const deltaX = e.changedTouches[0].clientX - editTouchStartRef.current.x;
+                      const deltaY = e.changedTouches[0].clientY - editTouchStartRef.current.y;
+                      if (Math.abs(deltaX) > 40 && Math.abs(deltaY) < 35) {
+                        if (deltaX < 0 && idx < editExistingMedia.length - 1) {
+                          setEditExistingMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx + 1, 0, item);
+                            return copy;
+                          });
+                          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                        } else if (deltaX > 0 && idx > 0) {
+                          setEditExistingMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx - 1, 0, item);
+                            return copy;
+                          });
+                          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                        }
+                      }
+                    }
+                    editTouchStartRef.current = null;
+                  }}
+                  className="relative group rounded-xl overflow-hidden border border-slate-200 aspect-video bg-slate-900 shadow-xs cursor-grab active:cursor-grabbing"
+                >
                   {m.mimeType?.startsWith('video/') ? (
                     <div className="w-full h-full flex flex-col items-center justify-center text-white p-1">
-                      <Film className="w-5 h-5 text-blue-400" />
-                      <span className="text-[8px] truncate max-w-full font-mono">{m.fileName}</span>
+                      <Film className="w-6 h-6 text-blue-400" />
+                      <span className="text-[8px] truncate max-w-full font-mono mt-1">{m.fileName}</span>
                     </div>
                   ) : (
                     <img
                       src={m.thumbnailUrl || m.viewUrl}
                       alt={m.fileName}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover pointer-events-none"
                     />
                   )}
 
-                  {/* Reorder Buttons */}
-                  <div className="absolute top-1 left-1 flex items-center gap-0.5 z-10">
+                  {/* Top-Left: Touch-Friendly Reorder Buttons */}
+                  <div className="absolute top-1.5 left-1.5 flex items-center gap-1 z-20">
+                    <span className="bg-black/75 backdrop-blur-md text-white text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                      <GripVertical className="w-2.5 h-2.5 text-slate-300" />
+                      #{idx + 1}
+                    </span>
                     {idx > 0 && (
                       <button
                         type="button"
@@ -2721,10 +2855,10 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
                             return copy;
                           });
                         }}
-                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px] transition"
+                        className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                         title="Move Earlier"
                       >
-                        <ChevronLeft className="w-2.5 h-2.5" />
+                        <ChevronLeft className="w-3.5 h-3.5" />
                       </button>
                     )}
                     {idx < editExistingMedia.length - 1 && (
@@ -2738,49 +2872,110 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
                             return copy;
                           });
                         }}
-                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px] transition"
+                        className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                         title="Move Later"
                       >
-                        <ChevronRight className="w-2.5 h-2.5" />
+                        <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
 
+                  {/* Top-Right: Touch-Friendly Remove Button */}
                   <button
                     type="button"
                     onClick={() => {
                       setEditRemovedMediaIds(prev => [...prev, m.googleDriveId]);
                       setEditExistingMedia(prev => prev.filter((_, i) => i !== idx));
                     }}
-                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition z-10"
+                    className="absolute top-1.5 right-1.5 w-7 h-7 bg-black/75 hover:bg-red-600 active:bg-red-700 text-white rounded-full flex items-center justify-center shadow-md transition z-20 cursor-pointer"
                     title="Remove Snap"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
-                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/60 text-white text-[9px] px-1 py-0.5 truncate">
+                  <span className="absolute bottom-0 inset-x-0 bg-slate-900/60 text-white text-[9px] px-1.5 py-0.5 truncate pointer-events-none">
                     {m.fileName}
                   </span>
                 </div>
               ))}
 
-              {/* New Media Added */}
+              {/* New Media Added with Drag & Drop and Touch Reordering */}
               {editNewMedia.map((m, idx) => (
-                <div key={idx} className="relative group rounded-lg overflow-hidden border-2 border-dashed border-blue-400 aspect-square bg-blue-50/50">
+                <div
+                  key={m.id || idx}
+                  draggable
+                  onDragStart={(e) => {
+                    setEditDraggedItem({ type: 'new', idx });
+                    e.dataTransfer.setData('text/plain', String(idx));
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    if (editDraggedItem && editDraggedItem.type === 'new') {
+                      const fromIdx = editDraggedItem.idx;
+                      if (fromIdx !== idx) {
+                        setEditNewMedia(prev => {
+                          const copy = [...prev];
+                          const [item] = copy.splice(fromIdx, 1);
+                          copy.splice(idx, 0, item);
+                          return copy;
+                        });
+                      }
+                    }
+                    setEditDraggedItem(null);
+                  }}
+                  onTouchStart={(e) => {
+                    editTouchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, type: 'new', idx };
+                  }}
+                  onTouchEnd={(e) => {
+                    if (editTouchStartRef.current?.type === 'new' && editTouchStartRef.current.idx === idx) {
+                      const deltaX = e.changedTouches[0].clientX - editTouchStartRef.current.x;
+                      const deltaY = e.changedTouches[0].clientY - editTouchStartRef.current.y;
+                      if (Math.abs(deltaX) > 40 && Math.abs(deltaY) < 35) {
+                        if (deltaX < 0 && idx < editNewMedia.length - 1) {
+                          setEditNewMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx + 1, 0, item);
+                            return copy;
+                          });
+                          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                        } else if (deltaX > 0 && idx > 0) {
+                          setEditNewMedia(prev => {
+                            const copy = [...prev];
+                            const [item] = copy.splice(idx, 1);
+                            copy.splice(idx - 1, 0, item);
+                            return copy;
+                          });
+                          if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                        }
+                      }
+                    }
+                    editTouchStartRef.current = null;
+                  }}
+                  className="relative group rounded-xl overflow-hidden border-2 border-dashed border-blue-400 aspect-video bg-blue-50/50 shadow-xs cursor-grab active:cursor-grabbing"
+                >
                   {m.type?.startsWith('video/') ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 text-white p-1">
-                      <Film className="w-5 h-5 text-blue-400" />
-                      <span className="text-[8px] truncate max-w-full font-mono">{m.name}</span>
+                      <Film className="w-6 h-6 text-blue-400" />
+                      <span className="text-[8px] truncate max-w-full font-mono mt-1">{m.name}</span>
                     </div>
                   ) : (
                     <img
                       src={m.base64}
                       alt={m.name}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover pointer-events-none"
                     />
                   )}
 
-                  {/* Reorder New Media Buttons */}
-                  <div className="absolute top-1 left-1 flex items-center gap-0.5 z-10">
+                  {/* Top-Left: Touch-Friendly Reorder New Media Buttons */}
+                  <div className="absolute top-1.5 left-1.5 flex items-center gap-1 z-20">
+                    <span className="bg-blue-700/80 backdrop-blur-md text-white text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                      New #{idx + 1}
+                    </span>
                     {idx > 0 && (
                       <button
                         type="button"
@@ -2792,10 +2987,10 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
                             return copy;
                           });
                         }}
-                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px]"
+                        className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                         title="Move Earlier"
                       >
-                        <ChevronLeft className="w-2.5 h-2.5" />
+                        <ChevronLeft className="w-3.5 h-3.5" />
                       </button>
                     )}
                     {idx < editNewMedia.length - 1 && (
@@ -2809,24 +3004,25 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
                             return copy;
                           });
                         }}
-                        className="p-0.5 bg-black/75 hover:bg-black text-white rounded text-[8px]"
+                        className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                         title="Move Later"
                       >
-                        <ChevronRight className="w-2.5 h-2.5" />
+                        <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </div>
 
+                  {/* Top-Right: Touch-Friendly Remove Button */}
                   <button
                     type="button"
                     onClick={() => setEditNewMedia(prev => prev.filter((_, i) => i !== idx))}
-                    className="absolute top-1 right-1 p-1 bg-red-600/80 hover:bg-red-700 text-white rounded-full shadow transition z-10"
+                    className="absolute top-1.5 right-1.5 w-7 h-7 bg-black/75 hover:bg-red-600 active:bg-red-700 text-white rounded-full flex items-center justify-center shadow-md transition z-20 cursor-pointer"
                     title="Remove New Photo"
                   >
-                    <X className="w-3 h-3" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
-                  <span className="absolute bottom-0 inset-x-0 bg-blue-600/80 text-white text-[9px] px-1 py-0.5 truncate font-semibold">
-                    New: {m.name}
+                  <span className="absolute bottom-0 inset-x-0 bg-blue-600/85 text-white text-[9px] px-1.5 py-0.5 truncate font-semibold pointer-events-none">
+                    {m.name}
                   </span>
                 </div>
               ))}

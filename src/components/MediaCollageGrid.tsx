@@ -18,13 +18,6 @@ interface MediaCollageGridProps {
   className?: string;
 }
 
-function formatFileSize(bytes?: number): string {
-  if (!bytes || bytes <= 0 || isNaN(bytes)) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
   media,
   onOpenLightbox,
@@ -39,7 +32,6 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
     const item = media[0];
     const isVideo = item.mimeType?.startsWith('video/') || /\.(mp4|webm|mov|m4v|mkv)($|\?)/i.test(item.fileName || '');
     const posterUrl = item.thumbnailUrl || (item.googleDriveId ? `https://lh3.googleusercontent.com/d/${item.googleDriveId}` : item.viewUrl);
-    const sizeStr = formatFileSize(item.size);
 
     return (
       <div 
@@ -66,12 +58,6 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
               <Film className="w-3 h-3 text-blue-400 shrink-0" />
               <span className="truncate">{item.fileName || 'Video'}</span>
             </span>
-            {/* File Size Layover Badge */}
-            {sizeStr && (
-              <span className="text-[10px] font-mono text-white absolute bottom-3 right-3 bg-black/70 backdrop-blur-xs px-2 py-0.5 rounded shadow pointer-events-none">
-                {sizeStr}
-              </span>
-            )}
           </div>
         ) : (
           <div className="w-full h-full relative">
@@ -81,12 +67,6 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
               className="w-full h-full object-contain group-hover:scale-[1.02] transition duration-300"
               loading="lazy"
             />
-            {/* File Size Layover Badge */}
-            {sizeStr && (
-              <span className="text-[10px] font-mono text-white absolute bottom-3 right-3 bg-black/70 backdrop-blur-xs px-2 py-0.5 rounded shadow pointer-events-none">
-                {sizeStr}
-              </span>
-            )}
           </div>
         )}
         {item.mimeType === 'image/gif' && (
@@ -102,7 +82,6 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
   const renderTile = (item: CollageMediaItem, idx: number, extraOverlay?: React.ReactNode) => {
     const isVideo = item.mimeType?.startsWith('video/') || /\.(mp4|webm|mov|m4v|mkv)($|\?)/i.test(item.fileName || '');
     const posterUrl = item.thumbnailUrl || (item.googleDriveId ? `https://lh3.googleusercontent.com/d/${item.googleDriveId}` : item.viewUrl);
-    const sizeStr = formatFileSize(item.size);
 
     return (
       <div
@@ -131,13 +110,6 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
         {item.mimeType === 'image/gif' && (
           <span className="absolute top-2 left-2 bg-purple-600/90 text-white text-[9px] font-black px-1.5 py-0.5 rounded shadow-xs">
             GIF
-          </span>
-        )}
-
-        {/* File Size Layover Badge */}
-        {sizeStr && !extraOverlay && (
-          <span className="absolute bottom-1.5 right-1.5 text-[9px] font-mono text-white bg-black/70 backdrop-blur-xs px-1.5 py-0.5 rounded shadow pointer-events-none">
-            {sizeStr}
           </span>
         )}
 

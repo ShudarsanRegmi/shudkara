@@ -6,7 +6,7 @@ import { connectToMongo, verifySession, extractToken, logAppError } from './db';
 import { 
   createFolderInDrive, uploadToFolder, listSubFolders, 
   getFilesInFolder, getFileContent, ensureFilePublic, deleteFolderFromDrive,
-  initiateResumableSession, uploadChunkToSession
+  initiateResumableSession, uploadChunkToSession, getSubappBucketId, executeDriveAction
 } from './gdrive';
 
 // ── Steganographic Clearance Levels & Cryptic Sanskrit Nomenclature ──
@@ -666,6 +666,178 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       };
     }
 
+    // ── 2c. POST /api/timeline/staging-media (Eager Real-Time Staging Upload for Images/Videos < 8MB) ──
+    if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts.length === 1) {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { name, type, base64, size } = body;
+      if (!name || !base64) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and base64 data are required.' } };
+      }
+
+      try {
+        const bucketId = await executeDriveAction(async (drive) => getSubappBucketId(drive, 'Timeline'));
+        const driveRes = await uploadToFolder(bucketId, name, type || 'image/jpeg', base64);
+        const isVideo = (type || '').startsWith('video/');
+        const mediaItem = {
+          googleDriveId: driveRes.fileId,
+          fileName: name,
+          mimeType: type || 'image/jpeg',
+          size: size || (base64 ? Math.round((base64.length * 3) / 4) : undefined),
+          viewUrl: isVideo ? driveRes.previewUrl : driveRes.viewUrl,
+          thumbnailUrl: driveRes.thumbnailUrl,
+          previewUrl: driveRes.previewUrl,
+          streamUrl: driveRes.previewUrl
+        };
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { success: true, mediaItem }
+        };
+      } catch (uploadErr: any) {
+        context.error(`Failed to upload staging file "${name}":`, uploadErr);
+        return {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Failed to upload "${name}" to Google Drive: ${uploadErr.message}` }
+        };
+      }
+    }
+
+    // ── 2d. POST /api/timeline/staging-media/init-chunked (Start Staging Resumable Session for Videos) ──
+    if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'init-chunked') {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { name, type, size } = body;
+      if (!name || typeof size !== 'number' || size <= 0) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and valid positive size are required.' } };
+      }
+
+      try {
+        const bucketId = await executeDriveAction(async (drive) => getSubappBucketId(drive, 'Timeline'));
+        const sessionUrl = await initiateResumableSession(bucketId, name, type || 'application/octet-stream', size);
+        const sessionCol = db.collection('upload_sessions');
+        sessionCol.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }).catch(() => {});
+
+        const sessionDoc = {
+          folderId: bucketId,
+          fileName: name,
+          mimeType: type || 'application/octet-stream',
+          totalBytes: size,
+          sessionUrl,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        };
+
+        const result = await sessionCol.insertOne(sessionDoc);
+        const chunkSize = 4 * 1024 * 1024; // 4 MB chunk size
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            uploadId: result.insertedId.toString(),
+            chunkSize
+          }
+        };
+      } catch (initErr: any) {
+        context.error(`Failed to initiate staging resumable session for "${name}":`, initErr);
+        return {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Failed to initiate resumable upload with Google Drive: ${initErr.message}` }
+        };
+      }
+    }
+
+    // ── 2e. POST /api/timeline/staging-media/upload-chunk (Stream Staging Video Chunk to Drive) ──
+    if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'upload-chunk') {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { uploadId, chunkBase64, startByte, endByte, totalBytes } = body;
+      if (!uploadId || !ObjectId.isValid(uploadId) || !chunkBase64 || typeof startByte !== 'number' || typeof endByte !== 'number' || typeof totalBytes !== 'number') {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Missing or invalid chunk parameters.' } };
+      }
+
+      const session = await db.collection('upload_sessions').findOne({ _id: new ObjectId(uploadId) });
+      if (!session) {
+        return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Upload session not found or expired. Please restart upload.' } };
+      }
+
+      try {
+        const chunkBuffer = Buffer.from(chunkBase64.split(';base64,').pop() || chunkBase64, 'base64');
+        const chunkRes = await uploadChunkToSession(
+          session.sessionUrl,
+          chunkBuffer,
+          startByte,
+          endByte,
+          totalBytes,
+          session.mimeType
+        );
+
+        if (!chunkRes.complete) {
+          await db.collection('upload_sessions').updateOne(
+            { _id: new ObjectId(uploadId) },
+            { $set: { updatedAt: new Date() } }
+          );
+          return {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+            jsonBody: { success: true, complete: false }
+          };
+        }
+
+        // Upload Completed!
+        const fileId = chunkRes.fileId!;
+        let publicRes = {
+          viewUrl: `https://lh3.googleusercontent.com/d/${fileId}`,
+          thumbnailUrl: `https://lh3.googleusercontent.com/d/${fileId}`
+        };
+        try {
+          publicRes = await ensureFilePublic(fileId);
+        } catch (permErr: any) {
+          context.warn('Could not set public permissions on uploaded file:', permErr.message);
+        }
+
+        const isVideo = (session.mimeType || '').startsWith('video/');
+        const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
+        const viewUrl = isVideo ? previewUrl : publicRes.viewUrl;
+        const thumbnailUrl = chunkRes.fileData?.thumbnailLink || `https://lh3.googleusercontent.com/d/${fileId}`;
+
+        const mediaItem = {
+          googleDriveId: fileId,
+          fileName: session.fileName,
+          mimeType: session.mimeType,
+          size: session.totalBytes,
+          viewUrl,
+          thumbnailUrl,
+          previewUrl,
+          streamUrl: previewUrl
+        };
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { success: true, complete: true, mediaItem }
+        };
+      } catch (chunkErr: any) {
+        context.error(`Failed to upload chunk (${startByte}-${endByte}) for staging session ${uploadId}:`, chunkErr);
+        return {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Failed to stream chunk to Google Drive: ${chunkErr.message}` }
+        };
+      }
+    }
+
     // ── 3a. POST /api/timeline/:id/media/init-chunked (Start Resumable Chunked Upload Session) ──
     if (method === 'POST' && pathParts.length === 3 && pathParts[1] === 'media' && pathParts[2] === 'init-chunked') {
       const postId = pathParts[0];
@@ -801,7 +973,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           googleDriveId: fileId,
           fileName: session.fileName,
           mimeType: session.mimeType,
-          size: session.size,
+          size: session.totalBytes || session.size,
           viewUrl,
           thumbnailUrl,
           previewUrl,
@@ -996,21 +1168,27 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         }
       }
 
-      // C. Process uploaded media files if passed directly
-      const uploadedMedia: any[] = [];
+      // C. Process uploaded media files if passed directly or already staged
+      const uploadedMedia: any[] = Array.isArray(body.media) ? [...body.media] : [];
       if (folderId && mediaFiles && Array.isArray(mediaFiles) && mediaFiles.length > 0) {
         for (const file of mediaFiles) {
           if (!file || !file.name || !file.base64 || typeof file.base64 !== 'string') {
             context.warn('Skipping invalid media file in POST /api/timeline:', file?.name);
             continue;
           }
+          // Avoid duplicate upload if file is already in uploadedMedia
+          if (uploadedMedia.some((m: any) => m.fileName === file.name || (file.googleDriveId && m.googleDriveId === file.googleDriveId))) {
+            continue;
+          }
           try {
             const driveRes = await uploadToFolder(folderId, file.name, file.type || 'image/jpeg', file.base64);
+            const isVideo = (file.type || '').startsWith('video/');
             uploadedMedia.push({
               googleDriveId: driveRes.fileId,
               fileName: file.name,
               mimeType: file.type || 'image/jpeg',
-              viewUrl: driveRes.viewUrl,
+              size: file.size,
+              viewUrl: isVideo ? driveRes.previewUrl : driveRes.viewUrl,
               thumbnailUrl: driveRes.thumbnailUrl,
               previewUrl: driveRes.previewUrl,
               streamUrl: driveRes.streamUrl

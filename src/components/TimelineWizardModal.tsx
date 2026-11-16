@@ -3,7 +3,7 @@ import {
   X, Camera, Upload, Trash2, ArrowRight, ArrowLeft, Check, Sparkles, 
   Calendar, Eye, Image as ImageIcon, Film,
   Clock, AlertCircle, ChevronLeft, ChevronRight,
-  Files, FileText, Plus, ChevronDown, GripVertical, Save
+  Files, FileText, Plus, ChevronDown, GripVertical, Save, RefreshCw, Loader2
 } from 'lucide-react';
 import { 
   adToBs, bsToAd, BS_MONTHS, getAvailableBsYears, getMonthDays, 
@@ -22,11 +22,20 @@ export function getLocalIsoString(d: Date = new Date()): string {
 }
 
 export interface DraftMediaItem {
+  id?: string;
   name: string;
   type: string;
   base64: string;
   rawFile?: File;
   size?: number;
+  previewUrl?: string;
+  streamUrl?: string;
+  viewUrl?: string;
+  thumbnailUrl?: string;
+  googleDriveId?: string;
+  uploadStatus?: 'pending' | 'uploading' | 'uploaded' | 'error';
+  uploadProgress?: number;
+  uploadError?: string;
 }
 
 export function formatFileSize(bytes?: number): string {
@@ -75,6 +84,7 @@ interface TimelineWizardModalProps {
   categoriesList?: string[];
   tagsList?: string[];
   initialDraftId?: string;
+  authToken?: string | null;
 }
 
 export const DRAFTS_LIST_KEY = 'shudkara_timeline_drafts_v2';
@@ -111,7 +121,181 @@ export async function openDraftDb(): Promise<IDBDatabase> {
 }
 
 /**
- * 1. Complete Draft Save: Atomically saves writeup text, metadata AND all snap media
+ * Eager background uploader for individual media items (real-time draft staging)
+ */
+export async function uploadMediaItemEagerly(
+  item: DraftMediaItem,
+  token?: string | null,
+  onProgress?: (percent: number) => void
+): Promise<Partial<DraftMediaItem>> {
+  if (item.uploadStatus === 'uploaded' && item.googleDriveId) {
+    return {
+      googleDriveId: item.googleDriveId,
+      viewUrl: item.viewUrl,
+      thumbnailUrl: item.thumbnailUrl,
+      previewUrl: item.previewUrl,
+      streamUrl: item.streamUrl,
+      size: item.size,
+      uploadStatus: 'uploaded',
+      uploadProgress: 100
+    };
+  }
+
+  // 1. Obtain raw Blob/File
+  let blob: Blob;
+  if (item.rawFile instanceof Blob) {
+    blob = item.rawFile;
+  } else if (item.base64 && item.base64.startsWith('blob:')) {
+    const res = await fetch(item.base64);
+    blob = await res.blob();
+  } else if (item.base64 && item.base64.startsWith('data:')) {
+    const res = await fetch(item.base64);
+    blob = await res.blob();
+  } else if (item.base64) {
+    const cleanBase64 = item.base64.split(';base64,').pop() || item.base64;
+    const binary = atob(cleanBase64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    blob = new Blob([bytes], { type: item.type || 'image/jpeg' });
+  } else {
+    throw new Error('No media data found to upload');
+  }
+
+  const size = blob.size;
+  const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['X-Session-Token'] = token;
+
+  // Small File Fast Upload (< 8MB)
+  if (size < CHUNK_THRESHOLD) {
+    onProgress?.(30);
+    let base64String = item.base64;
+    if (!base64String || !base64String.startsWith('data:')) {
+      base64String = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    const res = await fetch('/api/timeline/staging-media', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: item.name,
+        type: item.type || 'image/jpeg',
+        base64: base64String,
+        size
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Upload failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    onProgress?.(100);
+    return {
+      googleDriveId: data.mediaItem.googleDriveId,
+      viewUrl: data.mediaItem.viewUrl,
+      thumbnailUrl: data.mediaItem.thumbnailUrl,
+      previewUrl: data.mediaItem.previewUrl,
+      streamUrl: data.mediaItem.streamUrl,
+      size: data.mediaItem.size || size,
+      uploadStatus: 'uploaded',
+      uploadProgress: 100
+    };
+  }
+
+  // Large File Resumable Upload (>= 8MB)
+  onProgress?.(5);
+  const initRes = await fetch('/api/timeline/staging-media/init-chunked', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      name: item.name,
+      type: item.type || 'application/octet-stream',
+      size
+    })
+  });
+
+  if (!initRes.ok) {
+    const err = await initRes.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to initiate chunked session: HTTP ${initRes.status}`);
+  }
+
+  const { uploadId, chunkSize = 4 * 1024 * 1024 } = await initRes.json();
+  const totalChunks = Math.ceil(size / chunkSize);
+  let finalMediaItem: any = null;
+
+  for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+    const startByte = chunkIdx * chunkSize;
+    const endByte = Math.min(startByte + chunkSize - 1, size - 1);
+    const chunkSlice = blob.slice(startByte, endByte + 1);
+
+    const chunkBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(chunkSlice);
+    });
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const chunkRes = await fetch('/api/timeline/staging-media/upload-chunk', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            uploadId,
+            chunkBase64,
+            startByte,
+            endByte,
+            totalBytes: size
+          })
+        });
+
+        if (!chunkRes.ok) {
+          const err = await chunkRes.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${chunkRes.status}`);
+        }
+
+        const chunkData = await chunkRes.json();
+        if (chunkIdx === totalChunks - 1) {
+          if (!chunkData.complete) throw new Error('Upload incomplete on final chunk');
+          finalMediaItem = chunkData.mediaItem;
+        }
+        break;
+      } catch (attErr) {
+        if (attempt === 3) throw attErr;
+        await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
+    }
+
+    const chunkProgress = Math.min(99, Math.round(((chunkIdx + 1) / totalChunks) * 100));
+    onProgress?.(chunkProgress);
+  }
+
+  if (!finalMediaItem) {
+    throw new Error('Upload completed without returning media item');
+  }
+
+  onProgress?.(100);
+  return {
+    googleDriveId: finalMediaItem.googleDriveId,
+    viewUrl: finalMediaItem.viewUrl,
+    thumbnailUrl: finalMediaItem.thumbnailUrl,
+    previewUrl: finalMediaItem.previewUrl,
+    streamUrl: finalMediaItem.streamUrl,
+    size: finalMediaItem.size || size,
+    uploadStatus: 'uploaded',
+    uploadProgress: 100
+  };
+}
+
+/**
+ * 1. Complete Draft Save: Atomically saves writeup text, metadata AND snap media references
  * into IndexedDB with an explicit oncomplete wait, plus light metadata mirror in localStorage.
  */
 export async function saveFullDraftToDb(draft: TimelineDraftMeta & { mediaFiles?: DraftMediaItem[] }): Promise<void> {
@@ -125,15 +309,39 @@ export async function saveFullDraftToDb(draft: TimelineDraftMeta & { mediaFiles?
         const draftStore = tx.objectStore(IDB_STORE_DRAFTS);
         const mediaStore = tx.objectStore(IDB_STORE_MEDIA);
 
+        // Store lightweight metadata in draftStore (avoid heavy multi-MB media duplication)
+        const { mediaFiles, ...draftMetaOnly } = draft;
+
         draftStore.put({
-          ...draft,
-          mediaFiles: mediaToSave,
+          ...draftMetaOnly,
           mediaCount: mediaToSave.length,
           status: draft.status || 'draft',
           updatedAt: draft.updatedAt || Date.now()
         });
 
-        mediaStore.put({ id: `media_${draft.id}`, items: mediaToSave });
+        if (mediaToSave.length > 0) {
+          // If media items are already uploaded, keep only lightweight metadata + previewUrl
+          const sanitizedMedia = mediaToSave.map(m => {
+            if (m.uploadStatus === 'uploaded' && m.googleDriveId) {
+              return {
+                id: m.id,
+                name: m.name,
+                type: m.type,
+                base64: m.previewUrl || m.thumbnailUrl || '',
+                googleDriveId: m.googleDriveId,
+                viewUrl: m.viewUrl,
+                thumbnailUrl: m.thumbnailUrl,
+                previewUrl: m.previewUrl,
+                streamUrl: m.streamUrl,
+                size: m.size,
+                uploadStatus: 'uploaded' as const,
+                uploadProgress: 100
+              };
+            }
+            return m;
+          });
+          mediaStore.put({ id: `media_${draft.id}`, items: sanitizedMedia });
+        }
 
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
@@ -463,11 +671,37 @@ export async function finalizeSuccessfulDraftUpload(draftId: string): Promise<vo
 // Client-side image optimization helper for high-res photos
 async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   const mimeType = file.type || 'image/jpeg';
-  // If video or GIF, preserve raw format
-  if (mimeType.startsWith('video/') || mimeType === 'image/gif') {
+  const fileId = `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+  // If video: use lightweight object URL for zero-RAM video playback in preview
+  if (mimeType.startsWith('video/')) {
+    const objectUrl = URL.createObjectURL(file);
+    return {
+      id: fileId,
+      name: file.name,
+      type: mimeType,
+      base64: objectUrl,
+      rawFile: file,
+      size: file.size,
+      uploadStatus: 'pending',
+      uploadProgress: 0
+    };
+  }
+
+  // If GIF, preserve raw animation
+  if (mimeType === 'image/gif') {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file, size: file.size });
+      reader.onload = () => resolve({
+        id: fileId,
+        name: file.name,
+        type: mimeType,
+        base64: reader.result as string,
+        rawFile: file,
+        size: file.size,
+        uploadStatus: 'pending',
+        uploadProgress: 0
+      });
       reader.onerror = reject;
       reader.readAsDataURL(file);
     });
@@ -511,10 +745,14 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
         ctx.drawImage(img, 0, 0, width, height);
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.88);
         return { 
+          id: fileId,
           name: file.name.replace(/\.[^.]+$/, '.jpg'), 
           type: 'image/jpeg', 
           base64: compressedBase64,
-          size: Math.round((compressedBase64.length * 3) / 4)
+          rawFile: file,
+          size: Math.round((compressedBase64.length * 3) / 4),
+          uploadStatus: 'pending',
+          uploadProgress: 0
         };
       }
     } catch (e) {
@@ -522,10 +760,19 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
     }
   }
 
-  // Default raw reader
+  // Default raw reader for images
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve({ name: file.name, type: mimeType, base64: reader.result as string, rawFile: file, size: file.size });
+    reader.onload = () => resolve({
+      id: fileId,
+      name: file.name,
+      type: mimeType,
+      base64: reader.result as string,
+      rawFile: file,
+      size: file.size || Math.round(((reader.result as string)?.length * 3) / 4),
+      uploadStatus: 'pending',
+      uploadProgress: 0
+    });
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -628,7 +875,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   onSubmit,
   categoriesList = [],
   tagsList = [],
-  initialDraftId
+  initialDraftId,
+  authToken
 }) => {
   // Multiple Drafts State
   const [draftsList, setDraftsList] = useState<TimelineDraftMeta[]>(getStoredDrafts);
@@ -675,6 +923,15 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   const [isDraggingExternalFiles, setIsDraggingExternalFiles] = useState(false);
   const dragCounterRef = useRef(0);
 
+  // Touch swipe gesture ref for mobile
+  const touchStartRef = useRef<{ x: number; y: number; idx: number } | null>(null);
+
+  // Ref to always access current media files without causing text autosave re-renders
+  const selectedFilesRef = useRef<DraftMediaItem[]>(selectedFiles);
+  useEffect(() => {
+    selectedFilesRef.current = selectedFiles;
+  }, [selectedFiles]);
+
   // Steganographic Clearance State & Secret Cadence Handlers
   const [clearanceLevel, setClearanceLevel] = useState<0 | 1 | 2>(0);
   const clicksRef = useRef<number[]>([]);
@@ -719,6 +976,33 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Real-Time Eager Upload Trigger ────────────────────────────────────
+  const triggerBackgroundUpload = (mediaItem: DraftMediaItem, fileId: string) => {
+    if (!mediaItem || !fileId) return;
+
+    setSelectedFiles(prev => prev.map(f => f.id === fileId ? { ...f, uploadStatus: 'uploading', uploadProgress: 5, uploadError: undefined } : f));
+
+    uploadMediaItemEagerly(mediaItem, authToken, (progress) => {
+      setSelectedFiles(prev => prev.map(f => f.id === fileId ? { ...f, uploadProgress: progress } : f));
+    }).then(updated => {
+      setSelectedFiles(prev => prev.map(f => {
+        if (f.id === fileId) {
+          return {
+            ...f,
+            ...updated,
+            uploadStatus: 'uploaded',
+            uploadProgress: 100,
+            uploadError: undefined
+          };
+        }
+        return f;
+      }));
+    }).catch(err => {
+      console.warn(`Eager upload failed for ${mediaItem.name}:`, err);
+      setSelectedFiles(prev => prev.map(f => f.id === fileId ? { ...f, uploadStatus: 'error', uploadError: err.message || 'Upload failed' } : f));
+    });
+  };
+
   // ── Load Draft by ID with Full Content & Snaps ─────────────────────────
   const loadDraftById = async (draftId: string) => {
     setHasDraftLoaded(false);
@@ -747,6 +1031,13 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           setClearanceLevel(0);
         }
         setLastSavedTime(new Date(fullDraft.updatedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+        // Eagerly upload any un-staged media
+        media.forEach(item => {
+          if (item && item.id && item.uploadStatus !== 'uploaded') {
+            triggerBackgroundUpload(item, item.id);
+          }
+        });
       } else {
         // Check legacy v1 draft for migration
         const legacyMetaStr = localStorage.getItem(LEGACY_DRAFT_META_KEY);
@@ -799,7 +1090,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   // ── Bulletproof Save Helper: Guarantees text + photos are safely committed ──
   const persistDraftImmediately = async (customStatus?: TimelineDraftMeta['status'], customError?: string) => {
     if (!activeDraftId) return;
-    const isMeaningful = title.trim() || content.trim() || selectedFiles.length > 0;
+    const currentFiles = selectedFilesRef.current;
+    const isMeaningful = title.trim() || content.trim() || currentFiles.length > 0;
     if (!isMeaningful) return;
 
     const draftObj: TimelineDraftMeta & { mediaFiles: DraftMediaItem[] } = {
@@ -815,8 +1107,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       formBsMonth,
       formBsDay,
       currentStep,
-      mediaCount: selectedFiles.length,
-      mediaFiles: selectedFiles,
+      mediaCount: currentFiles.length,
+      mediaFiles: currentFiles,
       clearanceLevel,
       clearanceTier: clearanceLevel === 2 ? 'nigudha' : clearanceLevel === 1 ? 'guhya' : 'prakata',
       status: customStatus || 'draft',
@@ -827,19 +1119,24 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
     await saveFullDraftToDb(draftObj);
     setLastSavedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-    await refreshAllDrafts();
   };
 
-  // ── Auto-Save Active Draft on Change (Debounced 300ms) ───────────────────
+  // ── Auto-Save Active Draft on Text Change (Debounced 400ms, decoupled from media) ──────
   useEffect(() => {
     if (!hasDraftLoaded || !activeDraftId) return;
 
     const timer = setTimeout(() => {
       persistDraftImmediately();
-    }, 300);
+    }, 400);
 
     return () => clearTimeout(timer);
-  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, selectedFiles, currentStep, hasDraftLoaded, activeDraftId]);
+  }, [title, content, category, rawTags, timestamp, dateMode, formBsYear, formBsMonth, formBsDay, currentStep, clearanceLevel, hasDraftLoaded, activeDraftId]);
+
+  // ── Auto-Save Media to IDB when media items change ─────────────────────────────
+  useEffect(() => {
+    if (!hasDraftLoaded || !activeDraftId) return;
+    saveMediaToDb(activeDraftId, selectedFiles);
+  }, [selectedFiles, hasDraftLoaded, activeDraftId]);
 
   // ── Global Drag & Drop Safety and Clipboard Paste (Ctrl+V) ───────────────
   useEffect(() => {
@@ -860,6 +1157,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
             try {
               const mediaItem = await processSelectedFile(file);
               setSelectedFiles(prev => [...prev, mediaItem]);
+              if (mediaItem.id) triggerBackgroundUpload(mediaItem, mediaItem.id);
               if (currentStep !== 1) setCurrentStep(1);
             } catch (err) {
               console.error('Error processing pasted image:', err);
@@ -1007,6 +1305,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
       try {
         const item = await processSelectedFile(file);
         setSelectedFiles(prev => [...prev, item]);
+        if (item.id) triggerBackgroundUpload(item, item.id);
       } catch (err) {
         console.error('Error processing file:', file.name, err);
       }
@@ -1098,6 +1397,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
           try {
             const item = await processSelectedFile(file);
             setSelectedFiles(prev => [...prev, item]);
+            if (item.id) triggerBackgroundUpload(item, item.id);
             addedCount++;
           } catch (err) {
             console.error('Error processing dropped file:', file.name, err);
@@ -1120,6 +1420,7 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
             try {
               const mediaItem = await processSelectedFile(file);
               setSelectedFiles(prev => [...prev, mediaItem]);
+              if (mediaItem.id) triggerBackgroundUpload(mediaItem, mediaItem.id);
               addedCount++;
             } catch (err) {
               console.error('Error processing dropped item file:', err);
@@ -1144,12 +1445,21 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
     if (imageUrl && (imageUrl.startsWith('http') || imageUrl.startsWith('data:image/'))) {
       try {
+        let mediaItem: DraftMediaItem;
         if (imageUrl.startsWith('data:image/')) {
-          setSelectedFiles(prev => [...prev, { name: 'dropped-image.png', type: 'image/png', base64: imageUrl }]);
+          mediaItem = {
+            id: `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            name: 'dropped-image.png',
+            type: 'image/png',
+            base64: imageUrl,
+            uploadStatus: 'pending',
+            uploadProgress: 0
+          };
         } else {
-          const mediaItem = await processImageUrl(imageUrl);
-          setSelectedFiles(prev => [...prev, mediaItem]);
+          mediaItem = await processImageUrl(imageUrl);
         }
+        setSelectedFiles(prev => [...prev, mediaItem]);
+        if (mediaItem.id) triggerBackgroundUpload(mediaItem, mediaItem.id);
         if (currentStep !== 1) setCurrentStep(1);
       } catch (err) {
         console.error('Error processing dropped web image:', err);
@@ -1526,13 +1836,32 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {selectedFiles.map((file, idx) => (
                       <div
-                        key={idx}
+                        key={file.id || idx}
                         draggable
                         onDragStart={e => handleDragStart(e, idx)}
                         onDragOver={e => handleDragOver(e, idx)}
                         onDragLeave={handleDragLeave}
                         onDrop={e => handleDrop(e, idx)}
                         onDragEnd={() => { setDraggedIdx(null); setDragOverIdx(null); }}
+                        onTouchStart={e => {
+                          touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY, idx };
+                        }}
+                        onTouchEnd={e => {
+                          if (touchStartRef.current && touchStartRef.current.idx === idx) {
+                            const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+                            const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+                            if (Math.abs(deltaX) > 40 && Math.abs(deltaY) < 35) {
+                              if (deltaX < 0 && idx < selectedFiles.length - 1) {
+                                handleMoveItem(idx, 'right');
+                                if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                              } else if (deltaX > 0 && idx > 0) {
+                                handleMoveItem(idx, 'left');
+                                if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(25);
+                              }
+                            }
+                          }
+                          touchStartRef.current = null;
+                        }}
                         className={`group/media relative rounded-2xl overflow-hidden border bg-slate-900 shadow-sm aspect-video flex items-center justify-center cursor-grab active:cursor-grabbing transition-all ${
                           draggedIdx === idx ? 'opacity-30 scale-95 border-dashed border-blue-500' : ''
                         } ${
@@ -1555,9 +1884,9 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                           />
                         )}
 
-                        {/* Drag Handle & Order Controls */}
-                        <div className="absolute top-1.5 left-1.5 flex items-center gap-1 z-10">
-                          <span className="bg-black/70 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-md flex items-center gap-1">
+                        {/* Top-Left: Drag Handle & Touch-Friendly Move Controls */}
+                        <div className="absolute top-1.5 left-1.5 flex items-center gap-1 z-20">
+                          <span className="bg-black/75 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-md flex items-center gap-1 shadow-xs">
                             <GripVertical className="w-3 h-3 text-slate-300" />
                             #{idx + 1}
                           </span>
@@ -1565,26 +1894,65 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); handleMoveItem(idx, 'left'); }}
-                              className="p-1 bg-black/70 hover:bg-black text-white rounded-md transition shadow-xs"
+                              className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                               title="Move Left"
                             >
-                              <ChevronLeft className="w-3 h-3" />
+                              <ChevronLeft className="w-4 h-4" />
                             </button>
                           )}
                           {idx < selectedFiles.length - 1 && (
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); handleMoveItem(idx, 'right'); }}
-                              className="p-1 bg-black/70 hover:bg-black text-white rounded-md transition shadow-xs"
+                              className="w-7 h-7 bg-black/75 hover:bg-blue-600 active:bg-blue-700 text-white rounded-md flex items-center justify-center transition shadow-xs cursor-pointer"
                               title="Move Right"
                             >
-                              <ChevronRight className="w-3 h-3" />
+                              <ChevronRight className="w-4 h-4" />
                             </button>
                           )}
                         </div>
 
-                        {/* Media Type Badge */}
+                        {/* Top-Right: Always-Visible, Touch-Friendly Remove Button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveFile(idx);
+                          }}
+                          className="absolute top-1.5 right-1.5 w-7 h-7 bg-black/75 hover:bg-red-600 active:bg-red-700 text-white rounded-full flex items-center justify-center shadow-md transition z-20 cursor-pointer"
+                          title="Remove snap"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+
+                        {/* Real-Time Eager Uploading Progress Overlay */}
+                        {file.uploadStatus === 'uploading' && (
+                          <div className="absolute inset-0 bg-black/65 backdrop-blur-xs flex flex-col items-center justify-center text-white p-2 z-15 pointer-events-none">
+                            <Loader2 className="w-6 h-6 text-blue-400 animate-spin mb-1" />
+                            <span className="text-[11px] font-bold font-mono">{file.uploadProgress || 0}%</span>
+                            <div className="w-20 bg-white/20 h-1.5 rounded-full mt-1 overflow-hidden">
+                              <div className="bg-blue-500 h-full transition-all duration-200" style={{ width: `${file.uploadProgress || 0}%` }} />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Bottom-Left: Upload Status & Media Type Badges */}
                         <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1 z-10">
+                          {file.uploadStatus === 'uploaded' && (
+                            <span className="px-1.5 py-0.5 bg-emerald-600/90 backdrop-blur-xs text-white text-[9px] font-bold rounded flex items-center gap-0.5 shadow">
+                              <Check className="w-2.5 h-2.5" /> Ready
+                            </span>
+                          )}
+                          {file.uploadStatus === 'error' && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); if (file.id) triggerBackgroundUpload(file, file.id); }}
+                              className="px-1.5 py-0.5 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-[9px] font-bold rounded flex items-center gap-1 shadow cursor-pointer"
+                              title={file.uploadError || 'Upload failed, tap to retry'}
+                            >
+                              <RefreshCw className="w-2.5 h-2.5" /> Retry
+                            </button>
+                          )}
                           {file.type.startsWith('video/') && (
                             <span className="px-1.5 py-0.5 bg-red-600/90 text-white text-[9px] font-bold rounded uppercase">
                               Video
@@ -1597,30 +1965,22 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                           )}
                         </div>
 
-                        {/* File Size Layover Badge (White text on transparent black background) */}
+                        {/* Bottom-Right: File Size Layover Badge (White text on transparent black background) */}
                         {formatFileSize(file.size || (file.base64 ? Math.round((file.base64.length * 3) / 4) : 0)) && (
                           <div className="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded-md bg-black/70 backdrop-blur-xs text-white text-[10px] font-mono font-medium shadow pointer-events-none z-10">
                             {formatFileSize(file.size || (file.base64 ? Math.round((file.base64.length * 3) / 4) : 0))}
                           </div>
                         )}
 
-                        {/* Hover Overlay Controls */}
-                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover/media:opacity-100 transition flex items-center justify-center gap-2">
+                        {/* Hover Overlay Desktop Eye Preview Control */}
+                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/media:opacity-100 transition flex items-center justify-center gap-2 pointer-events-none group-hover/media:pointer-events-auto">
                           <button
                             type="button"
                             onClick={() => setPreviewMediaIndex(idx)}
-                            className="p-2 bg-white/20 hover:bg-white/40 text-white rounded-xl backdrop-blur-md transition"
+                            className="p-2 bg-white/20 hover:bg-white/40 text-white rounded-xl backdrop-blur-md transition pointer-events-auto"
                             title="Preview Full Size"
                           >
                             <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveFile(idx)}
-                            className="p-2 bg-red-600/80 hover:bg-red-600 text-white rounded-xl backdrop-blur-md transition"
-                            title="Remove snap"
-                          >
-                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
                       </div>
@@ -1971,10 +2331,19 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                 type="button"
                 onClick={handlePublish}
                 disabled={!content.trim()}
-                className="px-6 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-extrabold transition flex items-center gap-2 shadow-md active:scale-95"
+                className="px-6 py-2.5 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-extrabold transition flex items-center gap-2 shadow-md active:scale-95 cursor-pointer"
               >
-                <Check className="w-4 h-4" />
-                <span>Publish Moment</span>
+                {selectedFiles.some(f => f.uploadStatus === 'uploading') ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-white" />
+                    <span>Uploading Media... Publish</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Publish Moment</span>
+                  </>
+                )}
               </button>
             )}
           </div>
@@ -1986,7 +2355,16 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
         <TimelineCameraModal
           onClose={() => setShowCamera(false)}
           onCaptureSnaps={(newSnaps: SnappedPhoto[]) => {
-            setSelectedFiles(prev => [...prev, ...newSnaps]);
+            const mapped = newSnaps.map(snap => ({
+              ...snap,
+              id: (snap as any).id || `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              uploadStatus: 'pending' as const,
+              uploadProgress: 0
+            }));
+            setSelectedFiles(prev => [...prev, ...mapped]);
+            mapped.forEach(item => {
+              if (item.id) triggerBackgroundUpload(item, item.id);
+            });
           }}
         />
       )}
