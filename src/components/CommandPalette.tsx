@@ -22,6 +22,7 @@ import {
   ArrowRight,
   Plus,
   Shield,
+  ShieldCheck,
   Wallet,
   Hourglass,
   X,
@@ -78,6 +79,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Master command registry
   const allCommands: CommandItem[] = [
     // ── Primary Applications ──
+    {
+      id: 'app-vault',
+      title: 'Document Vault (Abhyantara Kosha / अभ्यन्तर कोश)',
+      subtitle: 'Zero-knowledge family identity sanctum & cross-device passkey clearance',
+      category: 'Applications',
+      icon: ShieldCheck,
+      colorBg: 'bg-emerald-50',
+      colorText: 'text-emerald-700',
+      badge: 'Sanctum',
+      action: () => {
+        setActiveTab('vault');
+        onClose();
+      }
+    },
     {
       id: 'app-lifemosaic',
       title: 'Life Mosaic (Kāla / काल)',

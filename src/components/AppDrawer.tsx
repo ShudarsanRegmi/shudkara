@@ -33,6 +33,7 @@ import {
   Wallet,
   Hourglass,
   Shield,
+  ShieldCheck,
   Bell,
   Activity
 } from 'lucide-react';
@@ -159,6 +160,17 @@ export const ALL_APPS: AppDefinition[] = [
     colorBg: 'bg-pink-50',
     colorText: 'text-pink-700',
     colorBorder: 'border-pink-200'
+  },
+  {
+    id: 'vault',
+    label: 'Document Vault',
+    description: 'Zero-knowledge family identity sanctum & passkey clearance (अभ्यन्तर कोश)',
+    icon: ShieldCheck,
+    category: 'Knowledge & Vaults',
+    requiresLogin: true,
+    colorBg: 'bg-emerald-50',
+    colorText: 'text-emerald-700',
+    colorBorder: 'border-emerald-200'
   },
   {
     id: 'alarms',

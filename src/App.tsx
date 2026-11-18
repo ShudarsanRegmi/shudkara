@@ -3,7 +3,7 @@ import {
   LayoutDashboard, BookOpen, Share2, FileText, Terminal, Bookmark,
   Link as LinkIcon, Key as KeyIcon, Image as ImageIcon, LogIn, LogOut, Sparkles,
   ChevronDown, Wrench, Layers, Menu, X, CheckSquare, ListOrdered, Package, Clock, Bell, FileCode, Workflow,
-  Flame, Search, Wallet, Hourglass, Shield, Activity
+  Flame, Search, Wallet, Hourglass, Shield, Activity, ShieldCheck
 } from 'lucide-react';
 import { Dashboard } from './components/Dashboard';
 import { LeetCodeTracker } from './components/LeetCodeTracker';
@@ -15,6 +15,7 @@ import { KeyVal } from './components/KeyVal';
 import { ImgDrop } from './components/ImgDrop';
 import { Login } from './components/Login';
 import { LifetimeLine } from './components/LifetimeLine';
+import { DocumentVault } from './components/DocumentVault';
 import { SharedPromptViewer } from './components/SharedPromptViewer';
 import { SharedTimelinePostView } from './components/SharedTimelinePostView';
 import { Todos, type TodoItem } from './components/Todos';
@@ -68,6 +69,7 @@ const NAV_GROUPS = [
       { key: 'prompts', label: 'PromptVault', description: 'AI prompt library & links', icon: Bookmark, requiresLogin: false },
       { key: 'links', label: 'LinkManager', description: 'Tree bookmark manager', icon: LinkIcon, requiresLogin: false },
       { key: 'timeline', label: 'Timeline', description: 'Lifetime Line personal feed', icon: Sparkles, requiresLogin: true },
+      { key: 'vault', label: 'Document Vault', description: 'Zero-knowledge family identity sanctum & passkey clearance (अभ्यन्तर कोश)', icon: ShieldCheck, requiresLogin: true },
       { key: 'leetcode', label: 'Tracker', description: 'Multi-sheet interview prep & notes', icon: BookOpen, requiresLogin: false },
     ]
   }
@@ -95,6 +97,7 @@ const TAB_CONFIG: Record<string, { requiresLogin: boolean; label: string; icon: 
   textroom: { requiresLogin: false, label: 'Rooms', icon: FileText },
   prompts: { requiresLogin: false, label: 'PromptVault', icon: Bookmark },
   timeline: { requiresLogin: true, label: 'Timeline', icon: Sparkles },
+  vault: { requiresLogin: true, label: 'Document Vault', icon: ShieldCheck },
   links: { requiresLogin: false, label: 'LinkManager', icon: LinkIcon },
   keyval: { requiresLogin: false, label: 'KeyVal', icon: KeyIcon },
   imgdrop: { requiresLogin: false, label: 'ImgDrop', icon: ImageIcon },
@@ -489,6 +492,8 @@ function App() {
         return <LifeMosaic authToken={authToken} onNavigate={setActiveTab} />;
       case 'timeline':
         return <LifetimeLine authToken={authToken} />;
+      case 'vault':
+        return <DocumentVault authToken={authToken} />;
       case 'links':
         return <LinkManager authToken={authToken} />;
       case 'notes':
