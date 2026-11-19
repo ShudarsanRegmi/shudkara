@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Shield,
@@ -850,15 +849,15 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     if (!manifest) return [];
     return manifest.documents.filter((doc) => {
       // Person filter
-      if (selectedPersonId !== 'all' && doc.personId !== selectedPersonId) {
+      if (selectedPersonId && selectedPersonId !== 'all' && doc.personId !== selectedPersonId) {
         return false;
       }
       // Country filter
-      if (selectedCountry !== 'all') {
+      if (selectedCountry && selectedCountry !== 'all') {
         const person = manifest.persons.find((p) => p.id === doc.personId);
-        const matchDocCountry = doc.issuingCountry?.toLowerCase() === selectedCountry.toLowerCase();
+        const matchDocCountry = doc.issuingCountry && doc.issuingCountry.toLowerCase() === selectedCountry.toLowerCase();
         const matchPersonCountry = person?.countries?.some(
-          (c) => c.toLowerCase() === selectedCountry.toLowerCase()
+          (c) => c && c.toLowerCase() === selectedCountry.toLowerCase()
         );
         if (!matchDocCountry && !matchPersonCountry) {
           return false;
@@ -1638,10 +1637,10 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
           {(() => {
             const member = manifest?.persons.find((p) => p.id === selectedPersonId);
             const docsForMember = manifest?.documents.filter((d) => d.personId === selectedPersonId) || [];
-            const countries = Array.from(
+            const countries: string[] = Array.from(
               new Set([
                 ...(member?.countries || []),
-                ...docsForMember.map((d) => d.issuingCountry).filter(Boolean)
+                ...docsForMember.map((d) => d.issuingCountry).filter((c): c is string => Boolean(c))
               ])
             );
 
@@ -1730,7 +1729,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
                     {/* Specific Countries Cards */}
                     {countries.map((countryName) => {
-                      const count = docsForMember.filter((d) => d.issuingCountry?.toLowerCase() === countryName.toLowerCase()).length;
+                      const count = docsForMember.filter((d) => d.issuingCountry && countryName && d.issuingCountry.toLowerCase() === countryName.toLowerCase()).length;
                       return (
                         <div
                           key={countryName}
@@ -2462,6 +2461,8 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
           manifest={manifest}
           masterVaultKey={masterVaultKey}
           authToken={authToken}
+          defaultPersonId={selectedPersonId}
+          defaultCountry={selectedCountry}
           onClose={() => setIsAddDocOpen(false)}
           onAddDocument={async (newDoc) => {
             if (!masterVaultKey) return;
@@ -2844,6 +2845,8 @@ interface AddDocumentModalProps {
   manifest: VaultManifest;
   masterVaultKey: CryptoKey | null;
   authToken?: string | null;
+  defaultPersonId?: string | null;
+  defaultCountry?: string | null;
   onClose: () => void;
   onAddDocument: (doc: VaultDocument) => void;
 }
@@ -2852,18 +2855,22 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
   manifest,
   masterVaultKey,
   authToken,
+  defaultPersonId,
+  defaultCountry,
   onClose,
   onAddDocument
 }) => {
-  const defaultPersonId = (selectedPersonId && selectedPersonId !== 'all') ? selectedPersonId : (manifest.persons[0]?.id || '');
-  const [personId, setPersonId] = useState<string>(defaultPersonId);
+  const initialPersonId = (defaultPersonId && defaultPersonId !== 'all')
+    ? defaultPersonId
+    : (manifest.persons[0]?.id || '');
+  const [personId, setPersonId] = useState<string>(initialPersonId);
   const [category, setCategory] = useState<DocumentCategory>('identity');
   const [title, setTitle] = useState<string>('');
   const [documentNumber, setDocumentNumber] = useState<string>('');
-  const defaultCountry = (selectedCountry && selectedCountry !== 'all') 
-    ? selectedCountry 
-    : (manifest.persons.find((p) => p.id === defaultPersonId)?.countries?.[0] || 'Nepal');
-  const [issuingCountry, setIssuingCountry] = useState<string>(defaultCountry);
+  const initialCountry = (defaultCountry && defaultCountry !== 'all')
+    ? defaultCountry
+    : (manifest.persons.find((p) => p.id === initialPersonId)?.countries?.[0] || 'Nepal');
+  const [issuingCountry, setIssuingCountry] = useState<string>(initialCountry);
   const [issuedDate, setIssuedDate] = useState<string>('');
   const [expiryDate, setExpiryDate] = useState<string>('');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('front_back_separate');
