@@ -3,16 +3,6 @@ import * as speakeasy from 'speakeasy';
 import { connectToMongo, verifySession, extractToken, logAppError } from './db';
 import { executeDriveAction, uploadToFolder, getFileContent, getFileBinaryBase64 } from './gdrive';
 
-// In-memory fallback stores in case MongoDB is temporarily in-flight or offline
-const inMemoryRelaySessions = new Map<string, {
-  sessionId: string;
-  publicKey: any;
-  status: 'pending' | 'authorized' | 'expired';
-  encryptedMvkPayload?: any;
-  createdAt: number;
-  expiresAt: number;
-}>();
-
 // Cache for Google Drive folder hierarchy: StorageBuckets / ShudkaraBuckets / Shudkara_Vault / blobs
 let vaultDriveFolderId: string | null = null;
 let vaultBlobsFolderId: string | null = null;
@@ -60,7 +50,6 @@ async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; 
         });
         if (rootOldRes.data.files && rootOldRes.data.files.length > 0) {
           const oldFolderId = rootOldRes.data.files[0].id!;
-          // Check if Shudkara_Vault already exists inside ShudkaraBuckets
           const insideRes = await drive.files.list({
             q: `'${shudkaraBucketsId}' in parents and name = 'Shudkara_Vault' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
             fields: 'files(id, name)',
@@ -68,7 +57,6 @@ async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; 
             includeItemsFromAllDrives: true
           });
           if (!insideRes.data.files || insideRes.data.files.length === 0) {
-            // Move root Shudkara_Vault into StorageBuckets / ShudkaraBuckets
             await drive.files.update({
               fileId: oldFolderId,
               addParents: shudkaraBucketsId,
@@ -94,16 +82,6 @@ async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; 
     return { vaultFolderId: vaultDriveFolderId!, blobsFolderId: vaultBlobsFolderId! };
   });
 }
-
-// Purge expired in-memory sessions every 30 seconds
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, sess] of inMemoryRelaySessions.entries()) {
-    if (sess.expiresAt < now) {
-      inMemoryRelaySessions.delete(key);
-    }
-  }
-}, 30000);
 
 export async function vaultHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;
@@ -131,10 +109,68 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
       context.warn('[Vault API] MongoDB connection fallback to memory:', dbErr);
     }
 
-    // ── 1. RELAY ENDPOINTS (Method A: Ephemeral ECDH Companion QR Code Relay) ──
+    // ── 1. ACCOUNT-LEVEL MASTER KEY ENVELOPE (/api/vault/envelope) ───────────
 
-    // 1.1 POST /api/vault/relay/init (Laptop registers pairing session)
-    if (method === 'POST' && (action === 'relay/init' || path.endsWith('relay/init'))) {
+    // 1.1 GET /api/vault/envelope
+    if (method === 'GET' && (action === 'envelope' || path.endsWith('envelope'))) {
+      const token = extractToken(request);
+      const isAuthorized = await verifySession(token);
+      if (!isAuthorized) {
+        return { status: 401, jsonBody: { error: 'Unauthorized. Shudkara session required.' } };
+      }
+
+      // 1. Check Google Drive first
+      try {
+        const { vaultFolderId } = await getOrCreateVaultDriveFolders();
+        const driveEnvelope = await executeDriveAction(async (drive) => {
+          const listRes = await drive.files.list({
+            q: `'${vaultFolderId}' in parents and name = '.vault_envelope.enc' and trashed = false`,
+            fields: 'files(id, name, modifiedTime)',
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
+          });
+          if (listRes.data.files && listRes.data.files.length > 0) {
+            const fileId = listRes.data.files[0].id!;
+            const content = await getFileContent(fileId);
+            return JSON.parse(content);
+          }
+          return null;
+        });
+
+        if (driveEnvelope) {
+          return { status: 200, jsonBody: { configured: true, ...driveEnvelope } };
+        }
+      } catch {}
+
+      // 2. Fallback to MongoDB vault_envelopes
+      if (db) {
+        const doc = await db.collection('vault_envelopes').findOne({ key: 'primary_envelope' });
+        if (doc) {
+          return {
+            status: 200,
+            jsonBody: {
+              configured: true,
+              saltB64: doc.saltB64,
+              ivB64: doc.ivB64,
+              ciphertextB64: doc.ciphertextB64,
+              iterations: doc.iterations || 600000,
+              updatedAt: doc.updatedAt
+            }
+          };
+        }
+      }
+
+      return { status: 200, jsonBody: { configured: false } };
+    }
+
+    // 1.2 POST /api/vault/envelope
+    if (method === 'POST' && (action === 'envelope' || path.endsWith('envelope'))) {
+      const token = extractToken(request);
+      const isAuthorized = await verifySession(token);
+      if (!isAuthorized) {
+        return { status: 401, jsonBody: { error: 'Unauthorized. Shudkara session required.' } };
+      }
+
       let body: any;
       try {
         body = await request.json();
@@ -142,153 +178,47 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
       }
 
-      const { sessionId, publicKey } = body;
-      if (!sessionId || !publicKey) {
-        return { status: 400, jsonBody: { error: 'sessionId and publicKey are required.' } };
+      const { saltB64, ivB64, ciphertextB64, iterations } = body;
+      if (!saltB64 || !ivB64 || !ciphertextB64) {
+        return { status: 400, jsonBody: { error: 'saltB64, ivB64, and ciphertextB64 are required.' } };
       }
 
-      const now = Date.now();
-      const expiresAt = now + 90 * 1000; // 90 seconds lifetime for QR clearance
+      const now = new Date();
+      const envelopePayload = {
+        key: 'primary_envelope',
+        saltB64,
+        ivB64,
+        ciphertextB64,
+        iterations: iterations || 600000,
+        updatedAt: now.toISOString()
+      };
 
+      // 1. Save to Google Drive
+      let driveSync = false;
+      try {
+        const { vaultFolderId } = await getOrCreateVaultDriveFolders();
+        const base64Content = Buffer.from(JSON.stringify(envelopePayload)).toString('base64');
+        await uploadToFolder(vaultFolderId, '.vault_envelope.enc', 'application/json', base64Content);
+        driveSync = true;
+      } catch (driveErr) {
+        context.warn('[Vault API] Drive envelope upload fallback to Mongo:', driveErr);
+      }
+
+      // 2. Save to MongoDB
       if (db) {
-        const relayCol = db.collection('vault_relay_sessions');
-        await relayCol.updateOne(
-          { sessionId },
-          {
-            $set: {
-              sessionId,
-              publicKey,
-              status: 'pending',
-              createdAt: new Date(now),
-              expiresAt: new Date(expiresAt)
-            }
-          },
+        await db.collection('vault_envelopes').updateOne(
+          { key: 'primary_envelope' },
+          { $set: envelopePayload },
           { upsert: true }
         );
       }
-
-      inMemoryRelaySessions.set(sessionId, {
-        sessionId,
-        publicKey,
-        status: 'pending',
-        createdAt: now,
-        expiresAt
-      });
 
       return {
         status: 200,
         jsonBody: {
           success: true,
-          sessionId,
-          ticket: sessionId,
-          expiresAt: new Date(expiresAt).toISOString()
-        }
-      };
-    }
-
-    // 1.2 POST /api/vault/relay/authorize (Phone authorizes laptop with encrypted MVK payload)
-    if (method === 'POST' && (action === 'relay/authorize' || path.endsWith('relay/authorize'))) {
-      let body: any;
-      try {
-        body = await request.json();
-      } catch {
-        return { status: 400, jsonBody: { error: 'Invalid JSON body.' } };
-      }
-
-      const { sessionId, encryptedMvkPayload } = body;
-      if (!sessionId || !encryptedMvkPayload) {
-        return { status: 400, jsonBody: { error: 'sessionId and encryptedMvkPayload are required.' } };
-      }
-
-      const now = Date.now();
-      let sessionFound = false;
-
-      if (db) {
-        const relayCol = db.collection('vault_relay_sessions');
-        const sess = await relayCol.findOne({ sessionId });
-        if (sess && new Date(sess.expiresAt).getTime() > now) {
-          await relayCol.updateOne(
-            { sessionId },
-            {
-              $set: {
-                status: 'authorized',
-                encryptedMvkPayload,
-                authorizedAt: new Date(now)
-              }
-            }
-          );
-          sessionFound = true;
-        }
-      }
-
-      const memSess = inMemoryRelaySessions.get(sessionId);
-      if (memSess && memSess.expiresAt > now) {
-        memSess.status = 'authorized';
-        memSess.encryptedMvkPayload = encryptedMvkPayload;
-        sessionFound = true;
-      }
-
-      if (!sessionFound) {
-        return { status: 404, jsonBody: { error: 'Relay pairing session expired or not found.' } };
-      }
-
-      return { status: 200, jsonBody: { success: true } };
-    }
-
-    // 1.3 GET /api/vault/relay/status?sessionId=... (Laptop polls pairing status)
-    if (method === 'GET' && (action === 'relay/status' || path.endsWith('relay/status'))) {
-      const sessionId = url.searchParams.get('sessionId');
-      if (!sessionId) {
-        return { status: 400, jsonBody: { error: 'sessionId query parameter is required.' } };
-      }
-
-      const now = Date.now();
-      let session: any = null;
-
-      if (db) {
-        const relayCol = db.collection('vault_relay_sessions');
-        session = await relayCol.findOne({ sessionId });
-      }
-
-      if (!session) {
-        session = inMemoryRelaySessions.get(sessionId);
-      }
-
-      if (!session) {
-        return { status: 404, jsonBody: { status: 'expired', error: 'Session not found or expired.' } };
-      }
-
-      const expTime = session.expiresAt instanceof Date ? session.expiresAt.getTime() : session.expiresAt;
-      if (expTime < now) {
-        if (db) {
-          await db.collection('vault_relay_sessions').deleteOne({ sessionId });
-        }
-        inMemoryRelaySessions.delete(sessionId);
-        return { status: 200, jsonBody: { status: 'expired' } };
-      }
-
-      if (session.status === 'authorized') {
-        const payload = session.encryptedMvkPayload;
-        // Zero-knowledge & forward secrecy: immediately consume/destroy the authorized session
-        if (db) {
-          await db.collection('vault_relay_sessions').deleteOne({ sessionId });
-        }
-        inMemoryRelaySessions.delete(sessionId);
-
-        return {
-          status: 200,
-          jsonBody: {
-            status: 'authorized',
-            encryptedMvkPayload: payload
-          }
-        };
-      }
-
-      return {
-        status: 200,
-        jsonBody: {
-          status: 'pending',
-          publicKey: session.publicKey
+          driveSync,
+          updatedAt: now.toISOString()
         }
       };
     }
