@@ -1,7 +1,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as speakeasy from 'speakeasy';
 import { connectToMongo, verifySession, extractToken, logAppError } from './db';
-import { executeDriveAction, uploadToFolder, getFileContent } from './gdrive';
+import { executeDriveAction, uploadToFolder, getFileContent, getFileBinaryBase64 } from './gdrive';
 
 // In-memory fallback stores in case MongoDB is temporarily in-flight or offline
 const inMemoryRelaySessions = new Map<string, {
@@ -537,7 +537,7 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
           });
           if (listRes.data.files && listRes.data.files.length > 0) {
             const fileId = listRes.data.files[0].id!;
-            const ciphertextBase64 = await getFileContent(fileId);
+            const ciphertextBase64 = await getFileBinaryBase64(fileId);
             return {
               blobUuid: targetUuid,
               ciphertextBase64,

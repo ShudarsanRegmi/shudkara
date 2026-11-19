@@ -397,6 +397,18 @@ export async function getFileContent(fileId: string): Promise<string> {
   });
 }
 
+// ── 5b. Download binary file contents as base64 string (specifically for encrypted binary blobs) ──
+export async function getFileBinaryBase64(fileId: string): Promise<string> {
+  return executeDriveAction(async (drive) => {
+    const res = await drive.files.get({
+      fileId: fileId,
+      alt: 'media'
+    }, { responseType: 'arraybuffer' });
+
+    return Buffer.from(res.data as ArrayBuffer).toString('base64');
+  });
+}
+
 // ── 6. Make a file in Drive public and return view details ──
 export async function ensureFilePublic(fileId: string): Promise<{ viewUrl: string; thumbnailUrl: string }> {
   return executeDriveAction(async (drive) => {
