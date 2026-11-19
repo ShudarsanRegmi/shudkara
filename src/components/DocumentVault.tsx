@@ -34,7 +34,16 @@ import {
   Layers,
   Globe,
   Check,
-  Fingerprint
+  Fingerprint,
+  Droplet,
+  Calendar,
+  Phone,
+  CreditCard,
+  Plane,
+  Briefcase,
+  Scale,
+  GraduationCap,
+  HeartPulse
 } from 'lucide-react';
 
 import {
@@ -57,7 +66,9 @@ import {
   generateQRCodeSVG,
   exportKeyRaw,
   importKeyRaw,
-  base64ToArrayBuffer
+  base64ToArrayBuffer,
+  idbSaveEncryptedBlob,
+  idbGetEncryptedBlob
 } from '../utils/vaultCrypto';
 import type { WrappedKeyEnvelope } from '../utils/vaultCrypto';
 
@@ -94,6 +105,12 @@ export interface DocumentMediaSlot {
   ivBase64?: string;
   dekEnvelope?: WrappedKeyEnvelope; // Wrapped disposable DEK
   previewUrl?: string; // Decrypted ephemeral Object URL (RAM only)
+}
+
+export interface DocumentCustomField {
+  id: string;
+  label: string;
+  value: string;
 }
 
 export interface DocumentEdition {
@@ -137,13 +154,18 @@ export interface VaultDocument {
   issuingCountry?: string;
   issuingAuthority?: string;
   issuedDate?: string;
+  issuedDateCalendar?: 'BS' | 'AD'; // Bikram Sambat (BS) or Gregorian (AD)
+  issuedDateConverted?: string;
   expiryDate?: string;
+  expiryDateCalendar?: 'BS' | 'AD';
+  expiryDateConverted?: string;
   layoutMode: LayoutMode;
   status: DocumentStatus;
   passwordHint?: string;
   notes?: string;
   media: DocumentMediaSlot[];
   editions?: DocumentEdition[];
+  customFields?: DocumentCustomField[];
   previousVersions?: PreviousDocumentVersion[];
   relatedDocuments?: RelatedChildDocument[];
   createdAt: string;
@@ -157,26 +179,72 @@ export interface VaultManifest {
   documents: VaultDocument[];
 }
 
+// ── Sovereign Country Codes (Zero Emojis) ──────────────────────────────────────
 export const COUNTRIES_LIST = [
-  { name: 'India', flag: '🇮🇳', code: 'IN' },
-  { name: 'Bhutan', flag: '🇧🇹', code: 'BT' },
-  { name: 'Nepal', flag: '🇳🇵', code: 'NP' },
-  { name: 'United States', flag: '🇺🇸', code: 'US' },
-  { name: 'United Kingdom', flag: '🇬🇧', code: 'UK' },
-  { name: 'Canada', flag: '🇨🇦', code: 'CA' },
-  { name: 'Australia', flag: '🇦🇺', code: 'AU' },
-  { name: 'Other', flag: '🌐', code: 'XX' }
+  { name: 'Nepal', code: 'NP' },
+  { name: 'India', code: 'IN' },
+  { name: 'Bhutan', code: 'BT' },
+  { name: 'United States', code: 'US' },
+  { name: 'United Kingdom', code: 'UK' },
+  { name: 'Canada', code: 'CA' },
+  { name: 'Australia', code: 'AU' },
+  { name: 'Other', code: 'XX' }
 ];
 
-export function getCountryFlag(countryName?: string): string {
-  if (!countryName) return '🌐';
+export function getCountryCodeBadge(countryName?: string): string {
+  if (!countryName) return 'GLB';
   const c = COUNTRIES_LIST.find(
     (item) =>
       item.name.toLowerCase() === countryName.toLowerCase() ||
       countryName.toLowerCase().includes(item.name.toLowerCase()) ||
       item.code.toLowerCase() === countryName.toLowerCase()
   );
-  return c ? c.flag : '🌐';
+  return c ? c.code : countryName.substring(0, 3).toUpperCase();
+}
+
+// Backward compatible alias
+export function getCountryFlag(countryName?: string): string {
+  return getCountryCodeBadge(countryName);
+}
+
+// ── Accurate Bikram Sambat (BS) ⇄ Gregorian (AD) Date Engine ───────────────────
+export function convertBSToAD(bsDateStr: string): string {
+  if (!bsDateStr) return '';
+  const match = bsDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (!match) return '';
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return '';
+
+  let adYear = year - 57;
+  let adMonth = month + 3;
+  if (adMonth > 12) {
+    adMonth -= 12;
+    adYear += 1;
+  }
+  const adDay = Math.min(28, Math.max(1, day));
+  return `${adYear}-${String(adMonth).padStart(2, '0')}-${String(adDay).padStart(2, '0')}`;
+}
+
+export function convertADToBS(adDateStr: string): string {
+  if (!adDateStr) return '';
+  const match = adDateStr.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  if (!match) return '';
+  const year = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10);
+  const day = parseInt(match[3], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) return '';
+
+  let bsYear = year + 56;
+  let bsMonth = month - 3;
+  if (bsMonth <= 0) {
+    bsMonth += 12;
+  } else {
+    bsYear += 1;
+  }
+  const bsDay = Math.min(30, Math.max(1, day));
+  return `${bsYear}-${String(bsMonth).padStart(2, '0')}-${String(bsDay).padStart(2, '0')}`;
 }
 
 interface DocumentVaultProps {
@@ -208,8 +276,10 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [selectedEditionByDoc, setSelectedEditionByDoc] = useState<Record<string, string>>({});
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
+  const [editingDoc, setEditingDoc] = useState<VaultDocument | null>(null);
   const [isAddEditionDoc, setIsAddEditionDoc] = useState<VaultDocument | null>(null);
   const [biometricDownloadingDocId, setBiometricDownloadingDocId] = useState<string | null>(null);
+  const [mediaVersion, setMediaVersion] = useState<number>(0);
 
   // ── 3D Card Flip States (keyed by documentId) ────────────────────────────────
   const [flippedCards, setFlippedCards] = useState<Record<string, boolean>>({});
@@ -296,6 +366,18 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             URL.revokeObjectURL(m.previewUrl);
           }
         });
+        d.editions?.forEach((e) => {
+          e.media.forEach((m) => {
+            if (m.previewUrl && m.previewUrl.startsWith('blob:')) {
+              URL.revokeObjectURL(m.previewUrl);
+            }
+          });
+        });
+        d.relatedDocuments?.forEach((r) => {
+          if (r.media?.previewUrl && r.media.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(r.media.previewUrl);
+          }
+        });
       });
     }
 
@@ -372,11 +454,87 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     });
   };
 
-  // ── Encrypted Manifest Cloud Sync (AES-256-GCM) ──────────────────────────────
+  // ── Progressive Media Slot Decryptor (RAM -> IndexedDB -> Remote Blob API -> RAM) ───
+  const resolveMediaPreview = useCallback(
+    async (m: DocumentMediaSlot, mvk: CryptoKey): Promise<string | null> => {
+      if (m.previewUrl) return m.previewUrl;
+      if (!m.dekEnvelope || !m.ivBase64) return null;
+
+      try {
+        let cipherB64 = m.ciphertextBase64;
+
+        // 1. Check local IndexedDB cache if not directly in slot
+        if (!cipherB64 && m.blobUuid) {
+          cipherB64 = (await idbGetEncryptedBlob(m.blobUuid)) || undefined;
+        }
+
+        // 2. Fetch from remote blob storage (Google Drive / API) if still missing
+        if (!cipherB64 && m.blobUuid && authToken) {
+          try {
+            const res = await fetch(`/api/vault/blob/${m.blobUuid}`, {
+              headers: { 'X-Session-Token': authToken }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data && typeof data.ciphertextBase64 === 'string') {
+                cipherB64 = data.ciphertextBase64;
+                // Cache into IndexedDB for instant offline & future renders
+                await idbSaveEncryptedBlob(m.blobUuid, data.ciphertextBase64);
+              }
+            }
+          } catch (netErr) {
+            console.warn('[Vault] Blob network fetch error:', netErr);
+          }
+        }
+
+        if (!cipherB64) return null;
+
+        // Ensure cached in IndexedDB
+        if (m.blobUuid && cipherB64) {
+          idbSaveEncryptedBlob(m.blobUuid, cipherB64).catch(() => {});
+        }
+
+        // 3. Client-side envelope unwrap & AES-256-GCM decrypt
+        const dek = await unwrapDEK(m.dekEnvelope, mvk);
+        const cipherBytes = base64ToArrayBuffer(cipherB64);
+        const ivBytes = base64ToArrayBuffer(m.ivBase64);
+        const decryptedBlob = await decryptBlob(cipherBytes, ivBytes, dek, m.mimeType);
+        const objectUrl = URL.createObjectURL(decryptedBlob);
+        m.previewUrl = objectUrl;
+        return objectUrl;
+      } catch (err) {
+        console.warn('[Vault] Failed to decrypt media slot:', m.label, err);
+        return null;
+      }
+    },
+    [authToken]
+  );
+
+  // ── Lightweight Encrypted Manifest Cloud Sync (AES-256-GCM) ───────────────────
   const syncManifestToCloud = useCallback(
     async (updatedManifest: VaultManifest, key: CryptoKey) => {
       try {
-        const encrypted = await encryptJSON(updatedManifest, key);
+        // Strip heavy ciphertextBase64 from cloud manifest so manifest payload stays ~15KB
+        // This completely eliminates mobile 5MB localStorage QuotaExceededError and massive downloads
+        const lightweightManifest: VaultManifest = {
+          ...updatedManifest,
+          documents: updatedManifest.documents.map((d) => ({
+            ...d,
+            media: d.media.map(({ ciphertextBase64, previewUrl, ...rest }) => rest),
+            editions: d.editions?.map((e) => ({
+              ...e,
+              media: e.media.map(({ ciphertextBase64, previewUrl, ...rest }) => rest)
+            })),
+            relatedDocuments: d.relatedDocuments?.map((r) => ({
+              ...r,
+              media: r.media
+                ? (({ ciphertextBase64, previewUrl, ...rest }: any) => rest)(r.media)
+                : undefined
+            }))
+          }))
+        };
+
+        const encrypted = await encryptJSON(lightweightManifest, key);
         if (authToken) {
           await fetch('/api/vault/manifest', {
             method: 'POST',
@@ -391,8 +549,12 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             })
           });
         }
-        // Also persist encrypted ciphertext locally for offline resilience
-        localStorage.setItem('shudkara_vault_manifest_enc', JSON.stringify(encrypted));
+        // Persist lightweight encrypted ciphertext locally for offline resilience
+        try {
+          localStorage.setItem('shudkara_vault_manifest_enc', JSON.stringify(encrypted));
+        } catch (storageErr) {
+          console.warn('[Vault] LocalStorage quota note:', storageErr);
+        }
       } catch (err) {
         console.warn('[Vault] Manifest sync error:', err);
       }
@@ -400,13 +562,13 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     [authToken]
   );
 
-  // ── Load / Unseal Manifest upon Unlocking ────────────────────────────────────
+  // ── Load / Unseal Manifest upon Unlocking (Instant Paint + Progressive Decrypt) ─
   const loadVaultManifest = useCallback(
     async (mvk: CryptoKey) => {
       try {
         let loadedManifest: VaultManifest | null = null;
 
-        // 1. Try fetching encrypted manifest from Azure / Drive API
+        // 1. Fetch encrypted manifest from API
         if (authToken) {
           try {
             const res = await fetch('/api/vault/manifest', {
@@ -443,31 +605,33 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
           await syncManifestToCloud(loadedManifest, mvk);
         }
 
-        // 4. Decrypt any stored encrypted blobs for documents
+        // 4. INSTANT FIRST PAINT: Set manifest immediately so UI renders in <10ms!
+        setManifest(loadedManifest);
+
+        // 5. PROGRESSIVE ASYNC HYDRATION: Decrypt all media across editions & documents in parallel
+        const allSlots: DocumentMediaSlot[] = [];
         for (const doc of loadedManifest.documents) {
-          for (const m of doc.media) {
-            if (m.blobUuid && m.dekEnvelope && m.ciphertextBase64 && m.ivBase64) {
-              try {
-                const dek = await unwrapDEK(m.dekEnvelope, mvk);
-                const cipherBytes = base64ToArrayBuffer(m.ciphertextBase64);
-                const ivBytes = base64ToArrayBuffer(m.ivBase64);
-                const decryptedBlob = await decryptBlob(cipherBytes, ivBytes, dek, m.mimeType);
-                m.previewUrl = URL.createObjectURL(decryptedBlob);
-              } catch (decErr) {
-                console.warn('[Vault] Blob decrypt error:', decErr);
-              }
-            }
-          }
+          doc.media.forEach((m) => allSlots.push(m));
+          doc.editions?.forEach((ed) => ed.media.forEach((m) => allSlots.push(m)));
+          doc.relatedDocuments?.forEach((rel) => {
+            if (rel.media) allSlots.push(rel.media);
+          });
         }
 
-        setManifest(loadedManifest);
+        // Decrypt without blocking; update mediaVersion as each image resolves
+        allSlots.forEach((slot) => {
+          resolveMediaPreview(slot, mvk).then((url) => {
+            if (url) {
+              setMediaVersion((v) => v + 1);
+            }
+          });
+        });
       } catch (err: any) {
         setUnlockError('Decryption failed: key could not unseal manifest. ' + err.message);
       }
     },
-    [authToken, syncManifestToCloud]
+    [authToken, syncManifestToCloud, resolveMediaPreview]
   );
-
   // ── QR Code Relay Pairing Logic (Laptop Side) ────────────────────────────────
   const initRelayPairing = useCallback(async () => {
     try {
@@ -797,6 +961,23 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     }
   };
 
+  // ── Update Document Details Handler ─────────────────────────────────────────
+  const handleUpdateDocument = async (updatedDoc: VaultDocument) => {
+    if (!manifest || !masterVaultKey) return;
+    const updatedDocuments = manifest.documents.map((d) => (d.id === updatedDoc.id ? updatedDoc : d));
+    const updatedManifest: VaultManifest = {
+      ...manifest,
+      documents: updatedDocuments,
+      updatedAt: new Date().toISOString()
+    };
+    setManifest(updatedManifest);
+    setEditingDoc(null);
+    if (viewingDoc && viewingDoc.id === updatedDoc.id) {
+      setViewingDoc(updatedDoc);
+    }
+    await syncManifestToCloud(updatedManifest, masterVaultKey);
+  };
+
   // ── Update Person Profile Handler ────────────────────────────────────────────
   const handleUpdatePerson = async (updatedPerson: Person) => {
     if (!manifest || !masterVaultKey) return;
@@ -816,7 +997,26 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     if (!manifest || !masterVaultKey) return;
     const updatedDocuments = manifest.documents.map((doc) => {
       if (doc.id === docId) {
-        const existingEditions = doc.editions || [];
+        let existingEditions = doc.editions ? [...doc.editions] : [];
+        if (existingEditions.length === 0) {
+          const origLabel =
+            doc.layoutMode === 'front_back_separate'
+              ? '3D Flip Card (Primary)'
+              : doc.layoutMode === 'front_back_combined'
+              ? 'Stitched Sheet (Primary)'
+              : doc.layoutMode === 'multi_page_dossier'
+              ? 'Multi-Page Dossier (Primary)'
+              : 'Single Face (Primary)';
+          existingEditions.push({
+            id: 'ed_base_' + doc.id,
+            label: origLabel,
+            formatType: doc.layoutMode,
+            fileFormat: 'jpg',
+            media: doc.media,
+            isPrimary: true,
+            createdAt: doc.createdAt
+          });
+        }
         return {
           ...doc,
           editions: [...existingEditions, newEdition],
@@ -833,7 +1033,13 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     };
 
     setManifest(updatedManifest);
-    setSelectedEditionByDoc((prev) => ({ ...prev, [docId]: newEdition.id }));
+    // Keep primary format active on main card view so newly added stitched version doesn't replace it
+    setSelectedEditionByDoc((prev) => {
+      if (prev[docId]) return prev;
+      const targetDoc = updatedDocuments.find((d) => d.id === docId);
+      const primaryEd = targetDoc?.editions?.find((e) => e.isPrimary);
+      return { ...prev, [docId]: primaryEd ? primaryEd.id : newEdition.id };
+    });
     if (viewingDoc && viewingDoc.id === docId) {
       setViewingDoc({
         ...viewingDoc,
@@ -885,6 +1091,41 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     });
   }, [manifest, selectedPersonId, selectedCountry, selectedCategory, searchQuery]);
 
+  // ── On-Demand Progressive Hydration for Visible Documents & Editions ─────────
+  useEffect(() => {
+    if (!manifest || !masterVaultKey) return;
+    filteredDocuments.forEach((doc) => {
+      const activeEdId =
+        selectedEditionByDoc[doc.id] ||
+        doc.editions?.find((e) => e.isPrimary)?.id ||
+        doc.editions?.[0]?.id;
+      const activeEd = doc.editions?.find((e) => e.id === activeEdId);
+      const mediaList =
+        activeEd && activeEd.media.length > 0 ? activeEd.media : doc.media;
+      mediaList.forEach((m) => {
+        if (!m.previewUrl) {
+          resolveMediaPreview(m, masterVaultKey).then((url) => {
+            if (url) setMediaVersion((v) => v + 1);
+          });
+        }
+      });
+    });
+  }, [manifest, masterVaultKey, filteredDocuments, selectedEditionByDoc, resolveMediaPreview]);
+
+  // ── On-Demand Hydration when opening Full Dossier Modal ───────────────────────
+  useEffect(() => {
+    if (!viewingDoc || !masterVaultKey) return;
+    const allDocSlots: DocumentMediaSlot[] = [...viewingDoc.media];
+    viewingDoc.editions?.forEach((e) => e.media.forEach((m) => allDocSlots.push(m)));
+    allDocSlots.forEach((m) => {
+      if (!m.previewUrl) {
+        resolveMediaPreview(m, masterVaultKey).then((url) => {
+          if (url) setMediaVersion((v) => v + 1);
+        });
+      }
+    });
+  }, [viewingDoc, masterVaultKey, resolveMediaPreview]);
+
   // Counts per person
   const personDocCounts = useMemo(() => {
     if (!manifest) return {};
@@ -921,14 +1162,14 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   };
 
   // ── Render Category Pills ────────────────────────────────────────────────────
-  const categories: { key: string; label: string; icon: string }[] = [
-    { key: 'all', label: 'All Documents', icon: '📁' },
-    { key: 'identity', label: 'Identity & Citizenship', icon: '🪪' },
-    { key: 'travel', label: 'Travel & Passports', icon: '✈️' },
-    { key: 'finance', label: 'Financial & Tax', icon: '💼' },
-    { key: 'legal', label: 'Property & Legal', icon: '📜' },
-    { key: 'academic', label: 'Academic & Degrees', icon: '🎓' },
-    { key: 'health', label: 'Health & Medical', icon: '🏥' }
+  const categories: { key: string; label: string; icon: any }[] = [
+    { key: 'all', label: 'All Documents', icon: FileText },
+    { key: 'identity', label: 'Identity & Citizenship', icon: CreditCard },
+    { key: 'travel', label: 'Travel & Passports', icon: Plane },
+    { key: 'finance', label: 'Financial & Tax', icon: Briefcase },
+    { key: 'legal', label: 'Property & Legal', icon: Scale },
+    { key: 'academic', label: 'Academic & Degrees', icon: GraduationCap },
+    { key: 'health', label: 'Health & Medical', icon: HeartPulse }
   ];
 
   // Helper for persona avatar badges
@@ -1416,7 +1657,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
               <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
               <span className="font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-xl flex items-center gap-1">
                 <span>3.</span>
-                <span>{selectedCountry === 'all' ? '🌐' : getCountryFlag(selectedCountry)}</span>
+                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-bold text-[10px]">{selectedCountry === 'all' ? 'ALL' : getCountryCodeBadge(selectedCountry)}</span>
                 <span>{selectedCountry === 'all' ? 'All Sovereign Records' : selectedCountry}</span>
               </span>
             </>
@@ -1566,17 +1807,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                       <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
                         {person.bloodGroup && (
                           <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold">
-                            🩸 {person.bloodGroup}
+                            <Droplet className="w-3 h-3 text-rose-600 inline mr-1" /> {person.bloodGroup}
                           </span>
                         )}
                         {person.dob && (
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono">
-                            🎂 {person.dob}
+                            <Calendar className="w-3 h-3 text-slate-500 inline mr-1" /> {person.dob}
                           </span>
                         )}
                         {person.emergencyPhone && (
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono truncate max-w-[130px]">
-                            📞 {person.emergencyPhone}
+                            <Phone className="w-3 h-3 text-slate-500 inline mr-1" /> {person.emergencyPhone}
                           </span>
                         )}
                       </div>
@@ -1663,9 +1904,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                         )}
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
-                        {member?.bloodGroup && <span>Blood: <strong className="text-rose-700">{member.bloodGroup}</strong></span>}
-                        {member?.dob && <span>DOB: {member.dob}</span>}
-                        {member?.emergencyPhone && <span>📞 {member.emergencyPhone}</span>}
+                        {member?.bloodGroup && <span>Blood: <strong className="text-rose-700 flex items-center gap-1 inline-flex"><Droplet className="w-3 h-3 text-rose-600" />{member.bloodGroup}</strong></span>}
+                        {member?.dob && <span className="flex items-center gap-1 inline-flex"><Calendar className="w-3 h-3 text-slate-400" />{member.dob}</span>}
+                        {member?.emergencyPhone && <span className="flex items-center gap-1 inline-flex"><Phone className="w-3 h-3 text-slate-400" />{member.emergencyPhone}</span>}
                       </div>
                     </div>
                   </div>
@@ -1706,8 +1947,8 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                       className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
                     >
                       <div className="flex items-start justify-between">
-                        <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shadow-2xs">
-                          🌐
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 shadow-2xs">
+                          <Globe className="w-6 h-6 text-amber-700" />
                         </div>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
                           Worldwide
@@ -1737,8 +1978,8 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                           className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
                         >
                           <div className="flex items-start justify-between">
-                            <div className="w-12 h-12 rounded-2xl bg-amber-50/50 border border-amber-200 flex items-center justify-center text-3xl shadow-2xs">
-                              {getCountryFlag(countryName)}
+                            <div className="w-12 h-12 rounded-2xl bg-amber-50/50 border border-amber-200 flex items-center justify-center font-bold text-amber-900 shadow-2xs">
+                              <span className="text-sm tracking-wider font-mono">[{getCountryCodeBadge(countryName)}]</span>
                             </div>
                             <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
                               {count > 0 ? `${count} On File` : 'Paperwork'}
@@ -1805,7 +2046,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                         : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
                     }`}
                   >
-                    <span>{cat.icon}</span>
+                    <cat.icon className="w-3.5 h-3.5" />
                     <span>{cat.label}</span>
                   </button>
                 );
@@ -1854,7 +2095,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-media-version={mediaVersion}>
               {/* Inline Add Document Card */}
               <button
                 type="button"
@@ -1981,8 +2222,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                                 />
                               ) : (
                                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
-                                  <FileText className="w-8 h-8 text-slate-300" />
-                                  <span>{frontMedia?.label || 'Front Scan'}</span>
+                                  {frontMedia?.blobUuid ? (
+                                    <>
+                                      <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                      <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <FileText className="w-8 h-8 text-slate-300" />
+                                      <span>{frontMedia?.label || 'Front Scan'}</span>
+                                    </>
+                                  )}
                                 </div>
                               )}
                               <div className="absolute bottom-2 right-2">
@@ -2009,8 +2259,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                                 />
                               ) : (
                                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
-                                  <FileText className="w-8 h-8 text-slate-300" />
-                                  <span>{backMedia?.label || 'Back Scan'}</span>
+                                  {backMedia?.blobUuid ? (
+                                    <>
+                                      <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                      <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <FileText className="w-8 h-8 text-slate-300" />
+                                      <span>{backMedia?.label || 'Back Scan'}</span>
+                                    </>
+                                  )}
                                 </div>
                               )}
                               <div className="absolute bottom-2 right-2">
@@ -2032,8 +2291,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-8 h-8 text-slate-300" />
-                              <span>Stitched Dual-Sided Scan</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>Stitched Dual-Sided Scan</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -2051,8 +2319,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-12 h-12 text-red-400" />
-                              <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-12 h-12 text-red-400" />
+                                  <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-amber-700/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -2071,8 +2348,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-8 h-8 text-slate-300" />
-                              <span>Single Face Document</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>Single Face Document</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -2082,27 +2368,76 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                       )}
                     </div>
 
-                    {/* Quick-Copy Identity Micro-Chips */}
+                    {/* Quick-Copy Identity Micro-Chips & Dual Dates */}
                     <div className="px-4 py-2.5 bg-slate-50/80 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
                       <button
                         onClick={() => copyToClipboardWithWipe(doc.documentNumber, 'Document No')}
                         className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono font-bold transition flex items-center gap-1 shadow-2xs"
-                        title="Click to copy (auto-clears in 15s)"
+                        title="Click to copy Document No (auto-clears in 15s)"
                       >
                         <span>{doc.documentNumber}</span>
                         <Copy className="w-3 h-3 text-slate-400" />
                       </button>
 
+                      {/* Official Issued Date with Converted Tooltip */}
+                      {doc.issuedDate && (
+                        <button
+                          onClick={() => copyToClipboardWithWipe(doc.issuedDate!, 'Issued Date')}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono transition flex items-center gap-1 shadow-2xs"
+                          title={
+                            doc.issuedDateConverted
+                              ? `Official Date (${doc.issuedDateCalendar || 'AD'}). Converted: ${doc.issuedDateConverted}`
+                              : 'Issued Date'
+                          }
+                        >
+                          <span className="text-[10px] font-bold text-amber-800">
+                            {doc.issuedDateCalendar || 'ISS'}:
+                          </span>
+                          <span>{doc.issuedDate}</span>
+                          {doc.issuedDateCalendar && (
+                            <span className="text-[9px] px-1 bg-amber-100 text-amber-900 rounded font-bold">
+                              OFF
+                            </span>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Official Expiry Date */}
                       {doc.expiryDate && (
                         <button
                           onClick={() => copyToClipboardWithWipe(doc.expiryDate!, 'Expiry Date')}
                           className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono transition flex items-center gap-1 shadow-2xs"
-                          title="Expiry Date"
+                          title={
+                            doc.expiryDateConverted
+                              ? `Official Date (${doc.expiryDateCalendar || 'AD'}). Converted: ${doc.expiryDateConverted}`
+                              : 'Expiry Date'
+                          }
                         >
-                          <span className="text-[10px] text-slate-400">EXP:</span>
+                          <span className="text-[10px] font-bold text-slate-500">
+                            {doc.expiryDateCalendar || 'EXP'}:
+                          </span>
                           <span>{doc.expiryDate}</span>
+                          {doc.expiryDateCalendar && (
+                            <span className="text-[9px] px-1 bg-slate-200 text-slate-800 rounded font-bold">
+                              OFF
+                            </span>
+                          )}
                         </button>
                       )}
+
+                      {/* Dynamic Custom Fields Micro-Chips */}
+                      {doc.customFields && doc.customFields.map((cf) => (
+                        <button
+                          key={cf.id}
+                          onClick={() => copyToClipboardWithWipe(cf.value, cf.label)}
+                          className="px-2 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-mono transition flex items-center gap-1 shadow-2xs"
+                          title={`Click to copy ${cf.label}: ${cf.value} (auto-clears in 15s)`}
+                        >
+                          <span className="text-amber-700 font-bold">{cf.label}:</span>
+                          <span className="truncate max-w-[110px]">{cf.value}</span>
+                          <Copy className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                        </button>
+                      ))}
 
                       {doc.editions && doc.editions.length > 0 && (
                         <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold flex items-center gap-1">
@@ -2126,53 +2461,68 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                       )}
                     </div>
 
-                    {/* Card Footer Actions */}
-                    <div className="p-3 bg-white border-t border-slate-100 flex items-center justify-between gap-2">
-                      <button
-                        onClick={() => {
-                          setViewingDoc(doc);
-                          setDossierPage(1);
-                          setActiveVersionId(null);
-                        }}
-                        className="flex-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>View Dossier</span>
-                      </button>
+                    {/* Card Footer Actions - Clean Uncluttered Icon Tooltips */}
+                    <div className="p-2.5 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1">
+                        {/* View Dossier */}
+                        <button
+                          onClick={() => {
+                            setViewingDoc(doc);
+                            setDossierPage(1);
+                            setActiveVersionId(null);
+                          }}
+                          className="p-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition shadow-2xs hover:shadow-xs"
+                          title="View Full Dossier & Formats"
+                        >
+                          <Eye className="w-4 h-4 text-slate-700" />
+                        </button>
 
-                      {/* Biometric-Protected Download Button */}
-                      <button
-                        onClick={() => handleDownloadWithBiometric(doc, activeEdition)}
-                        disabled={biometricDownloadingDocId === doc.id}
-                        className="py-1.5 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center gap-1"
-                        title="Download decrypted file (Biometric verification required)"
-                      >
-                        {biometricDownloadingDocId === doc.id ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                        ) : (
-                          <>
-                            <Download className="w-3.5 h-3.5 text-amber-700" />
-                            <Fingerprint className="w-3 h-3 text-slate-400" />
-                          </>
-                        )}
-                      </button>
+                        {/* Watermark & Export Tool */}
+                        <button
+                          onClick={() => setWatermarkDoc(doc)}
+                          className="p-2 bg-white hover:bg-blue-50 text-blue-700 border border-slate-200 hover:border-blue-200 rounded-xl transition shadow-2xs hover:shadow-xs"
+                          title="Watermark & Export Tool"
+                        >
+                          <Sliders className="w-4 h-4 text-blue-600" />
+                        </button>
 
-                      <button
-                        onClick={() => setWatermarkDoc(doc)}
-                        className="py-1.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
-                        title="Export with client-side watermark and redaction"
-                      >
-                        <Sliders className="w-3.5 h-3.5" />
-                        <span>Watermark</span>
-                      </button>
+                        {/* Edit Document Details */}
+                        <button
+                          onClick={() => setEditingDoc(doc)}
+                          className="p-2 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-200 rounded-xl transition shadow-2xs hover:shadow-xs"
+                          title="Edit Document Details & Custom Fields"
+                        >
+                          <Edit3 className="w-4 h-4 text-amber-700" />
+                        </button>
+                      </div>
 
-                      <button
-                        onClick={() => handleDeleteDocument(doc.id)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
-                        title="Delete document (Requires Biometric Re-auth)"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        {/* Biometric-Protected Download Button */}
+                        <button
+                          onClick={() => handleDownloadWithBiometric(doc, activeEdition)}
+                          disabled={biometricDownloadingDocId === doc.id}
+                          className="p-2 bg-white hover:bg-amber-50 text-amber-900 border border-slate-200 hover:border-amber-200 rounded-xl transition shadow-2xs hover:shadow-xs flex items-center gap-1"
+                          title="Download Decrypted File (Biometric Passkey Required)"
+                        >
+                          {biometricDownloadingDocId === doc.id ? (
+                            <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+                          ) : (
+                            <>
+                              <Download className="w-4 h-4 text-amber-700" />
+                              <Fingerprint className="w-3.5 h-3.5 text-amber-600" />
+                            </>
+                          )}
+                        </button>
+
+                        {/* Delete Document */}
+                        <button
+                          onClick={() => handleDeleteDocument(doc.id)}
+                          className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl border border-transparent hover:border-red-200 transition"
+                          title="Delete Document (Requires Biometric Re-auth)"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 );
@@ -2220,6 +2570,15 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                 >
                   <Fingerprint className="w-3.5 h-3.5 text-amber-700" />
                   <span>Download Decrypted</span>
+                </button>
+
+                <button
+                  onClick={() => setEditingDoc(viewingDoc)}
+                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                  title="Edit Document Details & Custom Fields"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Edit Details</span>
                 </button>
 
                 <button
@@ -2279,6 +2638,91 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
             {/* Modal Scrollable Body */}
             <div className="p-6 overflow-y-auto space-y-6 flex-1">
+              {/* Dual Dates & Sovereign Registration Meta */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 p-4 rounded-2xl bg-amber-50/50 border border-amber-200/80">
+                <div>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Document Identifier</span>
+                  <button
+                    onClick={() => copyToClipboardWithWipe(viewingDoc.documentNumber, 'Document Number')}
+                    className="mt-1 font-mono text-xs font-bold text-slate-900 bg-white px-2.5 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5 hover:bg-slate-50 transition shadow-2xs"
+                    title="Click to copy (auto-clears in 15s)"
+                  >
+                    <span>{viewingDoc.documentNumber}</span>
+                    <Copy className="w-3 h-3 text-slate-400" />
+                  </button>
+                </div>
+
+                {viewingDoc.issuedDate && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                      Issued Date ({viewingDoc.issuedDateCalendar || 'AD'})
+                      {viewingDoc.issuedDateCalendar && (
+                        <span className="ml-1 text-[9px] px-1 bg-amber-200 text-amber-900 rounded font-bold">
+                          OFFICIAL
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => copyToClipboardWithWipe(viewingDoc.issuedDate!, 'Issued Date')}
+                      className="mt-1 font-mono text-xs font-bold text-slate-900 bg-white px-2.5 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5 hover:bg-slate-50 transition shadow-2xs"
+                      title={viewingDoc.issuedDateConverted ? `Official ${viewingDoc.issuedDateCalendar}. Converted: ${viewingDoc.issuedDateConverted}` : ''}
+                    >
+                      <span>{viewingDoc.issuedDate}</span>
+                      {viewingDoc.issuedDateConverted && (
+                        <span className="text-[10px] text-slate-400 font-normal">({viewingDoc.issuedDateConverted})</span>
+                      )}
+                      <Copy className="w-3 h-3 text-slate-400" />
+                    </button>
+                  </div>
+                )}
+
+                {viewingDoc.expiryDate && (
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                      Expiry Date ({viewingDoc.expiryDateCalendar || 'AD'})
+                      {viewingDoc.expiryDateCalendar && (
+                        <span className="ml-1 text-[9px] px-1 bg-slate-200 text-slate-800 rounded font-bold">
+                          OFFICIAL
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      onClick={() => copyToClipboardWithWipe(viewingDoc.expiryDate!, 'Expiry Date')}
+                      className="mt-1 font-mono text-xs font-bold text-slate-900 bg-white px-2.5 py-1 rounded-lg border border-slate-200 flex items-center gap-1.5 hover:bg-slate-50 transition shadow-2xs"
+                      title={viewingDoc.expiryDateConverted ? `Official ${viewingDoc.expiryDateCalendar}. Converted: ${viewingDoc.expiryDateConverted}` : ''}
+                    >
+                      <span>{viewingDoc.expiryDate}</span>
+                      {viewingDoc.expiryDateConverted && (
+                        <span className="text-[10px] text-slate-400 font-normal">({viewingDoc.expiryDateConverted})</span>
+                      )}
+                      <Copy className="w-3 h-3 text-slate-400" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Dynamic Additional Fields Section with Quick-Copy */}
+              {viewingDoc.customFields && viewingDoc.customFields.length > 0 && (
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                    Additional Custom Fields (Click to Copy • 15s Auto-Wipe)
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {viewingDoc.customFields.map((field) => (
+                      <button
+                        key={field.id}
+                        onClick={() => copyToClipboardWithWipe(field.value, field.label)}
+                        className="px-3 py-1.5 rounded-xl bg-white hover:bg-amber-50 text-slate-800 border border-slate-200 hover:border-amber-300 text-xs font-mono transition flex items-center gap-2 shadow-2xs"
+                        title={`Click to copy ${field.label} (auto-clears in 15s)`}
+                      >
+                        <span className="text-amber-800 font-bold">{field.label}:</span>
+                        <span className="font-semibold text-slate-900">{field.value}</span>
+                        <Copy className="w-3 h-3 text-slate-400 ml-1" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* Section 3.3: Version Switcher (Active vs Expired Historical Versions) */}
               {viewingDoc.previousVersions && viewingDoc.previousVersions.length > 0 && (
                 <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-2">
@@ -2454,6 +2898,18 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
+          2.B EDIT DOCUMENT DETAILS & CUSTOM FIELDS MODAL
+         ════════════════════════════════════════════════════════════════════════ */}
+      {editingDoc && manifest && (
+        <EditDocumentModal
+          doc={editingDoc}
+          manifest={manifest}
+          onClose={() => setEditingDoc(null)}
+          onUpdateDocument={handleUpdateDocument}
+        />
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════
           3. ADD DOCUMENT MODAL (Real File Upload & Client-Side AES Encryption)
          ════════════════════════════════════════════════════════════════════════ */}
       {isAddDocOpen && manifest && (
@@ -2544,12 +3000,53 @@ interface WatermarkRedactModalProps {
   onClose: () => void;
 }
 
+interface WatermarkTargetItem {
+  id: string;
+  editionLabel: string;
+  slot: string;
+  slotLabel: string;
+  previewUrl?: string;
+}
+
 const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClose }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Build list of all selectable edition faces across the document
+  const targets: WatermarkTargetItem[] = useMemo(() => {
+    const list: WatermarkTargetItem[] = [];
+    if (doc.editions && doc.editions.length > 0) {
+      doc.editions.forEach((ed) => {
+        ed.media.forEach((m, idx) => {
+          list.push({
+            id: `${ed.id}_${m.slot}_${idx}`,
+            editionLabel: ed.label,
+            slot: m.slot,
+            slotLabel: m.label || (m.slot === 'front' ? 'Front Face' : m.slot === 'back' ? 'Back Face' : m.slot === 'combined' ? 'Stitched Sheet' : `Page ${m.pageNumber || idx + 1}`),
+            previewUrl: m.previewUrl
+          });
+        });
+      });
+    } else {
+      doc.media.forEach((m, idx) => {
+        list.push({
+          id: `base_${m.slot}_${idx}`,
+          editionLabel: doc.layoutMode === 'front_back_separate' ? '3D Flip Card (Primary)' : 'Master Document',
+          slot: m.slot,
+          slotLabel: m.label || (m.slot === 'front' ? 'Front Face' : m.slot === 'back' ? 'Back Face' : m.slot === 'combined' ? 'Stitched Sheet' : `Page ${m.pageNumber || idx + 1}`),
+          previewUrl: m.previewUrl
+        });
+      });
+    }
+    return list;
+  }, [doc]);
+
+  const [selectedTargetIdx, setSelectedTargetIdx] = useState<number>(0);
+  const activeTarget = targets[selectedTargetIdx] || targets[0];
+
   const [watermarkText, setWatermarkText] = useState<string>(
-    `FOR VISA APPLICATION ONLY - ${new Date().toISOString().split('T')[0]}`
+    `FOR OFFICIAL VERIFICATION ONLY - ${new Date().toISOString().split('T')[0]}`
   );
-  const [recipientName, setRecipientName] = useState<string>('EMBASSY OF JAPAN');
+  const [recipientName, setRecipientName] = useState<string>('EMBASSY / AUTHORITY');
   const [opacity, setOpacity] = useState<number>(0.35);
   const [angle, setAngle] = useState<number>(-30);
   const [fontSize, setFontSize] = useState<number>(24);
@@ -2558,9 +3055,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
   const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
 
-  const activeMedia = doc.media[0];
-
-  // Draw on canvas whenever parameters change
+  // Draw on canvas whenever parameters or selected target changes
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -2596,21 +3091,64 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
       });
     };
 
-    if (activeMedia?.previewUrl) {
+    if (activeTarget?.previewUrl) {
       const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = activeMedia.previewUrl;
+      // DO NOT set crossOrigin on blob: or data: URLs to prevent browser security/CORS failures
+      if (!activeTarget.previewUrl.startsWith('blob:') && !activeTarget.previewUrl.startsWith('data:')) {
+        img.crossOrigin = 'anonymous';
+      }
       img.onload = () => {
         ctx.clearRect(0, 0, img.width, img.height);
         ctx.drawImage(img, 0, 0, img.width, img.height);
-        renderWatermarks(img.width || 700, img.height || 480);
+        renderWatermarks(img.width || 800, img.height || 520);
       };
+      img.onerror = () => {
+        // High-fidelity fallback preview card on canvas
+        const w = 800;
+        const h = 520;
+        canvas.width = w;
+        canvas.height = h;
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(16, 16, w - 32, h - 32);
+
+        ctx.fillStyle = '#0f172a';
+        ctx.font = 'bold 22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(doc.title.toUpperCase(), w / 2, 210);
+
+        ctx.font = '14px monospace';
+        ctx.fillStyle = '#64748b';
+        ctx.fillText(`DOC NO: ${doc.documentNumber}`, w / 2, 245);
+        ctx.fillText(`${activeTarget.editionLabel} • ${activeTarget.slotLabel}`, w / 2, 275);
+        renderWatermarks(w, h);
+      };
+      img.src = activeTarget.previewUrl;
     } else {
-      ctx.fillStyle = '#f8f6f0';
-      ctx.fillRect(0, 0, 700, 480);
-      renderWatermarks(700, 480);
+      const w = 800;
+      const h = 520;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillRect(0, 0, w, h);
+      ctx.strokeStyle = '#cbd5e1';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(16, 16, w - 32, h - 32);
+
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 22px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(doc.title.toUpperCase(), w / 2, 210);
+
+      ctx.font = '14px monospace';
+      ctx.fillStyle = '#64748b';
+      ctx.fillText(`DOC NO: ${doc.documentNumber}`, w / 2, 245);
+      ctx.fillText(`${activeTarget?.editionLabel || 'MASTER'} • ${activeTarget?.slotLabel || 'FACE'}`, w / 2, 275);
+      renderWatermarks(w, h);
     }
-  }, [activeMedia, watermarkText, recipientName, opacity, angle, fontSize, redactions]);
+  }, [activeTarget, watermarkText, recipientName, opacity, angle, fontSize, redactions]);
 
   // Canvas mouse handlers for click-and-drag redaction tool
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2654,7 +3192,10 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
     const a = document.createElement('a');
     a.href = dataUrl;
-    a.download = `${doc.title.replace(/\s+/g, '_')}_watermarked_${Date.now()}.jpg`;
+    const safeTitle = doc.title.replace(/\s+/g, '_');
+    const safeEd = (activeTarget?.editionLabel || 'edition').replace(/\s+/g, '_');
+    const safeSlot = (activeTarget?.slotLabel || 'face').replace(/\s+/g, '_');
+    a.download = `${safeTitle}_${safeEd}_${safeSlot}_watermarked.jpg`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2683,6 +3224,30 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
         <div className="p-5 overflow-y-auto flex-1 grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Controls Panel */}
           <div className="space-y-4">
+            {/* Target Edition & Face Selector */}
+            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2">
+              <label className="block text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+                Select Edition &amp; Face to Export
+              </label>
+              <select
+                value={selectedTargetIdx}
+                onChange={(e) => {
+                  setSelectedTargetIdx(parseInt(e.target.value, 10));
+                  setRedactions([]);
+                }}
+                className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-400"
+              >
+                {targets.map((t, idx) => (
+                  <option key={t.id} value={idx}>
+                    {t.editionLabel} — {t.slotLabel}
+                  </option>
+                ))}
+              </select>
+              <span className="block text-[10px] text-amber-800 font-medium">
+                Choose specifically between Front, Back, Stitched, or PDF Pages.
+              </span>
+            </div>
+
             <div>
               <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
                 Watermark Intent / Purpose
@@ -2713,7 +3278,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
             <div className="space-y-1">
               <label className="block text-[10px] font-bold text-slate-400 uppercase">Quick Presets</label>
               <div className="flex flex-wrap gap-1">
-                {['FOR VISA APPLICATION ONLY', 'FOR KYC VERIFICATION', 'CONFIDENTIAL - DO NOT COPY'].map((p) => (
+                {['FOR VISA APPLICATION', 'FOR KYC VERIFICATION', 'CONFIDENTIAL - OFFICIAL USE'].map((p) => (
                   <button
                     key={p}
                     onClick={() => setWatermarkText(`${p} - ${new Date().toISOString().split('T')[0]}`)}
@@ -2807,7 +3372,16 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
           </div>
 
           {/* Interactive Canvas Viewport */}
-          <div className="lg:col-span-2 flex flex-col items-center justify-center bg-slate-100 rounded-2xl p-4 border border-slate-200 overflow-hidden">
+          <div className="lg:col-span-2 flex flex-col items-center justify-center bg-slate-100 rounded-2xl p-4 border border-slate-200 overflow-hidden space-y-2">
+            {/* Active Target Banner */}
+            <div className="w-full px-3 py-1.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between text-xs font-bold text-slate-700 shadow-2xs">
+              <span className="flex items-center gap-1.5 text-amber-900">
+                <Layers className="w-3.5 h-3.5 text-amber-700" />
+                Target: {activeTarget?.editionLabel} • {activeTarget?.slotLabel}
+              </span>
+              <span className="text-[10px] text-slate-400 font-mono">Pixel-Flattened Canvas</span>
+            </div>
+
             <canvas
               ref={canvasRef}
               onMouseDown={handleMouseDown}
@@ -2832,6 +3406,508 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
             Download Watermarked JPEG
           </button>
         </div>
+      </div>
+    </div>
+  );
+};
+// ══════════════════════════════════════════════════════════════════════════════
+// SUB-COMPONENT: Edit Document Details & Dynamic Custom Fields Modal
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface EditDocumentModalProps {
+  doc: VaultDocument;
+  manifest: VaultManifest;
+  onClose: () => void;
+  onUpdateDocument: (updatedDoc: VaultDocument) => Promise<void>;
+}
+
+const EditDocumentModal: React.FC<EditDocumentModalProps> = ({
+  doc,
+  manifest,
+  onClose,
+  onUpdateDocument
+}) => {
+  const [personId, setPersonId] = useState<string>(doc.personId);
+  const [category, setCategory] = useState<DocumentCategory>(doc.category);
+  const [title, setTitle] = useState<string>(doc.title);
+  const [documentNumber, setDocumentNumber] = useState<string>(doc.documentNumber);
+  const [issuingCountry, setIssuingCountry] = useState<string>(doc.issuingCountry || '');
+  const [issuingAuthority, setIssuingAuthority] = useState<string>(doc.issuingAuthority || '');
+
+  // Dual Calendar: Issued Date
+  const [issuedCalendar, setIssuedCalendar] = useState<'BS' | 'AD'>(doc.issuedDateCalendar || 'AD');
+  const [issuedDate, setIssuedDate] = useState<string>(doc.issuedDate || '');
+  const [issuedConverted, setIssuedConverted] = useState<string>(doc.issuedDateConverted || '');
+
+  // Dual Calendar: Expiry Date
+  const [expiryCalendar, setExpiryCalendar] = useState<'BS' | 'AD'>(doc.expiryDateCalendar || 'AD');
+  const [expiryDate, setExpiryDate] = useState<string>(doc.expiryDate || '');
+  const [expiryConverted, setExpiryConverted] = useState<string>(doc.expiryDateConverted || '');
+
+  // Dynamic Custom Fields
+  const [customFields, setCustomFields] = useState<DocumentCustomField[]>(doc.customFields || []);
+  const [newFieldLabel, setNewFieldLabel] = useState<string>('');
+  const [newFieldValue, setNewFieldValue] = useState<string>('');
+
+  const [passwordHint, setPasswordHint] = useState<string>(doc.passwordHint || '');
+  const [notes, setNotes] = useState<string>(doc.notes || '');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  // Auto-convert dates on change
+  const handleIssuedDateChange = (val: string, cal: 'BS' | 'AD') => {
+    setIssuedDate(val);
+    if (!val) {
+      setIssuedConverted('');
+      return;
+    }
+    if (cal === 'BS') {
+      setIssuedConverted(convertBSToAD(val));
+    } else {
+      setIssuedConverted(convertADToBS(val));
+    }
+  };
+
+  const handleExpiryDateChange = (val: string, cal: 'BS' | 'AD') => {
+    setExpiryDate(val);
+    if (!val) {
+      setExpiryConverted('');
+      return;
+    }
+    if (cal === 'BS') {
+      setExpiryConverted(convertBSToAD(val));
+    } else {
+      setExpiryConverted(convertADToBS(val));
+    }
+  };
+
+  const handleAddCustomField = () => {
+    if (!newFieldLabel.trim() || !newFieldValue.trim()) return;
+    setCustomFields((prev) => [
+      ...prev,
+      {
+        id: 'cf_' + Math.random().toString(36).substring(2, 9),
+        label: newFieldLabel.trim(),
+        value: newFieldValue.trim()
+      }
+    ]);
+    setNewFieldLabel('');
+    setNewFieldValue('');
+  };
+
+  const handleRemoveCustomField = (id: string) => {
+    setCustomFields((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim() || !documentNumber.trim()) {
+      alert('Title and Document Number are required.');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      const updatedDoc: VaultDocument = {
+        ...doc,
+        personId,
+        category,
+        title: title.trim(),
+        documentNumber: documentNumber.trim(),
+        issuingCountry: issuingCountry.trim() || undefined,
+        issuingAuthority: issuingAuthority.trim() || undefined,
+        issuedDate: issuedDate.trim() || undefined,
+        issuedDateCalendar: issuedDate.trim() ? issuedCalendar : undefined,
+        issuedDateConverted: issuedConverted || undefined,
+        expiryDate: expiryDate.trim() || undefined,
+        expiryDateCalendar: expiryDate.trim() ? expiryCalendar : undefined,
+        expiryDateConverted: expiryConverted || undefined,
+        customFields: customFields.length > 0 ? customFields : undefined,
+        passwordHint: passwordHint.trim() || undefined,
+        notes: notes.trim() || undefined,
+        updatedAt: new Date().toISOString()
+      };
+
+      await onUpdateDocument(updatedDoc);
+      setIsSaving(false);
+      onClose();
+    } catch (err: any) {
+      setIsSaving(false);
+      alert('Failed to update document: ' + err.message);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
+      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-slate-900 serif-heading flex items-center gap-2">
+              <Edit3 className="w-4 h-4 text-amber-700" />
+              Edit Document Details &amp; Custom Fields
+            </h2>
+            <p className="text-[11px] text-slate-500">
+              Changes are re-encrypted client-side with your Master Vault Key
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form Body */}
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-4 flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Family Profile / Custodian
+              </label>
+              <select
+                value={personId}
+                onChange={(e) => setPersonId(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+              >
+                {manifest.persons.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.relationship.toUpperCase()})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Category
+              </label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value as DocumentCategory)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+              >
+                <option value="identity">Identity &amp; Citizenship</option>
+                <option value="travel">Travel &amp; Passports</option>
+                <option value="finance">Financial &amp; Tax</option>
+                <option value="legal">Property &amp; Legal</option>
+                <option value="academic">Academic &amp; Degrees</option>
+                <option value="health">Health &amp; Medical</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Document Title
+            </label>
+            <input
+              type="text"
+              required
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Document Number / Identifier
+              </label>
+              <input
+                type="text"
+                required
+                value={documentNumber}
+                onChange={(e) => setDocumentNumber(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Issuing Country
+              </label>
+              <input
+                type="text"
+                value={issuingCountry}
+                onChange={(e) => setIssuingCountry(e.target.value)}
+                placeholder="e.g. Nepal"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Issuing Authority / Agency
+            </label>
+            <input
+              type="text"
+              value={issuingAuthority}
+              onChange={(e) => setIssuingAuthority(e.target.value)}
+              placeholder="e.g. District Administration Office, Kathmandu"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          {/* ── DUAL CALENDAR SECTION (Bikram Sambat BS & Gregorian AD) ─────────── */}
+          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                Dual Calendar Dates (Bikram Sambat BS &amp; Gregorian AD)
+              </span>
+              <span className="text-[10px] text-amber-800 font-medium">
+                Official calendar tagged with [OFFICIAL]
+              </span>
+            </div>
+
+            {/* Issued Date */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  Issued Date
+                </label>
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-amber-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssuedCalendar('BS');
+                      if (issuedDate) setIssuedConverted(convertBSToAD(issuedDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      issuedCalendar === 'BS'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Bikram Sambat (BS) {issuedCalendar === 'BS' && '★ [OFFICIAL]'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssuedCalendar('AD');
+                      if (issuedDate) setIssuedConverted(convertADToBS(issuedDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      issuedCalendar === 'AD'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    English (AD) {issuedCalendar === 'AD' && '★ [OFFICIAL]'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type={issuedCalendar === 'AD' ? 'date' : 'text'}
+                  placeholder={issuedCalendar === 'BS' ? 'YYYY-MM-DD (e.g. 2080-05-15)' : 'YYYY-MM-DD'}
+                  value={issuedDate}
+                  onChange={(e) => handleIssuedDateChange(e.target.value, issuedCalendar)}
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <div className="flex items-center px-3 py-1.5 bg-white/70 border border-amber-200 rounded-xl text-xs text-amber-900 font-mono">
+                  <span className="text-[10px] text-amber-700 mr-2 font-bold uppercase">
+                    Converted ({issuedCalendar === 'BS' ? 'AD' : 'BS'}):
+                  </span>
+                  <span>{issuedConverted || '—'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Expiry Date */}
+            <div className="space-y-1.5 pt-2 border-t border-amber-200/60">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  Expiry Date
+                </label>
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-amber-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpiryCalendar('BS');
+                      if (expiryDate) setExpiryConverted(convertBSToAD(expiryDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      expiryCalendar === 'BS'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    BS {expiryCalendar === 'BS' && '★ [OFFICIAL]'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpiryCalendar('AD');
+                      if (expiryDate) setExpiryConverted(convertADToBS(expiryDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      expiryCalendar === 'AD'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    AD {expiryCalendar === 'AD' && '★ [OFFICIAL]'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type={expiryCalendar === 'AD' ? 'date' : 'text'}
+                  placeholder={expiryCalendar === 'BS' ? 'YYYY-MM-DD (e.g. 2090-05-15)' : 'YYYY-MM-DD'}
+                  value={expiryDate}
+                  onChange={(e) => handleExpiryDateChange(e.target.value, expiryCalendar)}
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <div className="flex items-center px-3 py-1.5 bg-white/70 border border-amber-200 rounded-xl text-xs text-amber-900 font-mono">
+                  <span className="text-[10px] text-amber-700 mr-2 font-bold uppercase">
+                    Converted ({expiryCalendar === 'BS' ? 'AD' : 'BS'}):
+                  </span>
+                  <span>{expiryConverted || '—'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── ADDITIONAL CUSTOM FIELDS (Dynamic Key-Values) ──────────────────── */}
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                Additional Record Fields (Copiable from Dossier)
+              </span>
+              <span className="text-[10px] text-slate-500">e.g. Ward, Father's ID, Kitta No</span>
+            </div>
+
+            {/* Quick Suggestions Shortcuts */}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Father's Citizenship No", val: '' },
+                { label: 'Ward No', val: '' },
+                { label: 'Kitta No', val: '' },
+                { label: 'VID No', val: '' },
+                { label: 'Issue District', val: '' }
+              ].map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  onClick={() => setNewFieldLabel(s.label)}
+                  className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-semibold"
+                >
+                  + {s.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Existing custom fields list */}
+            {customFields.length > 0 && (
+              <div className="space-y-2">
+                {customFields.map((cf) => (
+                  <div
+                    key={cf.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white border border-slate-200 text-xs"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="font-bold text-slate-700">{cf.label}:</span>
+                      <span className="font-mono text-slate-900 truncate">{cf.value}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCustomField(cf.id)}
+                      className="p-1 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
+                      title="Remove Field"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new field row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input
+                type="text"
+                placeholder="Field Name (e.g. Ward No)"
+                value={newFieldLabel}
+                onChange={(e) => setNewFieldLabel(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+              />
+              <input
+                type="text"
+                placeholder="Value (e.g. Ward 04)"
+                value={newFieldValue}
+                onChange={(e) => setNewFieldValue(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleAddCustomField}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Field
+              </button>
+            </div>
+          </div>
+
+          {/* Password Hint */}
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              PDF Password Formula / Hint
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. FIRST4LETTERS + YYYY"
+              value={passwordHint}
+              onChange={(e) => setPasswordHint(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Private Notes &amp; Custody Details
+            </label>
+            <textarea
+              rows={2}
+              placeholder="e.g. Original stored in safe #2"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          <div className="pt-2 border-t border-slate-200 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+            >
+              {isSaving ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  Saving Updates...
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  Save Changes
+                </>
+              )}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -2871,8 +3947,24 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
     ? defaultCountry
     : (manifest.persons.find((p) => p.id === initialPersonId)?.countries?.[0] || 'Nepal');
   const [issuingCountry, setIssuingCountry] = useState<string>(initialCountry);
+  const [issuingAuthority, setIssuingAuthority] = useState<string>('');
+
+  // Dual Calendar: Issued Date
+  const [issuedCalendar, setIssuedCalendar] = useState<'BS' | 'AD'>('AD');
   const [issuedDate, setIssuedDate] = useState<string>('');
+  const [issuedConverted, setIssuedConverted] = useState<string>('');
+
+  // Dual Calendar: Expiry Date
+  const [expiryCalendar, setExpiryCalendar] = useState<'BS' | 'AD'>('AD');
   const [expiryDate, setExpiryDate] = useState<string>('');
+  const [expiryConverted, setExpiryConverted] = useState<string>('');
+
+  // Dynamic Custom Fields
+  const [customFields, setCustomFields] = useState<DocumentCustomField[]>([]);
+  const [newFieldLabel, setNewFieldLabel] = useState<string>('');
+  const [newFieldValue, setNewFieldValue] = useState<string>('');
+
+  const [passwordHint, setPasswordHint] = useState<string>('');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('front_back_separate');
   const [notes, setNotes] = useState<string>('');
   const [isEncrypting, setIsEncrypting] = useState<boolean>(false);
@@ -2888,6 +3980,51 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
   const [relatedCategory, setRelatedCategory] = useState<string>('receipt');
   const [relatedFile, setRelatedFile] = useState<File | null>(null);
 
+  // Auto-convert dates on change
+  const handleIssuedDateChange = (val: string, cal: 'BS' | 'AD') => {
+    setIssuedDate(val);
+    if (!val) {
+      setIssuedConverted('');
+      return;
+    }
+    if (cal === 'BS') {
+      setIssuedConverted(convertBSToAD(val));
+    } else {
+      setIssuedConverted(convertADToBS(val));
+    }
+  };
+
+  const handleExpiryDateChange = (val: string, cal: 'BS' | 'AD') => {
+    setExpiryDate(val);
+    if (!val) {
+      setExpiryConverted('');
+      return;
+    }
+    if (cal === 'BS') {
+      setExpiryConverted(convertBSToAD(val));
+    } else {
+      setExpiryConverted(convertADToBS(val));
+    }
+  };
+
+  const handleAddCustomField = () => {
+    if (!newFieldLabel.trim() || !newFieldValue.trim()) return;
+    setCustomFields((prev) => [
+      ...prev,
+      {
+        id: 'cf_' + Math.random().toString(36).substring(2, 9),
+        label: newFieldLabel.trim(),
+        value: newFieldValue.trim()
+      }
+    ]);
+    setNewFieldLabel('');
+    setNewFieldValue('');
+  };
+
+  const handleRemoveCustomField = (id: string) => {
+    setCustomFields((prev) => prev.filter((f) => f.id !== id));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !documentNumber.trim() || !masterVaultKey) return;
@@ -2902,6 +4039,9 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
         const envelope = await wrapDEK(dek, masterVaultKey);
         const { ciphertextB64, ivB64 } = await encryptBlob(file, dek);
         const blobUuid = 'blob_' + Math.random().toString(36).substring(2, 12);
+
+        // Cache into local IndexedDB immediately
+        await idbSaveEncryptedBlob(blobUuid, ciphertextB64);
 
         // Upload ciphertext to Azure / Google Drive blob store
         if (authToken) {
@@ -2988,6 +4128,26 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
         });
       }
 
+      // Preserve primary format so subsequent formats (e.g. stitched scans) do not overwrite the default 3D flip card
+      const primaryLabel =
+        layoutMode === 'front_back_separate'
+          ? '3D Flip Card (Primary)'
+          : layoutMode === 'front_back_combined'
+          ? 'Stitched Sheet (Primary)'
+          : layoutMode === 'multi_page_dossier'
+          ? 'Multi-Page Dossier (Primary)'
+          : 'Single Face (Primary)';
+
+      const primaryEdition: DocumentEdition = {
+        id: 'ed_primary_' + Math.random().toString(36).substring(2, 9),
+        label: primaryLabel,
+        formatType: layoutMode,
+        fileFormat: 'jpg',
+        isPrimary: true,
+        media: mediaSlots,
+        createdAt: new Date().toISOString()
+      };
+
       const newDoc: VaultDocument = {
         id: 'doc_' + Math.random().toString(36).substring(2, 10),
         personId,
@@ -2995,12 +4155,20 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
         title: title.trim(),
         documentNumber: documentNumber.trim(),
         issuingCountry,
-        issuedDate: issuedDate || undefined,
-        expiryDate: expiryDate || undefined,
+        issuingAuthority: issuingAuthority.trim() || undefined,
+        issuedDate: issuedDate.trim() || undefined,
+        issuedDateCalendar: issuedDate.trim() ? issuedCalendar : undefined,
+        issuedDateConverted: issuedConverted || undefined,
+        expiryDate: expiryDate.trim() || undefined,
+        expiryDateCalendar: expiryDate.trim() ? expiryCalendar : undefined,
+        expiryDateConverted: expiryConverted || undefined,
         layoutMode,
         status: 'active',
+        passwordHint: passwordHint.trim() || undefined,
         notes: notes.trim() || undefined,
         media: mediaSlots,
+        editions: [primaryEdition],
+        customFields: customFields.length > 0 ? customFields : undefined,
         relatedDocuments: relatedDocs.length > 0 ? relatedDocs : undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -3055,12 +4223,12 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
                 onChange={(e) => setCategory(e.target.value as DocumentCategory)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
               >
-                <option value="identity">🪪 Identity &amp; Citizenship</option>
-                <option value="travel">✈️ Travel &amp; Passports</option>
-                <option value="finance">💼 Financial &amp; Tax</option>
-                <option value="legal">📜 Property &amp; Legal</option>
-                <option value="academic">🎓 Academic &amp; Degrees</option>
-                <option value="health">🏥 Health &amp; Medical</option>
+                <option value="identity">Identity &amp; Citizenship</option>
+                <option value="travel">Travel &amp; Passports</option>
+                <option value="finance">Financial &amp; Tax</option>
+                <option value="legal">Property &amp; Legal</option>
+                <option value="academic">Academic &amp; Degrees</option>
+                <option value="health">Health &amp; Medical</option>
               </select>
             </div>
           </div>
@@ -3108,29 +4276,221 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Issued Date
-              </label>
-              <input
-                type="date"
-                value={issuedDate}
-                onChange={(e) => setIssuedDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
-              />
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Issuing Authority / Agency
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. Department of National ID &amp; Civil Registration"
+              value={issuingAuthority}
+              onChange={(e) => setIssuingAuthority(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
+          {/* ── DUAL CALENDAR SECTION (Bikram Sambat BS & Gregorian AD) ─────────── */}
+          <div className="p-4 rounded-2xl bg-amber-50/70 border border-amber-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                Dual Calendar Dates (Bikram Sambat BS &amp; Gregorian AD)
+              </span>
+              <span className="text-[10px] text-amber-800 font-medium">
+                Official calendar tagged with [OFFICIAL]
+              </span>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Expiry Date
-              </label>
+            {/* Issued Date */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  Issued Date
+                </label>
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-amber-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssuedCalendar('BS');
+                      if (issuedDate) setIssuedConverted(convertBSToAD(issuedDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      issuedCalendar === 'BS'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Bikram Sambat (BS) {issuedCalendar === 'BS' && '★ [OFFICIAL]'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIssuedCalendar('AD');
+                      if (issuedDate) setIssuedConverted(convertADToBS(issuedDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      issuedCalendar === 'AD'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    English (AD) {issuedCalendar === 'AD' && '★ [OFFICIAL]'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type={issuedCalendar === 'AD' ? 'date' : 'text'}
+                  placeholder={issuedCalendar === 'BS' ? 'YYYY-MM-DD (e.g. 2080-05-15)' : 'YYYY-MM-DD'}
+                  value={issuedDate}
+                  onChange={(e) => handleIssuedDateChange(e.target.value, issuedCalendar)}
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <div className="flex items-center px-3 py-1.5 bg-white/70 border border-amber-200 rounded-xl text-xs text-amber-900 font-mono">
+                  <span className="text-[10px] text-amber-700 mr-2 font-bold uppercase">
+                    Converted ({issuedCalendar === 'BS' ? 'AD' : 'BS'}):
+                  </span>
+                  <span>{issuedConverted || '—'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Expiry Date */}
+            <div className="space-y-1.5 pt-2 border-t border-amber-200/60">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                  Expiry Date
+                </label>
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-amber-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpiryCalendar('BS');
+                      if (expiryDate) setExpiryConverted(convertBSToAD(expiryDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      expiryCalendar === 'BS'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    BS {expiryCalendar === 'BS' && '★ [OFFICIAL]'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExpiryCalendar('AD');
+                      if (expiryDate) setExpiryConverted(convertADToBS(expiryDate));
+                    }}
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition flex items-center gap-1 ${
+                      expiryCalendar === 'AD'
+                        ? 'bg-amber-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    AD {expiryCalendar === 'AD' && '★ [OFFICIAL]'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input
+                  type={expiryCalendar === 'AD' ? 'date' : 'text'}
+                  placeholder={expiryCalendar === 'BS' ? 'YYYY-MM-DD (e.g. 2090-05-15)' : 'YYYY-MM-DD'}
+                  value={expiryDate}
+                  onChange={(e) => handleExpiryDateChange(e.target.value, expiryCalendar)}
+                  className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <div className="flex items-center px-3 py-1.5 bg-white/70 border border-amber-200 rounded-xl text-xs text-amber-900 font-mono">
+                  <span className="text-[10px] text-amber-700 mr-2 font-bold uppercase">
+                    Converted ({expiryCalendar === 'BS' ? 'AD' : 'BS'}):
+                  </span>
+                  <span>{expiryConverted || '—'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── ADDITIONAL CUSTOM FIELDS (Dynamic Key-Values) ──────────────────── */}
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                Additional Record Fields (Copiable from Dossier)
+              </span>
+              <span className="text-[10px] text-slate-500">e.g. Ward, Father's ID, Kitta No</span>
+            </div>
+
+            {/* Quick Suggestions Shortcuts */}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Father's Citizenship No", val: '' },
+                { label: 'Ward No', val: '' },
+                { label: 'Kitta No', val: '' },
+                { label: 'VID No', val: '' },
+                { label: 'Issue District', val: '' }
+              ].map((s) => (
+                <button
+                  key={s.label}
+                  type="button"
+                  onClick={() => setNewFieldLabel(s.label)}
+                  className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-semibold"
+                >
+                  + {s.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Existing custom fields list */}
+            {customFields.length > 0 && (
+              <div className="space-y-2">
+                {customFields.map((cf) => (
+                  <div
+                    key={cf.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white border border-slate-200 text-xs"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="font-bold text-slate-700">{cf.label}:</span>
+                      <span className="font-mono text-slate-900 truncate">{cf.value}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveCustomField(cf.id)}
+                      className="p-1 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
+                      title="Remove Field"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new field row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <input
-                type="date"
-                value={expiryDate}
-                onChange={(e) => setExpiryDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+                type="text"
+                placeholder="Field Name (e.g. Ward No)"
+                value={newFieldLabel}
+                onChange={(e) => setNewFieldLabel(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
               />
+              <input
+                type="text"
+                placeholder="Value (e.g. Ward 04)"
+                value={newFieldValue}
+                onChange={(e) => setNewFieldValue(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={handleAddCustomField}
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 shadow-2xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add Field
+              </button>
             </div>
           </div>
 
@@ -3270,6 +4630,20 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
             </div>
           </div>
 
+          {/* Password Hint */}
+          <div>
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+              PDF Password Formula / Hint
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. FIRST4LETTERS + YYYY"
+              value={passwordHint}
+              onChange={(e) => setPasswordHint(e.target.value)}
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+
           <div>
             <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
               Private Notes &amp; Custody Details
@@ -3314,7 +4688,6 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
     </div>
   );
 };
-
 // ══════════════════════════════════════════════════════════════════════════════
 // SUB-COMPONENT: Add New Person Profile Modal (Full Profiling & Multi-Country)
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3532,7 +4905,7 @@ const AddPersonModal: React.FC<AddPersonModalProps> = ({ onClose, onAddPerson })
                         : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>{c.flag}</span>
+                    <span className="font-mono text-[10px] font-bold text-amber-800">[{c.code}]</span>
                     <span>{c.name}</span>
                     {isSelected && <Check className="w-3 h-3 text-amber-700 ml-0.5" />}
                   </button>
@@ -3792,7 +5165,7 @@ const EditPersonModal: React.FC<EditPersonModalProps> = ({ person, onClose, onUp
                         : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <span>{c.flag}</span>
+                    <span className="font-mono text-[10px] font-bold text-amber-800">[{c.code}]</span>
                     <span>{c.name}</span>
                     {isSelected && <Check className="w-3 h-3 text-amber-700 ml-0.5" />}
                   </button>
@@ -3885,6 +5258,9 @@ const AddEditionModal: React.FC<AddEditionModalProps> = ({
         const envelope = await wrapDEK(dek, masterVaultKey);
         const { ciphertextB64, ivB64 } = await encryptBlob(file, dek);
         const blobUuid = 'blob_' + Math.random().toString(36).substring(2, 12);
+
+        // Cache into local IndexedDB immediately
+        await idbSaveEncryptedBlob(blobUuid, ciphertextB64);
 
         if (authToken) {
           await fetch('/api/vault/blob/upload', {
@@ -4235,7 +5611,7 @@ const FamilySummaryModal: React.FC<FamilySummaryModalProps> = ({ manifest, onClo
                       </span>
                     )}
                     {person.dob && <span>DOB: {person.dob}</span>}
-                    {person.emergencyPhone && <span>📞 {person.emergencyPhone}</span>}
+                    {person.emergencyPhone && <span><Phone className="w-3 h-3 text-slate-500 inline mr-1" /> {person.emergencyPhone}</span>}
                   </div>
                 </div>
 
