@@ -30,12 +30,13 @@ const { shortcutsHandler } = require('./dist/src/functions/shortcuts');
 const { streaksHandler } = require('./dist/src/functions/streaks');
 const { notificationsHandler } = require('./dist/src/functions/notifications');
 const { mosaicHandler } = require('./dist/src/functions/mosaic');
+const { vaultHandler } = require('./dist/src/functions/vault');
 
 const server = http.createServer(async (req, res) => {
   // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Token');
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204);
@@ -86,6 +87,11 @@ const server = http.createServer(async (req, res) => {
       subpath: parts.slice(baseIndex + 1).join('/'),
       sub1: parts[baseIndex + 1] || null,
       sub2: parts[baseIndex + 2] || null
+    };
+  } else if (resource === 'vault') {
+    handlerToUse = vaultHandler;
+    params = {
+      action: parts.slice(baseIndex + 1).join('/')
     };
   }
 

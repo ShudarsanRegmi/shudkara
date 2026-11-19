@@ -66,7 +66,9 @@ import {
   generateQRCodeSVG,
   exportKeyRaw,
   importKeyRaw,
-  base64ToArrayBuffer
+  base64ToArrayBuffer,
+  idbSaveEncryptedBlob,
+  idbGetEncryptedBlob
 } from '../utils/vaultCrypto';
 import type { WrappedKeyEnvelope } from '../utils/vaultCrypto';
 
@@ -277,6 +279,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const [editingDoc, setEditingDoc] = useState<VaultDocument | null>(null);
   const [isAddEditionDoc, setIsAddEditionDoc] = useState<VaultDocument | null>(null);
   const [biometricDownloadingDocId, setBiometricDownloadingDocId] = useState<string | null>(null);
+  const [mediaVersion, setMediaVersion] = useState<number>(0);
 
   // ── 3D Card Flip States (keyed by documentId) ────────────────────────────────
   const [flippedCards, setFlippedCards] = useState<Record<string, boolean>>({});
@@ -363,6 +366,18 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             URL.revokeObjectURL(m.previewUrl);
           }
         });
+        d.editions?.forEach((e) => {
+          e.media.forEach((m) => {
+            if (m.previewUrl && m.previewUrl.startsWith('blob:')) {
+              URL.revokeObjectURL(m.previewUrl);
+            }
+          });
+        });
+        d.relatedDocuments?.forEach((r) => {
+          if (r.media?.previewUrl && r.media.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(r.media.previewUrl);
+          }
+        });
       });
     }
 
@@ -439,11 +454,87 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     });
   };
 
-  // ── Encrypted Manifest Cloud Sync (AES-256-GCM) ──────────────────────────────
+  // ── Progressive Media Slot Decryptor (RAM -> IndexedDB -> Remote Blob API -> RAM) ───
+  const resolveMediaPreview = useCallback(
+    async (m: DocumentMediaSlot, mvk: CryptoKey): Promise<string | null> => {
+      if (m.previewUrl) return m.previewUrl;
+      if (!m.dekEnvelope || !m.ivBase64) return null;
+
+      try {
+        let cipherB64 = m.ciphertextBase64;
+
+        // 1. Check local IndexedDB cache if not directly in slot
+        if (!cipherB64 && m.blobUuid) {
+          cipherB64 = (await idbGetEncryptedBlob(m.blobUuid)) || undefined;
+        }
+
+        // 2. Fetch from remote blob storage (Google Drive / API) if still missing
+        if (!cipherB64 && m.blobUuid && authToken) {
+          try {
+            const res = await fetch(`/api/vault/blob/${m.blobUuid}`, {
+              headers: { 'X-Session-Token': authToken }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data && typeof data.ciphertextBase64 === 'string') {
+                cipherB64 = data.ciphertextBase64;
+                // Cache into IndexedDB for instant offline & future renders
+                await idbSaveEncryptedBlob(m.blobUuid, data.ciphertextBase64);
+              }
+            }
+          } catch (netErr) {
+            console.warn('[Vault] Blob network fetch error:', netErr);
+          }
+        }
+
+        if (!cipherB64) return null;
+
+        // Ensure cached in IndexedDB
+        if (m.blobUuid && cipherB64) {
+          idbSaveEncryptedBlob(m.blobUuid, cipherB64).catch(() => {});
+        }
+
+        // 3. Client-side envelope unwrap & AES-256-GCM decrypt
+        const dek = await unwrapDEK(m.dekEnvelope, mvk);
+        const cipherBytes = base64ToArrayBuffer(cipherB64);
+        const ivBytes = base64ToArrayBuffer(m.ivBase64);
+        const decryptedBlob = await decryptBlob(cipherBytes, ivBytes, dek, m.mimeType);
+        const objectUrl = URL.createObjectURL(decryptedBlob);
+        m.previewUrl = objectUrl;
+        return objectUrl;
+      } catch (err) {
+        console.warn('[Vault] Failed to decrypt media slot:', m.label, err);
+        return null;
+      }
+    },
+    [authToken]
+  );
+
+  // ── Lightweight Encrypted Manifest Cloud Sync (AES-256-GCM) ───────────────────
   const syncManifestToCloud = useCallback(
     async (updatedManifest: VaultManifest, key: CryptoKey) => {
       try {
-        const encrypted = await encryptJSON(updatedManifest, key);
+        // Strip heavy ciphertextBase64 from cloud manifest so manifest payload stays ~15KB
+        // This completely eliminates mobile 5MB localStorage QuotaExceededError and massive downloads
+        const lightweightManifest: VaultManifest = {
+          ...updatedManifest,
+          documents: updatedManifest.documents.map((d) => ({
+            ...d,
+            media: d.media.map(({ ciphertextBase64, previewUrl, ...rest }) => rest),
+            editions: d.editions?.map((e) => ({
+              ...e,
+              media: e.media.map(({ ciphertextBase64, previewUrl, ...rest }) => rest)
+            })),
+            relatedDocuments: d.relatedDocuments?.map((r) => ({
+              ...r,
+              media: r.media
+                ? (({ ciphertextBase64, previewUrl, ...rest }: any) => rest)(r.media)
+                : undefined
+            }))
+          }))
+        };
+
+        const encrypted = await encryptJSON(lightweightManifest, key);
         if (authToken) {
           await fetch('/api/vault/manifest', {
             method: 'POST',
@@ -458,8 +549,12 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             })
           });
         }
-        // Also persist encrypted ciphertext locally for offline resilience
-        localStorage.setItem('shudkara_vault_manifest_enc', JSON.stringify(encrypted));
+        // Persist lightweight encrypted ciphertext locally for offline resilience
+        try {
+          localStorage.setItem('shudkara_vault_manifest_enc', JSON.stringify(encrypted));
+        } catch (storageErr) {
+          console.warn('[Vault] LocalStorage quota note:', storageErr);
+        }
       } catch (err) {
         console.warn('[Vault] Manifest sync error:', err);
       }
@@ -467,13 +562,13 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     [authToken]
   );
 
-  // ── Load / Unseal Manifest upon Unlocking ────────────────────────────────────
+  // ── Load / Unseal Manifest upon Unlocking (Instant Paint + Progressive Decrypt) ─
   const loadVaultManifest = useCallback(
     async (mvk: CryptoKey) => {
       try {
         let loadedManifest: VaultManifest | null = null;
 
-        // 1. Try fetching encrypted manifest from Azure / Drive API
+        // 1. Fetch encrypted manifest from API
         if (authToken) {
           try {
             const res = await fetch('/api/vault/manifest', {
@@ -510,31 +605,33 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
           await syncManifestToCloud(loadedManifest, mvk);
         }
 
-        // 4. Decrypt any stored encrypted blobs for documents
+        // 4. INSTANT FIRST PAINT: Set manifest immediately so UI renders in <10ms!
+        setManifest(loadedManifest);
+
+        // 5. PROGRESSIVE ASYNC HYDRATION: Decrypt all media across editions & documents in parallel
+        const allSlots: DocumentMediaSlot[] = [];
         for (const doc of loadedManifest.documents) {
-          for (const m of doc.media) {
-            if (m.blobUuid && m.dekEnvelope && m.ciphertextBase64 && m.ivBase64) {
-              try {
-                const dek = await unwrapDEK(m.dekEnvelope, mvk);
-                const cipherBytes = base64ToArrayBuffer(m.ciphertextBase64);
-                const ivBytes = base64ToArrayBuffer(m.ivBase64);
-                const decryptedBlob = await decryptBlob(cipherBytes, ivBytes, dek, m.mimeType);
-                m.previewUrl = URL.createObjectURL(decryptedBlob);
-              } catch (decErr) {
-                console.warn('[Vault] Blob decrypt error:', decErr);
-              }
-            }
-          }
+          doc.media.forEach((m) => allSlots.push(m));
+          doc.editions?.forEach((ed) => ed.media.forEach((m) => allSlots.push(m)));
+          doc.relatedDocuments?.forEach((rel) => {
+            if (rel.media) allSlots.push(rel.media);
+          });
         }
 
-        setManifest(loadedManifest);
+        // Decrypt without blocking; update mediaVersion as each image resolves
+        allSlots.forEach((slot) => {
+          resolveMediaPreview(slot, mvk).then((url) => {
+            if (url) {
+              setMediaVersion((v) => v + 1);
+            }
+          });
+        });
       } catch (err: any) {
         setUnlockError('Decryption failed: key could not unseal manifest. ' + err.message);
       }
     },
-    [authToken, syncManifestToCloud]
+    [authToken, syncManifestToCloud, resolveMediaPreview]
   );
-
   // ── QR Code Relay Pairing Logic (Laptop Side) ────────────────────────────────
   const initRelayPairing = useCallback(async () => {
     try {
@@ -993,6 +1090,41 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       return true;
     });
   }, [manifest, selectedPersonId, selectedCountry, selectedCategory, searchQuery]);
+
+  // ── On-Demand Progressive Hydration for Visible Documents & Editions ─────────
+  useEffect(() => {
+    if (!manifest || !masterVaultKey) return;
+    filteredDocuments.forEach((doc) => {
+      const activeEdId =
+        selectedEditionByDoc[doc.id] ||
+        doc.editions?.find((e) => e.isPrimary)?.id ||
+        doc.editions?.[0]?.id;
+      const activeEd = doc.editions?.find((e) => e.id === activeEdId);
+      const mediaList =
+        activeEd && activeEd.media.length > 0 ? activeEd.media : doc.media;
+      mediaList.forEach((m) => {
+        if (!m.previewUrl) {
+          resolveMediaPreview(m, masterVaultKey).then((url) => {
+            if (url) setMediaVersion((v) => v + 1);
+          });
+        }
+      });
+    });
+  }, [manifest, masterVaultKey, filteredDocuments, selectedEditionByDoc, resolveMediaPreview]);
+
+  // ── On-Demand Hydration when opening Full Dossier Modal ───────────────────────
+  useEffect(() => {
+    if (!viewingDoc || !masterVaultKey) return;
+    const allDocSlots: DocumentMediaSlot[] = [...viewingDoc.media];
+    viewingDoc.editions?.forEach((e) => e.media.forEach((m) => allDocSlots.push(m)));
+    allDocSlots.forEach((m) => {
+      if (!m.previewUrl) {
+        resolveMediaPreview(m, masterVaultKey).then((url) => {
+          if (url) setMediaVersion((v) => v + 1);
+        });
+      }
+    });
+  }, [viewingDoc, masterVaultKey, resolveMediaPreview]);
 
   // Counts per person
   const personDocCounts = useMemo(() => {
@@ -1963,7 +2095,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-media-version={mediaVersion}>
               {/* Inline Add Document Card */}
               <button
                 type="button"
@@ -2090,8 +2222,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                                 />
                               ) : (
                                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
-                                  <FileText className="w-8 h-8 text-slate-300" />
-                                  <span>{frontMedia?.label || 'Front Scan'}</span>
+                                  {frontMedia?.blobUuid ? (
+                                    <>
+                                      <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                      <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <FileText className="w-8 h-8 text-slate-300" />
+                                      <span>{frontMedia?.label || 'Front Scan'}</span>
+                                    </>
+                                  )}
                                 </div>
                               )}
                               <div className="absolute bottom-2 right-2">
@@ -2118,8 +2259,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                                 />
                               ) : (
                                 <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
-                                  <FileText className="w-8 h-8 text-slate-300" />
-                                  <span>{backMedia?.label || 'Back Scan'}</span>
+                                  {backMedia?.blobUuid ? (
+                                    <>
+                                      <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                      <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <FileText className="w-8 h-8 text-slate-300" />
+                                      <span>{backMedia?.label || 'Back Scan'}</span>
+                                    </>
+                                  )}
                                 </div>
                               )}
                               <div className="absolute bottom-2 right-2">
@@ -2141,8 +2291,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-8 h-8 text-slate-300" />
-                              <span>Stitched Dual-Sided Scan</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>Stitched Dual-Sided Scan</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -2160,8 +2319,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-12 h-12 text-red-400" />
-                              <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-12 h-12 text-red-400" />
+                                  <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-amber-700/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
@@ -2180,8 +2348,17 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                             />
                           ) : (
                             <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                              <FileText className="w-8 h-8 text-slate-300" />
-                              <span>Single Face Document</span>
+                              {frontMedia?.blobUuid ? (
+                                <>
+                                  <RefreshCw className="w-6 h-6 animate-spin text-amber-600/80 mb-1" />
+                                  <span className="text-[11px] font-semibold text-slate-600">Decrypting on Device...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>Single Face Document</span>
+                                </>
+                              )}
                             </div>
                           )}
                           <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -3863,6 +4040,9 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
         const { ciphertextB64, ivB64 } = await encryptBlob(file, dek);
         const blobUuid = 'blob_' + Math.random().toString(36).substring(2, 12);
 
+        // Cache into local IndexedDB immediately
+        await idbSaveEncryptedBlob(blobUuid, ciphertextB64);
+
         // Upload ciphertext to Azure / Google Drive blob store
         if (authToken) {
           await fetch('/api/vault/blob/upload', {
@@ -5078,6 +5258,9 @@ const AddEditionModal: React.FC<AddEditionModalProps> = ({
         const envelope = await wrapDEK(dek, masterVaultKey);
         const { ciphertextB64, ivB64 } = await encryptBlob(file, dek);
         const blobUuid = 'blob_' + Math.random().toString(36).substring(2, 12);
+
+        // Cache into local IndexedDB immediately
+        await idbSaveEncryptedBlob(blobUuid, ciphertextB64);
 
         if (authToken) {
           await fetch('/api/vault/blob/upload', {

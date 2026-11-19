@@ -525,24 +525,56 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'blobUuid parameter required.' } };
       }
 
-      if (!db) {
-        return { status: 503, jsonBody: { error: 'Database unavailable.' } };
-      }
+      // 1. Check Google Drive blobs folder first
+      try {
+        const { blobsFolderId } = await getOrCreateVaultDriveFolders();
+        const driveBlob = await executeDriveAction(async (drive) => {
+          const listRes = await drive.files.list({
+            q: `'${blobsFolderId}' in parents and name = '${targetUuid}.enc' and trashed = false`,
+            fields: 'files(id, name, mimeType)',
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
+          });
+          if (listRes.data.files && listRes.data.files.length > 0) {
+            const fileId = listRes.data.files[0].id!;
+            const ciphertextBase64 = await getFileContent(fileId);
+            return {
+              blobUuid: targetUuid,
+              ciphertextBase64,
+              mimeType: 'image/jpeg',
+              driveFileId: fileId
+            };
+          }
+          return null;
+        });
 
-      const blobDoc = await db.collection('vault_blobs').findOne({ blobUuid: targetUuid });
-      if (!blobDoc) {
-        return { status: 404, jsonBody: { error: 'Encrypted blob not found.' } };
-      }
-
-      return {
-        status: 200,
-        jsonBody: {
-          blobUuid: blobDoc.blobUuid,
-          ciphertextBase64: blobDoc.ciphertextBase64,
-          mimeType: blobDoc.mimeType,
-          driveFileId: blobDoc.driveFileId
+        if (driveBlob) {
+          return {
+            status: 200,
+            jsonBody: driveBlob
+          };
         }
-      };
+      } catch (driveErr) {
+        context.warn('[Vault API] Drive blob retrieval error, checking Mongo:', driveErr);
+      }
+
+      // 2. Check MongoDB vault_blobs collection
+      if (db) {
+        const blobDoc = await db.collection('vault_blobs').findOne({ blobUuid: targetUuid });
+        if (blobDoc) {
+          return {
+            status: 200,
+            jsonBody: {
+              blobUuid: blobDoc.blobUuid,
+              ciphertextBase64: blobDoc.ciphertextBase64,
+              mimeType: blobDoc.mimeType || 'image/jpeg',
+              driveFileId: blobDoc.driveFileId
+            }
+          };
+        }
+      }
+
+      return { status: 404, jsonBody: { error: 'Encrypted blob not found in Drive or Database.' } };
     }
 
     return { status: 404, jsonBody: { error: `Vault endpoint not found: ${action || path}` } };

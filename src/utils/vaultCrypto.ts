@@ -1131,3 +1131,57 @@ export function generateQRCodeSVG(text: string, size: number = 220): string {
     <path d="${parts.join(' ')}" fill="#1c1714"/>
   </svg>`;
 }
+
+// ── 7. Native IndexedDB Ciphertext Blob Storage (Eliminates localStorage 5MB Quota) ─
+const VAULT_IDB_NAME = 'shudkara_vault_blobs_db';
+const VAULT_STORE_NAME = 'encrypted_blobs';
+
+function openVaultIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      return reject(new Error('IndexedDB not supported in this environment.'));
+    }
+    const request = indexedDB.open(VAULT_IDB_NAME, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(VAULT_STORE_NAME)) {
+        db.createObjectStore(VAULT_STORE_NAME, { keyPath: 'blobUuid' });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function idbSaveEncryptedBlob(blobUuid: string, ciphertextBase64: string): Promise<void> {
+  if (!blobUuid || !ciphertextBase64) return;
+  try {
+    const db = await openVaultIDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(VAULT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(VAULT_STORE_NAME);
+      const req = store.put({ blobUuid, ciphertextBase64, timestamp: Date.now() });
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn('[Vault IDB] save error:', err);
+  }
+}
+
+export async function idbGetEncryptedBlob(blobUuid: string): Promise<string | null> {
+  if (!blobUuid) return null;
+  try {
+    const db = await openVaultIDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(VAULT_STORE_NAME, 'readonly');
+      const store = tx.objectStore(VAULT_STORE_NAME);
+      const req = store.get(blobUuid);
+      req.onsuccess = () => resolve(req.result ? req.result.ciphertextBase64 : null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn('[Vault IDB] get error:', err);
+    return null;
+  }
+}
