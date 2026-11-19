@@ -5,12 +5,12 @@ import {
   Lock,
   Unlock,
   Key,
-  QrCode,
   Smartphone,
   Copy,
   Eye,
   RotateCw,
   Plus,
+  Trash2,
   Edit3,
   Download,
   RefreshCw,
@@ -29,19 +29,31 @@ import {
   Search,
   FileText,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Upload
 } from 'lucide-react';
 
 import {
   generateMasterVaultKey,
   generateDEK,
   wrapDEK,
+  unwrapDEK,
+  encryptBlob,
+  decryptBlob,
+  encryptJSON,
+  decryptJSON,
   deriveMVKFromPassphrase,
   generateEphemeralECDH,
   importPeerECDHPublicKey,
   deriveECDHSharedSecret,
   sealMVKForRelay,
-  unsealMVKFromRelay
+  unsealMVKFromRelay,
+  registerWebAuthnPasskey,
+  authenticateWebAuthnPasskey,
+  generateQRCodeSVG,
+  exportKeyRaw,
+  importKeyRaw,
+  base64ToArrayBuffer
 } from '../utils/vaultCrypto';
 import type { WrappedKeyEnvelope } from '../utils/vaultCrypto';
 
@@ -69,10 +81,12 @@ export interface DocumentMediaSlot {
   label: string;
   pageNumber?: number;
   mimeType: string;
-  previewUrl?: string; // Decrypted ephemeral Object URL (RAM only)
   blobUuid?: string;
-  encryptedBlobB64?: string; // Ciphertext
-  dekEnvelope?: WrappedKeyEnvelope; // Wrapped DEK
+  driveFileId?: string;
+  ciphertextBase64?: string; // Encrypted binary data
+  ivBase64?: string;
+  dekEnvelope?: WrappedKeyEnvelope; // Wrapped disposable DEK
+  previewUrl?: string; // Decrypted ephemeral Object URL (RAM only)
 }
 
 export interface PreviousDocumentVersion {
@@ -126,222 +140,7 @@ interface DocumentVaultProps {
   authToken?: string | null;
 }
 
-// ── Photorealistic Procedural Document Card Graphic Generators ──────────────────
-// Produces beautiful SVG data URLs for government credentials (Passport, Nagarikata, Aadhar, etc.)
-
-function createSamplePassportFrontSvg(name: string, docNo: string, dob: string, expiry: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 480" width="700" height="480">
-    <defs>
-      <linearGradient id="passportBg" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#fbf8f1"/>
-        <stop offset="50%" stop-color="#f6efe1"/>
-        <stop offset="100%" stop-color="#ede3cf"/>
-      </linearGradient>
-      <pattern id="guilloche" width="30" height="30" patternUnits="userSpaceOnUse">
-        <path d="M 0 15 Q 7.5 0, 15 15 T 30 15" fill="none" stroke="#d5c7ad" stroke-width="0.7" opacity="0.45"/>
-        <circle cx="15" cy="15" r="10" fill="none" stroke="#caa15d" stroke-width="0.5" opacity="0.3"/>
-      </pattern>
-    </defs>
-    <!-- Background Card -->
-    <rect width="700" height="480" rx="20" fill="url(#passportBg)"/>
-    <rect width="680" height="460" x="10" y="10" rx="16" fill="url(#guilloche)" stroke="#c2b090" stroke-width="1.5"/>
-    
-    <!-- Header Banner -->
-    <rect x="25" y="24" width="650" height="52" rx="8" fill="#1b2a4a"/>
-    <text x="50" y="48" fill="#caa15d" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="bold" letter-spacing="3">PASSPORT • PASSEPORT • राहदानी</text>
-    <text x="50" y="66" fill="#ffffff" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="900" letter-spacing="4">GOVERNMENT OF NEPAL</text>
-    <text x="640" y="58" fill="#caa15d" font-family="monospace" font-size="14" font-weight="bold" text-anchor="end">NPL</text>
-
-    <!-- Photo Slot with Crest -->
-    <rect x="40" y="98" width="165" height="215" rx="10" fill="#e5dfd2" stroke="#bda888" stroke-width="2"/>
-    <circle cx="122" cy="170" r="45" fill="#caa15d" opacity="0.3"/>
-    <path d="M 75 290 C 75 230, 170 230, 170 290 Z" fill="#caa15d" opacity="0.45"/>
-    <text x="122" y="305" fill="#5a5450" font-family="sans-serif" font-size="10" text-anchor="middle" font-weight="bold">OFFICIAL BIOMETRIC</text>
-
-    <!-- Document Fields -->
-    <g transform="translate(230, 95)" font-family="'Plus Jakarta Sans', sans-serif">
-      <text x="0" y="16" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">SURNAME / NOM</text>
-      <text x="0" y="34" fill="#1c1714" font-size="15" font-weight="800">${name.split(' ').slice(-1)[0] || 'REGMI'}</text>
-
-      <text x="0" y="60" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">GIVEN NAMES / PRÉNOMS</text>
-      <text x="0" y="78" fill="#1c1714" font-size="14" font-weight="800">${name}</text>
-
-      <text x="0" y="104" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">NATIONALITY / NATIONALITÉ</text>
-      <text x="0" y="120" fill="#1c1714" font-size="13" font-weight="bold">NEPALESE</text>
-
-      <text x="220" y="104" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">DOCUMENT NO.</text>
-      <text x="220" y="122" fill="#b38e4b" font-family="monospace" font-size="16" font-weight="900">${docNo}</text>
-
-      <text x="0" y="146" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">DATE OF BIRTH</text>
-      <text x="0" y="162" fill="#1c1714" font-size="12" font-weight="bold">${dob}</text>
-
-      <text x="220" y="146" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">DATE OF EXPIRY</text>
-      <text x="220" y="162" fill="#1c1714" font-size="12" font-weight="bold">${expiry}</text>
-
-      <text x="0" y="188" fill="#8a8076" font-size="9" font-weight="bold" letter-spacing="1">ISSUING AUTHORITY</text>
-      <text x="0" y="204" fill="#1c1714" font-size="12" font-weight="bold">DEPARTMENT OF PASSPORTS KATHMANDU</text>
-    </g>
-
-    <!-- Security Hologram Chip -->
-    <rect x="580" y="260" width="70" height="50" rx="8" fill="#caa15d" opacity="0.3" stroke="#b38e4b" stroke-width="1.5"/>
-    <text x="615" y="290" fill="#8c6e35" font-size="11" font-weight="bold" text-anchor="middle">CHIP</text>
-
-    <!-- MRZ Machine Readable Zone -->
-    <rect x="25" y="380" width="650" height="75" rx="8" fill="#f2ecde" stroke="#d6cebc"/>
-    <text x="40" y="412" fill="#1c1714" font-family="monospace" font-size="16" letter-spacing="4">P&lt;NPL${name.replace(/\s+/g, '&lt;')}&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;</text>
-    <text x="40" y="438" fill="#1c1714" font-family="monospace" font-size="16" letter-spacing="4">${docNo}4NPL${dob.replace(/-/g, '').slice(2)}8M${expiry.replace(/-/g, '').slice(2)}5&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;&lt;8</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function createSamplePassportBackSvg(emergencyContact: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 480" width="700" height="480">
-    <defs>
-      <linearGradient id="passportBackBg" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#fdfbf7"/>
-        <stop offset="100%" stop-color="#f5efe4"/>
-      </linearGradient>
-    </defs>
-    <rect width="700" height="480" rx="20" fill="url(#passportBackBg)"/>
-    <rect width="670" height="450" x="15" y="15" rx="14" fill="none" stroke="#caa15d" stroke-width="2" stroke-dasharray="6,4"/>
-
-    <!-- Header -->
-    <text x="350" y="55" fill="#1c1714" font-family="'Playfair Display', serif" font-size="18" font-weight="bold" text-anchor="middle">HOLDER'S SIGNATURE &amp; EMERGENCY ENDORSEMENT</text>
-    <line x1="100" y1="68" x2="600" y2="68" stroke="#d5c7ad" stroke-width="1.5"/>
-
-    <!-- Signature Block -->
-    <rect x="80" y="100" width="540" height="110" rx="10" fill="#ffffff" stroke="#d5c7ad" stroke-width="1.5"/>
-    <text x="100" y="125" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="10" font-weight="bold">SIGNATURE OF BEARER / SIGNATURE DU TITULAIRE</text>
-    <path d="M 120 180 Q 180 130, 240 185 T 380 160 T 520 175" fill="none" stroke="#1b2a4a" stroke-width="3" stroke-linecap="round"/>
-
-    <!-- Emergency Address Details -->
-    <rect x="80" y="235" width="540" height="180" rx="10" fill="#ffffff" stroke="#d5c7ad" stroke-width="1.5"/>
-    <text x="100" y="265" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="10" font-weight="bold">EMERGENCY CONTACT &amp; RESIDENCE IN NEPAL</text>
-    <text x="100" y="295" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="bold">Next of Kin / Contact: ${emergencyContact || 'Family Custodian'}</text>
-    <text x="100" y="325" fill="#5a5450" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">Permanent Address: Biratnagar-03, Morang, Koshi Province, Nepal</text>
-    <text x="100" y="355" fill="#5a5450" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">Consular Assistance: Ministry of Foreign Affairs, Kathmandu</text>
-    <text x="100" y="385" fill="#7c8f58" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="bold">Verified Sovereign Document Record • Shudkara Zero-Knowledge Sealed</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function createSampleCitizenshipSvg(name: string, citNo: string, fatherName: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 480" width="700" height="480">
-    <rect width="700" height="480" rx="16" fill="#fcf9f2" stroke="#caa15d" stroke-width="3"/>
-    <rect width="670" height="450" x="15" y="15" rx="12" fill="none" stroke="#2e2724" stroke-width="1"/>
-    
-    <!-- Crest & Header -->
-    <text x="350" y="52" fill="#7c8f58" font-family="'Playfair Display', serif" font-size="20" font-weight="900" text-anchor="middle">नेपाल सरकार • गृह मन्त्रालय</text>
-    <text x="350" y="78" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="14" font-weight="bold" text-anchor="middle">नेपाली नागरिकताको प्रमाणपत्र (CITIZENSHIP CERTIFICATE)</text>
-    <line x1="80" y1="92" x2="620" y2="92" stroke="#caa15d" stroke-width="2"/>
-
-    <!-- Left Photo & Thumbprint -->
-    <rect x="45" y="120" width="140" height="175" rx="8" fill="#eae3d5" stroke="#bda888"/>
-    <text x="115" y="215" fill="#6e645c" font-size="11" text-anchor="middle" font-family="sans-serif">फोटो (PHOTO)</text>
-    <rect x="45" y="315" width="140" height="110" rx="8" fill="#f4eee3" stroke="#bda888"/>
-    <text x="115" y="375" fill="#6e645c" font-size="10" text-anchor="middle" font-family="sans-serif">दायाँ / बायाँ औँठा छाप</text>
-
-    <!-- Details -->
-    <g transform="translate(210, 115)" font-family="'Plus Jakarta Sans', sans-serif">
-      <text x="0" y="20" fill="#8a8076" font-size="10" font-weight="bold">प्रमाणपत्र नं. (CERTIFICATE NO.)</text>
-      <text x="0" y="44" fill="#b38e4b" font-family="monospace" font-size="18" font-weight="bold">${citNo}</text>
-
-      <text x="0" y="80" fill="#8a8076" font-size="10" font-weight="bold">नाम थर (FULL NAME)</text>
-      <text x="0" y="104" fill="#1c1714" font-size="16" font-weight="bold">${name}</text>
-
-      <text x="0" y="140" fill="#8a8076" font-size="10" font-weight="bold">बाबुको नाम (FATHER'S NAME)</text>
-      <text x="0" y="162" fill="#1c1714" font-size="14">${fatherName || 'Baidyanath Regmi'}</text>
-
-      <text x="0" y="198" fill="#8a8076" font-size="10" font-weight="bold">स्थायी ठेगाना (PERMANENT ADDRESS)</text>
-      <text x="0" y="220" fill="#1c1714" font-size="13">मोरङ, विराटनगर महानगरपालिका वडा नं. ०३</text>
-
-      <text x="0" y="256" fill="#8a8076" font-size="10" font-weight="bold">नागरिकताको किसिम (CITIZENSHIP TYPE)</text>
-      <text x="0" y="278" fill="#1c1714" font-size="13" font-weight="bold">वंशज (BY DESCENT)</text>
-    </g>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function createSampleAadharCombinedSvg(name: string, no: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 480" width="700" height="480">
-    <rect width="700" height="480" rx="16" fill="#ffffff" stroke="#e3dfda" stroke-width="2"/>
-    <!-- Top Tricolor bar -->
-    <rect x="0" y="0" width="700" height="12" fill="#d4a257"/>
-    <rect x="0" y="12" width="700" height="6" fill="#ffffff"/>
-    <rect x="0" y="18" width="700" height="12" fill="#7c8f58"/>
-
-    <!-- Stitched Partition Header -->
-    <text x="175" y="55" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="bold" text-anchor="middle">FRONT SIDE (IDENTITY)</text>
-    <text x="525" y="55" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="13" font-weight="bold" text-anchor="middle">BACK SIDE (ADDRESS &amp; QR)</text>
-    <line x1="350" y1="40" x2="350" y2="450" stroke="#e3dfda" stroke-width="2" stroke-dasharray="4,4"/>
-
-    <!-- Front Side -->
-    <rect x="30" y="80" width="100" height="120" rx="6" fill="#f5f2eb" stroke="#d6d0c7"/>
-    <circle cx="80" cy="130" r="30" fill="#caa15d" opacity="0.4"/>
-    <text x="150" y="105" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="15" font-weight="800">${name}</text>
-    <text x="150" y="130" fill="#5a5450" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">DOB: 14/05/1999 • Male</text>
-    <text x="150" y="155" fill="#7c8f58" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" font-weight="bold">Verified Resident</text>
-
-    <rect x="30" y="230" width="290" height="50" rx="8" fill="#faf7f0" stroke="#ebddc2"/>
-    <text x="175" y="262" fill="#b38e4b" font-family="monospace" font-size="16" font-weight="bold" text-anchor="middle">${no}</text>
-
-    <!-- Back Side -->
-    <text x="380" y="100" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="10" font-weight="bold">ADDRESS / ADDRESS DETAILS</text>
-    <text x="380" y="125" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">C/O Baidyanath Regmi</text>
-    <text x="380" y="145" fill="#1c1714" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">House #42, Main Road, Ward 3</text>
-    <text x="380" y="165" fill="#5a5450" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">PIN / Postal Code: 56613</text>
-
-    <!-- Simulated QR matrix on back -->
-    <rect x="520" y="200" width="130" height="130" rx="6" fill="#fdfbf7" stroke="#2e2724" stroke-width="2"/>
-    <rect x="535" y="215" width="30" height="30" fill="#1c1714"/>
-    <rect x="605" y="215" width="30" height="30" fill="#1c1714"/>
-    <rect x="535" y="285" width="30" height="30" fill="#1c1714"/>
-    <rect x="580" y="250" width="25" height="25" fill="#caa15d"/>
-    
-    <text x="350" y="440" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" text-anchor="middle">Front &amp; Back Combined Stitched Single-Sheet Verification View</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-function createSampleDossierPageSvg(pageNo: number, title: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 850" width="650" height="850">
-    <rect width="650" height="850" fill="#fdfbf7" stroke="#d6d0c7" stroke-width="2"/>
-    <rect width="610" height="810" x="20" y="20" fill="none" stroke="#caa15d" stroke-width="1.5"/>
-
-    <text x="325" y="70" fill="#1c1714" font-family="'Playfair Display', serif" font-size="20" font-weight="900" text-anchor="middle">${title.toUpperCase()}</text>
-    <text x="325" y="98" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="12" text-anchor="middle">OFFICIAL GOVERNMENT REGISTRY ARCHIVE • PAGE ${pageNo} OF 3</text>
-    <line x1="60" y1="115" x2="590" y2="115" stroke="#caa15d" stroke-width="1.5"/>
-
-    <!-- Simulated Legal Document Paragraphs -->
-    <g transform="translate(60, 150)" fill="#5a5450" font-family="'Plus Jakarta Sans', sans-serif" font-size="12">
-      <text x="0" y="20" font-weight="bold" fill="#1c1714">SECTION ${pageNo}.1: JURISDICTION &amp; TITLE GRANT</text>
-      <text x="0" y="45">This sovereign instrument confirms registered cadastral parcel ownership under the</text>
-      <text x="0" y="65">Land Revenue Office (मालपोत कार्यालय). Boundary verification executed pursuant to survey</text>
-      <text x="0" y="85">kitta no. 492, situated in Morang District. Zero encumbrance certified on record.</text>
-
-      <rect x="0" y="120" width="530" height="120" rx="8" fill="#f5f2eb" stroke="#e3dfda"/>
-      <text x="20" y="150" font-weight="bold" fill="#1c1714">PARCEL CO-ORDINATES &amp; MUNICIPAL BOUNDS</text>
-      <text x="20" y="175">North: Municipal 20ft Access Road | South: Kitta No. 491</text>
-      <text x="20" y="195">East: Public Greenbelt Drainage | West: Kitta No. 493</text>
-      <text x="20" y="215">Total Land Area: 0-8-2-1 (Eight Aana, Two Paisa, One Daam)</text>
-
-      <text x="0" y="280" font-weight="bold" fill="#1c1714">SECTION ${pageNo}.2: WITNESS &amp; NOTARIAL ATTESTATION</text>
-      <text x="0" y="305">In witness whereof the parties have hereunto affixed their authorized thumb impressions</text>
-      <text x="0" y="325">and holographic signatures before the authorized Notary Public on this registered date.</text>
-
-      <circle cx="100" cy="420" r="45" fill="#7c8f58" opacity="0.2"/>
-      <text x="100" y="425" text-anchor="middle" font-size="11" font-weight="bold" fill="#627244">OFFICIAL SEAL</text>
-      
-      <circle cx="430" cy="420" r="45" fill="#caa15d" opacity="0.2"/>
-      <text x="430" y="425" text-anchor="middle" font-size="11" font-weight="bold" fill="#8c6e35">STAMP DUTY</text>
-    </g>
-
-    <text x="325" y="800" fill="#8a8076" font-family="'Plus Jakarta Sans', sans-serif" font-size="11" text-anchor="middle">— Confidential Family Dossier • Abhyantara Kosha Zero-Knowledge Archive —</text>
-  </svg>`;
-  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-}
-
-// ── Initial Mock Dataset (Follows Specification Section 6.2) ───────────────────
+// ── Default Initial Mock Data for First-Time Setup ─────────────────────────────
 
 function createInitialManifest(): VaultManifest {
   return {
@@ -404,14 +203,12 @@ function createInitialManifest(): VaultManifest {
           {
             slot: 'front',
             label: 'Biographical Page',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSamplePassportFrontSvg('Shudarsan Regmi', 'PA0829141', '1999-05-14', '2031-04-11')
+            mimeType: 'image/svg+xml'
           },
           {
             slot: 'back',
             label: 'Signature & Endorsement Page',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSamplePassportBackSvg('Baidyanath Regmi (+977-9852000000)')
+            mimeType: 'image/svg+xml'
           }
         ],
         previousVersions: [
@@ -458,8 +255,7 @@ function createInitialManifest(): VaultManifest {
           {
             slot: 'combined',
             label: 'Front & Back Stitched Card',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSampleAadharCombinedSvg('Shudarsan Regmi', 'XXXX-XXXX-9812')
+            mimeType: 'image/svg+xml'
           }
         ],
         relatedDocuments: [
@@ -489,14 +285,12 @@ function createInitialManifest(): VaultManifest {
           {
             slot: 'front',
             label: 'Front Face (Personal Details & Photo)',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSampleCitizenshipSvg('Baidyanath Regmi', '27-01-76-04912', 'Pitambar Regmi')
+            mimeType: 'image/svg+xml'
           },
           {
             slot: 'back',
             label: 'Reverse Endorsement & Seal',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSamplePassportBackSvg('Gita Regmi (+977-9842111111)')
+            mimeType: 'image/svg+xml'
           }
         ],
         relatedDocuments: [
@@ -509,30 +303,6 @@ function createInitialManifest(): VaultManifest {
         ],
         createdAt: '2026-11-18T12:00:00Z',
         updatedAt: '2026-11-18T12:00:00Z'
-      },
-      {
-        id: 'doc_license_mother',
-        personId: 'person_mother',
-        category: 'travel',
-        title: "Smart Driving License",
-        documentNumber: '01-06-00389124',
-        issuingCountry: 'Nepal',
-        issuingAuthority: 'Department of Transport Management',
-        issuedDate: '2022-09-19',
-        expiryDate: '2027-09-18',
-        layoutMode: 'front_only',
-        status: 'active',
-        notes: 'Category B (Light Motor Vehicle Car/Jeep)',
-        media: [
-          {
-            slot: 'front',
-            label: 'Front License Card',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSamplePassportFrontSvg('Gita Regmi', '01-06-00389124', '1972-11-12', '2027-09-18')
-          }
-        ],
-        createdAt: '2026-11-18T13:00:00Z',
-        updatedAt: '2026-11-18T13:00:00Z'
       },
       {
         id: 'doc_land_deed',
@@ -551,22 +321,19 @@ function createInitialManifest(): VaultManifest {
             slot: 'page',
             pageNumber: 1,
             label: 'Page 1: Title Grant & Registry Identification',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSampleDossierPageSvg(1, 'Land Ownership Certificate (Lalpurja)')
+            mimeType: 'image/svg+xml'
           },
           {
             slot: 'page',
             pageNumber: 2,
             label: 'Page 2: Cadastral Bounds & Municipal Survey Map',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSampleDossierPageSvg(2, 'Boundary Co-ordinates & Plot Map')
+            mimeType: 'image/svg+xml'
           },
           {
             slot: 'page',
             pageNumber: 3,
             label: 'Page 3: Notarial Endorsements & Tax Clearance Seals',
-            mimeType: 'image/svg+xml',
-            previewUrl: createSampleDossierPageSvg(3, 'Revenue Stamps & Endorsement Seals')
+            mimeType: 'image/svg+xml'
           }
         ],
         createdAt: '2026-11-18T14:00:00Z',
@@ -576,7 +343,7 @@ function createInitialManifest(): VaultManifest {
   };
 }
 
-export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authToken }) => {
+export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   // ── Cryptographic Key & Vault Locking State (RAM Only) ────────────────────────
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [masterVaultKey, setMasterVaultKey] = useState<CryptoKey | null>(null);
@@ -600,12 +367,20 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
   const [isAddPersonOpen, setIsAddPersonOpen] = useState<boolean>(false);
   const [isFamilySummaryOpen, setIsFamilySummaryOpen] = useState<boolean>(false);
 
-  // ── Pairing Relay State (Method A: Non-Biometric Laptop Clearance) ───────────
+  // ── Pairing Relay State (Method A: Cross-Device ECDH QR Relay) ───────────────
   const [relaySessionId, setRelaySessionId] = useState<string>('');
   const [relayKeyPair, setRelayKeyPair] = useState<CryptoKeyPair | null>(null);
-  const [relayPublicKeyJWK, setRelayPublicKeyJWK] = useState<JsonWebKey | null>(null);
   const [relayStatus, setRelayStatus] = useState<'idle' | 'polling' | 'authorized' | 'expired'>('idle');
   const [relaySecondsRemaining, setRelaySecondsRemaining] = useState<number>(90);
+  const [qrSvgHtml, setQrSvgHtml] = useState<string>('');
+
+  // ── Companion Mobile Screen State (if user opens companion pairing URL) ──────
+  const [companionPairingParam, setCompanionPairingParam] = useState<{ sid: string; pk: JsonWebKey } | null>(null);
+  const [companionAuthorized, setCompanionAuthorized] = useState<boolean>(false);
+
+  // ── WebAuthn Passkey Registration State ──────────────────────────────────────
+  const [hasRegisteredPasskey, setHasRegisteredPasskey] = useState<boolean>(false);
+  const [passkeyNotice, setPasskeyNotice] = useState<string | null>(null);
 
   // ── Passphrase & TOTP Unlock Form State ──────────────────────────────────────
   const [passphraseInput, setPassphraseInput] = useState<string>('');
@@ -616,8 +391,57 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
   // ── Ephemeral Clipboard Wiper State ──────────────────────────────────────────
   const [clipboardNotice, setClipboardNotice] = useState<{ text: string; secondsLeft: number } | null>(null);
 
+  // ── Check if this window was opened as a companion pairing scanner ───────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isPair = params.get('vault_pair');
+    const sid = params.get('sid');
+    const pkStr = params.get('pk');
+
+    if (isPair && sid) {
+      if (pkStr) {
+        try {
+          const pk = JSON.parse(decodeURIComponent(pkStr));
+          setCompanionPairingParam({ sid, pk });
+        } catch {
+          // invalid param
+        }
+      } else {
+        // Fetch laptop's ephemeral ECDH public key from the relay session
+        fetch(`/api/vault/relay/status?sessionId=${sid}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data && data.publicKey) {
+              setCompanionPairingParam({ sid, pk: data.publicKey });
+            } else {
+              setUnlockError('Pairing session not found or expired.');
+            }
+          })
+          .catch((err) => {
+            setUnlockError('Failed to contact relay server: ' + err.message);
+          });
+      }
+    }
+
+    // Check if device has a registered passkey credential
+    if (localStorage.getItem('shudkara_vault_passkey_raw_id')) {
+      setHasRegisteredPasskey(true);
+    }
+  }, []);
+
   // ── Inactivity Auto-Lock & Window Blur Handlers ──────────────────────────────
   const lockVault = useCallback(() => {
+    // Revoke any created ephemeral object URLs to immediately flush plaintext RAM
+    if (manifest) {
+      manifest.documents.forEach((d) => {
+        d.media.forEach((m) => {
+          if (m.previewUrl && m.previewUrl.startsWith('blob:')) {
+            URL.revokeObjectURL(m.previewUrl);
+          }
+        });
+      });
+    }
+
     setIsUnlocked(false);
     setMasterVaultKey(null);
     setViewingDoc(null);
@@ -626,7 +450,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
     setIsAddPersonOpen(false);
     setIsFamilySummaryOpen(false);
     setFlippedCards({});
-  }, []);
+  }, [manifest]);
 
   // 120-second inactivity ticker
   useEffect(() => {
@@ -682,7 +506,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
     const timer = setInterval(() => {
       setClipboardNotice((prev) => {
         if (!prev || prev.secondsLeft <= 1) {
-          // Attempt to wipe clipboard on expiration
           if (navigator.clipboard?.writeText) {
             navigator.clipboard.writeText('').catch(() => {});
           }
@@ -703,14 +526,103 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
     });
   };
 
-  // ── Initial Mock / Manifest Loading ──────────────────────────────────────────
-  useEffect(() => {
-    if (!manifest) {
-      setManifest(createInitialManifest());
-    }
-  }, [manifest]);
+  // ── Encrypted Manifest Cloud Sync (AES-256-GCM) ──────────────────────────────
+  const syncManifestToCloud = useCallback(
+    async (updatedManifest: VaultManifest, key: CryptoKey) => {
+      try {
+        const encrypted = await encryptJSON(updatedManifest, key);
+        if (authToken) {
+          await fetch('/api/vault/manifest', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Session-Token': authToken
+            },
+            body: JSON.stringify({
+              manifestCiphertext: encrypted.ciphertextB64,
+              iv: encrypted.ivB64,
+              version: updatedManifest.version
+            })
+          });
+        }
+        // Also persist encrypted ciphertext locally for offline resilience
+        localStorage.setItem('shudkara_vault_manifest_enc', JSON.stringify(encrypted));
+      } catch (err) {
+        console.warn('[Vault] Manifest sync error:', err);
+      }
+    },
+    [authToken]
+  );
 
-  // ── QR Code Relay Pairing Logic (Laptop side) ────────────────────────────────
+  // ── Load / Unseal Manifest upon Unlocking ────────────────────────────────────
+  const loadVaultManifest = useCallback(
+    async (mvk: CryptoKey) => {
+      try {
+        let loadedManifest: VaultManifest | null = null;
+
+        // 1. Try fetching encrypted manifest from Azure / Drive API
+        if (authToken) {
+          try {
+            const res = await fetch('/api/vault/manifest', {
+              headers: { 'X-Session-Token': authToken }
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.manifestCiphertext && data.iv) {
+                loadedManifest = await decryptJSON<VaultManifest>(
+                  { ciphertextB64: data.manifestCiphertext, ivB64: data.iv },
+                  mvk
+                );
+              }
+            }
+          } catch (cloudErr) {
+            console.warn('[Vault] Cloud manifest fetch error:', cloudErr);
+          }
+        }
+
+        // 2. Try reading cached encrypted manifest from localStorage
+        if (!loadedManifest) {
+          const localEncStr = localStorage.getItem('shudkara_vault_manifest_enc');
+          if (localEncStr) {
+            try {
+              const localEnc = JSON.parse(localEncStr);
+              loadedManifest = await decryptJSON<VaultManifest>(localEnc, mvk);
+            } catch {}
+          }
+        }
+
+        // 3. Fallback to initial seed if first-time setup
+        if (!loadedManifest) {
+          loadedManifest = createInitialManifest();
+          await syncManifestToCloud(loadedManifest, mvk);
+        }
+
+        // 4. Decrypt any stored encrypted blobs for documents
+        for (const doc of loadedManifest.documents) {
+          for (const m of doc.media) {
+            if (m.blobUuid && m.dekEnvelope && m.ciphertextBase64 && m.ivBase64) {
+              try {
+                const dek = await unwrapDEK(m.dekEnvelope, mvk);
+                const cipherBytes = base64ToArrayBuffer(m.ciphertextBase64);
+                const ivBytes = base64ToArrayBuffer(m.ivBase64);
+                const decryptedBlob = await decryptBlob(cipherBytes, ivBytes, dek, m.mimeType);
+                m.previewUrl = URL.createObjectURL(decryptedBlob);
+              } catch (decErr) {
+                console.warn('[Vault] Blob decrypt error:', decErr);
+              }
+            }
+          }
+        }
+
+        setManifest(loadedManifest);
+      } catch (err: any) {
+        setUnlockError('Decryption failed: key could not unseal manifest. ' + err.message);
+      }
+    },
+    [authToken, syncManifestToCloud]
+  );
+
+  // ── QR Code Relay Pairing Logic (Laptop Side) ────────────────────────────────
   const initRelayPairing = useCallback(async () => {
     try {
       setRelayStatus('idle');
@@ -720,8 +632,12 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
 
       setRelaySessionId(sessionId);
       setRelayKeyPair(keyPair);
-      setRelayPublicKeyJWK(publicKeyJWK);
       setRelaySecondsRemaining(90);
+
+      // Generate standard pairing URL (~48 chars) and real scannable ISO QR Code SVG
+      const pairingUrl = `${window.location.origin}${window.location.pathname}?vault_pair=true&sid=${sessionId}`;
+      const svg = generateQRCodeSVG(pairingUrl, 200);
+      setQrSvgHtml(svg);
 
       // Register session with Azure Function relay
       await fetch('/api/vault/relay/init', {
@@ -735,6 +651,13 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
       setUnlockError('Failed to initialize ECDH relay: ' + err.message);
     }
   }, []);
+
+  // Auto-initialize pairing session on mount when vault is locked
+  useEffect(() => {
+    if (!isUnlocked && !companionPairingParam && relayStatus === 'idle') {
+      initRelayPairing();
+    }
+  }, [isUnlocked, companionPairingParam, relayStatus, initRelayPairing]);
 
   // Poll relay status while waiting for companion authorization
   useEffect(() => {
@@ -758,8 +681,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
           clearInterval(interval);
           setRelayStatus('authorized');
 
-          // Unseal MVK from phone's encrypted payload using laptop's ECDH key
-          // For ECDH, the phone's public key was included in the payload
+          // Unseal MVK using laptop's ECDH private key and companion phone's public key
           const phonePublicKey = await importPeerECDHPublicKey(data.encryptedMvkPayload.phonePublicKeyJWK);
           const tunnelKey = await deriveECDHSharedSecret(relayKeyPair.privateKey, phonePublicKey);
           const unsealedMvk = await unsealMVKFromRelay(data.encryptedMvkPayload.sealedEnvelope, tunnelKey);
@@ -767,6 +689,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
           setMasterVaultKey(unsealedMvk);
           setIsUnlocked(true);
           setInactivitySeconds(120);
+          await loadVaultManifest(unsealedMvk);
         } else if (data.status === 'expired') {
           setRelayStatus('expired');
           clearInterval(interval);
@@ -777,46 +700,102 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [relayStatus, relaySessionId, relayKeyPair]);
+  }, [relayStatus, relaySessionId, relayKeyPair, loadVaultManifest]);
 
-  // Simulate companion phone scanning the QR code and authorizing (Instant Demo Pass)
-  const handleSimulatePhoneApproval = async () => {
-    if (!relaySessionId || !relayPublicKeyJWK) return;
+  // ── Companion Mobile Authorization (When opened via scanned QR link) ─────────
+  const handleCompanionAuthorize = async () => {
+    if (!companionPairingParam) return;
     try {
       setIsUnlocking(true);
-      // Generate simulated phone ECDH pair
+      // 1. Companion phone generates ephemeral ECDH pair
       const phoneECDH = await generateEphemeralECDH();
-      const laptopPeerKey = await importPeerECDHPublicKey(relayPublicKeyJWK);
+      const laptopPeerKey = await importPeerECDHPublicKey(companionPairingParam.pk);
       const sharedTunnel = await deriveECDHSharedSecret(phoneECDH.keyPair.privateKey, laptopPeerKey);
 
-      // Phone generates or unseals MVK
-      const genuineMvk = await generateMasterVaultKey();
-      const sealedEnvelope = await sealMVKForRelay(genuineMvk, sharedTunnel);
+      // 2. Unseal or generate Master Vault Key
+      let mvkToShare: CryptoKey;
+      const cachedMvkRaw = localStorage.getItem('shudkara_vault_mvk_backup');
+      if (cachedMvkRaw) {
+        mvkToShare = await importKeyRaw(cachedMvkRaw);
+      } else {
+        mvkToShare = await generateMasterVaultKey();
+        const exported = await exportKeyRaw(mvkToShare);
+        localStorage.setItem('shudkara_vault_mvk_backup', exported);
+      }
 
-      // Post authorization to relay
-      await fetch('/api/vault/relay/authorize', {
+      // 3. Encrypt MVK with shared tunnel key and send to relay
+      const sealedEnvelope = await sealMVKForRelay(mvkToShare, sharedTunnel);
+
+      const res = await fetch('/api/vault/relay/authorize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sessionId: relaySessionId,
+          sessionId: companionPairingParam.sid,
           encryptedMvkPayload: {
             sealedEnvelope,
             phonePublicKeyJWK: phoneECDH.publicKeyJWK
           }
         })
       });
+
+      if (!res.ok) {
+        throw new Error('Authorization endpoint returned ' + res.status);
+      }
+
       setIsUnlocking(false);
+      setCompanionAuthorized(true);
     } catch (err: any) {
       setIsUnlocking(false);
-      setUnlockError('Companion simulation error: ' + err.message);
+      setUnlockError('Authorization error: ' + err.message);
     }
   };
 
-  // ── Unlock via Master Passphrase + TOTP ───────────────────────────────────────
+  // ── WebAuthn Passkey Registration & Biometric Unlock ──────────────────────────
+  const handleRegisterPasskey = async () => {
+    try {
+      setIsUnlocking(true);
+      setPasskeyNotice(null);
+      const reg = await registerWebAuthnPasskey('shudarsan@shudkara');
+      localStorage.setItem('shudkara_vault_passkey_cred_id', reg.credentialId);
+      localStorage.setItem('shudkara_vault_passkey_raw_id', reg.rawIdB64);
+      setHasRegisteredPasskey(true);
+      setPasskeyNotice('Hardware biometric passkey registered successfully on this device.');
+      await handleUnlockWithPasskey();
+    } catch (err: any) {
+      setIsUnlocking(false);
+      setUnlockError('Passkey registration error: ' + err.message);
+    }
+  };
+
+  const handleUnlockWithPasskey = async () => {
+    try {
+      setIsUnlocking(true);
+      setUnlockError(null);
+      const rawIdB64 = localStorage.getItem('shudkara_vault_passkey_raw_id') || undefined;
+      const res = await authenticateWebAuthnPasskey(rawIdB64);
+
+      if (res.success) {
+        // Derive MVK deterministically from biometric signature or unseal
+        const salt = new TextEncoder().encode('shudkara_abhyantara_biometric_salt');
+        const biometricMvk = await deriveMVKFromPassphrase(res.signatureB64, salt, undefined, 10000);
+
+        setMasterVaultKey(biometricMvk);
+        setIsUnlocked(true);
+        setInactivitySeconds(120);
+        await loadVaultManifest(biometricMvk);
+      }
+      setIsUnlocking(false);
+    } catch (err: any) {
+      setIsUnlocking(false);
+      setUnlockError('Biometric authentication failed: ' + err.message);
+    }
+  };
+
+  // ── Emergency Recovery Unlock (TOTP Authenticator + Passphrase) ───────────────
   const handleUnlockWithPassphrase = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passphraseInput.trim()) {
-      setUnlockError('Master Passphrase is required.');
+    if (!passphraseInput.trim() && !totpCodeInput.trim()) {
+      setUnlockError('Please provide a 6-digit TOTP code or emergency passphrase.');
       return;
     }
 
@@ -845,10 +824,11 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
         }
       }
 
-      // 600,000 iterations PBKDF2-HMAC-SHA256 (OWASP standard)
+      // 600,000 iterations PBKDF2-HMAC-SHA256 (OWASP recommendation)
+      const seed = passphraseInput.trim() || `shudkara_emergency_seed_${totpCodeInput.trim()}`;
       const salt = new TextEncoder().encode('shudkara_abhyantara_kosha_master_salt_2026');
       const derivedKey = await deriveMVKFromPassphrase(
-        passphraseInput.trim(),
+        seed,
         salt,
         totpCodeInput.trim() || undefined,
         600000
@@ -859,6 +839,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
       setInactivitySeconds(120);
       setPassphraseInput('');
       setTotpCodeInput('');
+      await loadVaultManifest(derivedKey);
       setIsUnlocking(false);
     } catch (err: any) {
       setIsUnlocking(false);
@@ -866,19 +847,44 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
     }
   };
 
-  // ── Quick Instant Unseal Demo Button ─────────────────────────────────────────
-  const handleInstantDemoUnlock = async () => {
-    try {
-      setIsUnlocking(true);
-      const demoMvk = await generateMasterVaultKey();
-      setMasterVaultKey(demoMvk);
-      setIsUnlocked(true);
-      setInactivitySeconds(120);
-      setIsUnlocking(false);
-    } catch (err: any) {
-      setIsUnlocking(false);
-      setUnlockError('Demo unlock failed: ' + err.message);
+  // ── Delete Document Handler ──────────────────────────────────────────────────
+  const handleDeleteDocument = async (docId: string) => {
+    if (!window.confirm('Are you sure you want to delete this document from the zero-knowledge vault?')) {
+      return;
     }
+    if (!manifest || !masterVaultKey) return;
+
+    const updatedDocuments = manifest.documents.filter((d) => d.id !== docId);
+    const updatedManifest: VaultManifest = {
+      ...manifest,
+      documents: updatedDocuments,
+      updatedAt: new Date().toISOString()
+    };
+
+    setManifest(updatedManifest);
+    setViewingDoc(null);
+    await syncManifestToCloud(updatedManifest, masterVaultKey);
+  };
+
+  // ── Delete Person Profile Handler ────────────────────────────────────────────
+  const handleDeletePerson = async (personId: string) => {
+    if (!manifest || !masterVaultKey) return;
+    if (manifest.persons.length <= 1) {
+      alert('You must have at least one registered family person.');
+      return;
+    }
+    if (!window.confirm('Delete this family profile and all associated persona filtering?')) return;
+
+    const updatedPersons = manifest.persons.filter((p) => p.id !== personId);
+    const updatedManifest: VaultManifest = {
+      ...manifest,
+      persons: updatedPersons,
+      updatedAt: new Date().toISOString()
+    };
+
+    setManifest(updatedManifest);
+    if (selectedPersonId === personId) setSelectedPersonId('all');
+    await syncManifestToCloud(updatedManifest, masterVaultKey);
   };
 
   // ── Filtered Documents Calculation ───────────────────────────────────────────
@@ -976,7 +982,65 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
   };
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // 1. LOCKED VAULT VIEW (Zero-Knowledge Enclave Seal)
+  // A. COMPANION PHONE CLEARANCE VIEW (When opened on mobile via QR link)
+  // ══════════════════════════════════════════════════════════════════════════════
+  if (companionPairingParam) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-xl space-y-6 text-center">
+          <div className="w-16 h-16 rounded-3xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+            <Smartphone className="w-8 h-8" />
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-xl font-bold text-slate-900 serif-heading">Companion Clearance</h2>
+            <p className="text-xs text-slate-500">
+              A laptop is requesting clearance to unlock the Abhyantara Kosha zero-knowledge vault.
+            </p>
+            <div className="p-2 bg-slate-100 rounded-xl font-mono text-xs text-slate-700 mt-2">
+              Session Ticket: {companionPairingParam.sid}
+            </div>
+          </div>
+
+          {companionAuthorized ? (
+            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-2">
+              <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto" />
+              <p className="text-sm font-bold">Clearance Granted!</p>
+              <p className="text-xs text-emerald-600">
+                The Master Vault Key has been unsealed and transmitted via end-to-end ECDH encryption. Your laptop is now unlocked.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <button
+                onClick={handleCompanionAuthorize}
+                disabled={isUnlocking}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
+              >
+                {isUnlocking ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Unsealing MVK...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    Touch Fingerprint &amp; Authorize Laptop
+                  </>
+                )}
+              </button>
+              <p className="text-[11px] text-slate-400">
+                Zero-knowledge channel: encrypted with laptop's ephemeral P-256 public key.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // B. LOCKED VAULT VIEW (Zero-Knowledge Enclave Seal)
   // ══════════════════════════════════════════════════════════════════════════════
   if (!isUnlocked) {
     return (
@@ -1039,152 +1103,217 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
             </div>
           )}
 
+          {passkeyNotice && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span>{passkeyNotice}</span>
+            </div>
+          )}
+
           {/* Unlock Methods Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
             {/* Method A: Companion Phone QR Relay */}
             <div className="border border-slate-200 rounded-2xl p-5 bg-slate-50 space-y-4 flex flex-col justify-between">
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                     <Smartphone className="w-4 h-4 text-blue-600" />
                     Method A: Phone Companion Relay
                   </span>
                   <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-                    Recommended
+                    Zero Typing • Recommended
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 leading-normal">
-                  Zero typing on laptop: scan this dynamic pairing code with your Shudkara phone app to authorize with biometric touch.
+                <p className="text-xs text-slate-600 leading-normal">
+                  Point your smartphone camera at this dynamic QR code to authorize via mobile biometrics (TouchID / FaceID) over an end-to-end ECDH channel.
                 </p>
               </div>
 
-              {relayStatus === 'idle' ? (
-                <button
-                  onClick={initRelayPairing}
-                  className="w-full py-2.5 px-4 bg-white hover:bg-slate-100 text-slate-800 border border-slate-200 rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
-                >
-                  <QrCode className="w-4 h-4 text-blue-600" />
-                  Generate Dynamic Pairing QR
-                </button>
-              ) : (
-                <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 text-center">
-                  <div className="w-36 h-36 mx-auto bg-slate-900 rounded-lg p-2.5 flex items-center justify-center shadow-inner relative overflow-hidden group">
-                    {/* Stylized Ephemeral Pairing Matrix */}
-                    <div className="w-full h-full bg-white p-2 rounded flex flex-col items-center justify-center space-y-1">
-                      <QrCode className="w-20 h-20 text-slate-900 animate-pulse" />
-                      <span className="text-[9px] font-mono font-bold text-slate-600">
-                        {relaySessionId.slice(0, 10)}
-                      </span>
+              <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 text-center">
+                <div className="w-52 h-52 mx-auto bg-white p-2 rounded-xl border border-slate-200 shadow-sm flex items-center justify-center">
+                  {qrSvgHtml ? (
+                    <div
+                      className="w-full h-full flex items-center justify-center"
+                      dangerouslySetInnerHTML={{ __html: qrSvgHtml }}
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2 text-slate-400">
+                      <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
+                      <span className="text-xs">Generating ISO QR Code...</span>
                     </div>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
-                    <span className="flex items-center gap-1 font-semibold text-emerald-600">
-                      <RefreshCw className="w-3 h-3 animate-spin" />
-                      Awaiting Phone Scan...
-                    </span>
-                    <span className="font-mono text-slate-400">⏱️ {relaySecondsRemaining}s</span>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
-                    <button
-                      onClick={handleSimulatePhoneApproval}
-                      disabled={isUnlocking}
-                      className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-xs flex items-center justify-center gap-1.5"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Simulate Phone Approval (Instant Pass)
-                    </button>
-                    <button
-                      onClick={initRelayPairing}
-                      className="text-[11px] text-slate-500 hover:text-slate-800 underline"
-                    >
-                      Regenerate Session
-                    </button>
-                  </div>
+                  )}
                 </div>
-              )}
+
+                <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
+                  <span className="flex items-center gap-1.5 font-semibold text-emerald-600">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Awaiting Phone Clearance...
+                  </span>
+                  <span className="font-mono text-slate-500">⏱️ {relaySecondsRemaining}s</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                  {/* Real self-pairing link for testing on same device */}
+                  <a
+                    href={`${window.location.origin}${window.location.pathname}?vault_pair=true&sid=${relaySessionId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-xs flex items-center justify-center gap-1.5"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    Open Companion Clearance in Local Tab
+                  </a>
+                  <button
+                    onClick={initRelayPairing}
+                    className="text-[11px] text-slate-500 hover:text-slate-800 underline"
+                  >
+                    Regenerate Pairing Session
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Method C: Master Passphrase + TOTP Fallback */}
-            <div className="border border-slate-200 rounded-2xl p-5 bg-slate-50 space-y-4">
-              <div className="space-y-1">
-                <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                  <Key className="w-4 h-4 text-blue-600" />
-                  Method B: Passphrase + TOTP Fallback
-                </span>
-                <p className="text-xs text-slate-500">
-                  Offline recovery via PBKDF2-HMAC-SHA256 (600,000 iterations).
+            {/* Method B: Laptop Hardware Biometrics */}
+            <div className="border border-slate-200 rounded-2xl p-5 bg-slate-50 space-y-4 flex flex-col justify-between">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                    <Key className="w-4 h-4 text-blue-600" />
+                    Method B: Laptop Hardware Biometrics
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wider font-bold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+                    1-Tap Access
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-normal">
+                  Zero plaintext memorization: Unseal instantly using your laptop's platform biometric sensor (TouchID, Windows Hello, or Android Biometric).
                 </p>
               </div>
 
-              <form onSubmit={handleUnlockWithPassphrase} className="space-y-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                    Master Vault Passphrase
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Enter your sovereign master passphrase"
-                    value={passphraseInput}
-                    onChange={(e) => setPassphraseInput(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500"
-                  />
+              <div className="bg-white p-5 rounded-xl border border-slate-200 space-y-4 flex flex-col items-center justify-center text-center">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center shadow-inner">
+                  <ShieldCheck className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-800 serif-heading">
+                    Hardware Enclave Protection
+                  </h4>
+                  <p className="text-xs text-slate-500 max-w-xs">
+                    Your Master Vault Key is secured by hardware enclave keys. No master passphrase to memorize.
+                  </p>
                 </div>
 
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                    Authenticator Code (6-Digit TOTP)
-                  </label>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="000 000 (Optional if offline)"
-                    value={totpCodeInput}
-                    onChange={(e) => setTotpCodeInput(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono tracking-widest placeholder-slate-400 focus:outline-none focus:border-blue-500"
-                  />
+                <div className="w-full space-y-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={hasRegisteredPasskey ? handleUnlockWithPasskey : handleRegisterPasskey}
+                    disabled={isUnlocking}
+                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
+                  >
+                    {isUnlocking ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Verifying Hardware Biometrics...
+                      </>
+                    ) : (
+                      <>
+                        <ShieldCheck className="w-4 h-4" />
+                        {hasRegisteredPasskey
+                          ? 'Touch Laptop Biometric Sensor (TouchID / Hello)'
+                          : 'Register & Unlock with Laptop Biometrics'}
+                      </>
+                    )}
+                  </button>
+
+                  {!hasRegisteredPasskey && (
+                    <p className="text-[11px] text-slate-400">
+                      Tapping will prompt your browser to register this device's biometric sensor.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 text-center">
+                <p className="text-[11px] text-slate-500">
+                  FIDO2 / WebAuthn standard cryptographic key release.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Emergency Fallback Disclosure (Lost Phone / Offline Recovery) */}
+          <details className="group border border-slate-200 rounded-2xl bg-slate-50 p-4 transition">
+            <summary className="text-xs font-bold text-slate-700 cursor-pointer flex items-center justify-between list-none">
+              <span className="flex items-center gap-2">
+                <Key className="w-3.5 h-3.5 text-slate-500" />
+                Lost phone or offline emergency recovery?
+              </span>
+              <span className="text-[11px] text-blue-700 font-semibold group-open:rotate-180 transition-transform">
+                ▼
+              </span>
+            </summary>
+
+            <div className="mt-4 pt-3 border-t border-slate-200 space-y-3">
+              <p className="text-xs text-slate-600">
+                If your phone is missing and biometric sensors are offline, unseal your vault using your 6-digit TOTP Authenticator code and optional emergency passphrase.
+              </p>
+
+              <form onSubmit={handleUnlockWithPassphrase} className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      Authenticator Code (6-Digit TOTP)
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={6}
+                      placeholder="000 000"
+                      value={totpCodeInput}
+                      onChange={(e) => setTotpCodeInput(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono tracking-widest placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                      Emergency Passphrase
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Optional emergency passphrase"
+                      value={passphraseInput}
+                      onChange={(e) => setPassphraseInput(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
                 </div>
 
                 <button
                   type="submit"
                   disabled={isUnlocking}
-                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
+                  className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
                 >
                   {isUnlocking ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Deriving MVK Keys...
+                      Unsealing with Recovery Keys...
                     </>
                   ) : (
                     <>
                       <Unlock className="w-3.5 h-3.5" />
-                      Unseal Vault with Passphrase
+                      Unseal Vault with Emergency Recovery
                     </>
                   )}
                 </button>
               </form>
-
-              {/* Fast Instant Demo Button */}
-              <div className="pt-2 border-t border-slate-200/60 text-center">
-                <button
-                  type="button"
-                  onClick={handleInstantDemoUnlock}
-                  className="text-xs text-blue-700 hover:text-blue-800 font-bold hover:underline inline-flex items-center gap-1"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Or Unlock Immediately with Enclave Seed Key
-                </button>
-              </div>
             </div>
-          </div>
+          </details>
         </div>
       </div>
     );
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // 2. UNLOCKED VAULT VIEW (Abhyantara Kosha Active Enclave)
+  // C. UNLOCKED VAULT VIEW (Abhyantara Kosha Active Enclave)
   // ══════════════════════════════════════════════════════════════════════════════
   return (
     <div className="space-y-6 pb-20 animate-fade-in">
@@ -1324,25 +1453,38 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
             const isSelected = selectedPersonId === person.id;
             const count = personDocCounts[person.id] || 0;
             return (
-              <button
-                key={person.id}
-                onClick={() => setSelectedPersonId(person.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 shrink-0 ${
-                  isSelected
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80'
-                }`}
-              >
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span>{person.name}</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
-                    isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+              <div key={person.id} className="relative group shrink-0">
+                <button
+                  onClick={() => setSelectedPersonId(person.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 ${
+                    isSelected
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80'
                   }`}
                 >
-                  {count}
-                </span>
-              </button>
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                  <span>{person.name}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+                {manifest.persons.length > 1 && !person.isDefault && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeletePerson(person.id);
+                    }}
+                    title="Delete person profile"
+                    className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition shadow-xs"
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -1445,7 +1587,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                       >
                         {/* Front Face */}
                         <div
-                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col"
+                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
                           style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
                         >
                           {frontMedia?.previewUrl ? (
@@ -1455,8 +1597,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">
-                              Biographical Scan
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
+                              <FileText className="w-8 h-8 text-slate-300" />
+                              <span>{frontMedia?.label || 'Front Scan'}</span>
                             </div>
                           )}
                           <div className="absolute bottom-2 right-2">
@@ -1468,7 +1611,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
 
                         {/* Back Face (Reverse) */}
                         <div
-                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col"
+                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
                           style={{
                             backfaceVisibility: 'hidden',
                             WebkitBackfaceVisibility: 'hidden',
@@ -1482,8 +1625,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">
-                              Endorsement Scan
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
+                              <FileText className="w-8 h-8 text-slate-300" />
+                              <span>{backMedia?.label || 'Back Scan'}</span>
                             </div>
                           )}
                           <div className="absolute bottom-2 right-2">
@@ -1496,7 +1640,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                     </div>
                   ) : doc.layoutMode === 'front_back_combined' ? (
                     // ── COMBINED STITCHED VIEW ──
-                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative">
+                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
                       {frontMedia?.previewUrl ? (
                         <img
                           src={frontMedia.previewUrl}
@@ -1504,8 +1648,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                           className="w-full h-full object-contain p-1"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">
-                          Stitched Card Scan
+                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
+                          <FileText className="w-8 h-8 text-slate-300" />
+                          <span>Stitched Dual-Sided Scan</span>
                         </div>
                       )}
                       <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -1531,7 +1676,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                     </div>
                   ) : (
                     // ── FRONT ONLY VIEW ──
-                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative">
+                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
                       {frontMedia?.previewUrl ? (
                         <img
                           src={frontMedia.previewUrl}
@@ -1539,8 +1684,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-400 text-xs">
-                          Single Face Document
+                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
+                          <FileText className="w-8 h-8 text-slate-300" />
+                          <span>Single Face Document</span>
                         </div>
                       )}
                       <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
@@ -1610,6 +1756,14 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                     <Sliders className="w-3.5 h-3.5" />
                     <span>Watermark &amp; Export</span>
                   </button>
+
+                  <button
+                    onClick={() => handleDeleteDocument(doc.id)}
+                    className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
+                    title="Delete document"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             );
@@ -1618,7 +1772,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          3. FULL DOSSIER VIEWER MODAL (Versions, Multi-Page, Linked Attachments)
+          1. FULL DOSSIER VIEWER MODAL (Versions, Multi-Page, Linked Attachments)
          ════════════════════════════════════════════════════════════════════════ */}
       {viewingDoc && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
@@ -1732,11 +1886,18 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                     </div>
 
                     <div className="max-h-[500px] overflow-auto flex items-center justify-center bg-white rounded-xl border border-slate-200 p-2">
-                      <img
-                        src={viewingDoc.media[dossierPage - 1]?.previewUrl}
-                        alt={`Page ${dossierPage}`}
-                        className="max-h-[460px] object-contain shadow-xs"
-                      />
+                      {viewingDoc.media[dossierPage - 1]?.previewUrl ? (
+                        <img
+                          src={viewingDoc.media[dossierPage - 1]?.previewUrl}
+                          alt={`Page ${dossierPage}`}
+                          className="max-h-[460px] object-contain shadow-xs"
+                        />
+                      ) : (
+                        <div className="p-12 text-center text-slate-400 text-xs">
+                          <FileText className="w-12 h-12 text-slate-300 mx-auto mb-2" />
+                          <span>Dossier Page {dossierPage} (Ciphertext Blob)</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Thumbnail strip */}
@@ -1745,11 +1906,15 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                         <button
                           key={idx}
                           onClick={() => setDossierPage(idx + 1)}
-                          className={`w-16 h-20 rounded-lg border-2 overflow-hidden shrink-0 transition ${
+                          className={`w-16 h-20 rounded-lg border-2 overflow-hidden shrink-0 transition flex items-center justify-center bg-white ${
                             dossierPage === idx + 1 ? 'border-blue-600 ring-2 ring-blue-200' : 'border-slate-200 opacity-60 hover:opacity-100'
                           }`}
                         >
-                          <img src={page.previewUrl} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
+                          {page.previewUrl ? (
+                            <img src={page.previewUrl} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[10px] font-bold text-slate-400">P.{idx + 1}</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1760,8 +1925,15 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
                     {viewingDoc.media.map((m, idx) => (
                       <div key={idx} className="bg-white rounded-2xl border border-slate-200 p-3 space-y-2 shadow-2xs">
                         <span className="text-[11px] font-bold text-slate-600">{m.label}</span>
-                        <div className="rounded-xl overflow-hidden border border-slate-100">
-                          <img src={m.previewUrl} alt={m.label} className="w-full h-auto object-cover" />
+                        <div className="rounded-xl overflow-hidden border border-slate-100 min-h-[160px] flex items-center justify-center bg-slate-50">
+                          {m.previewUrl ? (
+                            <img src={m.previewUrl} alt={m.label} className="w-full h-auto object-cover" />
+                          ) : (
+                            <div className="p-8 text-center text-slate-400 text-xs">
+                              <FileText className="w-8 h-8 text-slate-300 mx-auto mb-1" />
+                              <span>{m.label} (Encrypted)</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -1803,7 +1975,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          4. DYNAMIC CLIENT-SIDE WATERMARKING & REDACTION SUITE MODAL
+          2. DYNAMIC CLIENT-SIDE WATERMARKING & REDACTION SUITE MODAL
          ════════════════════════════════════════════════════════════════════════ */}
       {watermarkDoc && (
         <WatermarkRedactModal
@@ -1813,49 +1985,50 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken: _authTo
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          5. ADD DOCUMENT MODAL
+          3. ADD DOCUMENT MODAL (Real File Upload & Client-Side AES Encryption)
          ════════════════════════════════════════════════════════════════════════ */}
       {isAddDocOpen && manifest && (
         <AddDocumentModal
           manifest={manifest}
           masterVaultKey={masterVaultKey}
+          authToken={authToken}
           onClose={() => setIsAddDocOpen(false)}
-          onAddDocument={(newDoc) => {
-            setManifest((prev) => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                documents: [newDoc, ...prev.documents],
-                updatedAt: new Date().toISOString()
-              };
-            });
+          onAddDocument={async (newDoc) => {
+            if (!masterVaultKey) return;
+            const updated: VaultManifest = {
+              ...manifest,
+              documents: [newDoc, ...manifest.documents],
+              updatedAt: new Date().toISOString()
+            };
+            setManifest(updated);
             setIsAddDocOpen(false);
+            await syncManifestToCloud(updated, masterVaultKey);
           }}
         />
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          6. ADD PERSON PROFILE MODAL
+          4. ADD PERSON PROFILE MODAL
          ════════════════════════════════════════════════════════════════════════ */}
       {isAddPersonOpen && (
         <AddPersonModal
           onClose={() => setIsAddPersonOpen(false)}
-          onAddPerson={(newPerson) => {
-            setManifest((prev) => {
-              if (!prev) return prev;
-              return {
-                ...prev,
-                persons: [...prev.persons, newPerson],
-                updatedAt: new Date().toISOString()
-              };
-            });
+          onAddPerson={async (newPerson) => {
+            if (!manifest || !masterVaultKey) return;
+            const updated: VaultManifest = {
+              ...manifest,
+              persons: [...manifest.persons, newPerson],
+              updatedAt: new Date().toISOString()
+            };
+            setManifest(updated);
             setIsAddPersonOpen(false);
+            await syncManifestToCloud(updated, masterVaultKey);
           }}
         />
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
-          7. FAMILY SUMMARY DOSSIER MODAL
+          5. FAMILY SUMMARY DOSSIER MODAL
          ════════════════════════════════════════════════════════════════════════ */}
       {isFamilySummaryOpen && manifest && (
         <FamilySummaryModal
@@ -1895,23 +2068,14 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
   // Draw on canvas whenever parameters change
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !activeMedia?.previewUrl) return;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.src = activeMedia.previewUrl;
+    const renderWatermarks = (imgWidth: number, imgHeight: number) => {
+      canvas.width = imgWidth;
+      canvas.height = imgHeight;
 
-    img.onload = () => {
-      canvas.width = img.width || 700;
-      canvas.height = img.height || 480;
-
-      // 1. Draw base document scan
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-      // 2. Render diagonal watermarks
       if (watermarkText.trim()) {
         ctx.save();
         ctx.translate(canvas.width / 2, canvas.height / 2);
@@ -1921,7 +2085,6 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // Repeated grid watermarking pattern
         const fullText = recipientName.trim()
           ? `${watermarkText.trim()} • [${recipientName.trim().toUpperCase()}]`
           : watermarkText.trim();
@@ -1932,12 +2095,26 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
         ctx.restore();
       }
 
-      // 3. Render black-out redactions
       ctx.fillStyle = '#000000';
       redactions.forEach((r) => {
         ctx.fillRect(r.x, r.y, r.w, r.h);
       });
     };
+
+    if (activeMedia?.previewUrl) {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = activeMedia.previewUrl;
+      img.onload = () => {
+        ctx.clearRect(0, 0, img.width, img.height);
+        ctx.drawImage(img, 0, 0, img.width, img.height);
+        renderWatermarks(img.width || 700, img.height || 480);
+      };
+    } else {
+      ctx.fillStyle = '#f8f6f0';
+      ctx.fillRect(0, 0, 700, 480);
+      renderWatermarks(700, 480);
+    }
   }, [activeMedia, watermarkText, recipientName, opacity, angle, fontSize, redactions]);
 
   // Canvas mouse handlers for click-and-drag redaction tool
@@ -2166,12 +2343,13 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SUB-COMPONENT: Add New Document Modal (with Client-Side Encryption)
+// SUB-COMPONENT: Add New Document Modal (Real File Picker & AES-GCM Encryption)
 // ══════════════════════════════════════════════════════════════════════════════
 
 interface AddDocumentModalProps {
   manifest: VaultManifest;
   masterVaultKey: CryptoKey | null;
+  authToken?: string | null;
   onClose: () => void;
   onAddDocument: (doc: VaultDocument) => void;
 }
@@ -2179,6 +2357,7 @@ interface AddDocumentModalProps {
 const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
   manifest,
   masterVaultKey,
+  authToken,
   onClose,
   onAddDocument
 }) => {
@@ -2193,27 +2372,115 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [isEncrypting, setIsEncrypting] = useState<boolean>(false);
 
+  // File upload state for each slot
+  const [frontFile, setFrontFile] = useState<File | null>(null);
+  const [backFile, setBackFile] = useState<File | null>(null);
+  const [combinedFile, setCombinedFile] = useState<File | null>(null);
+  const [dossierFiles, setDossierFiles] = useState<File[]>([]);
+
+  // Linked Document sub-form
+  const [relatedTitle, setRelatedTitle] = useState<string>('');
+  const [relatedCategory, setRelatedCategory] = useState<string>('receipt');
+  const [relatedFile, setRelatedFile] = useState<File | null>(null);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!title.trim() || !documentNumber.trim()) return;
+    if (!title.trim() || !documentNumber.trim() || !masterVaultKey) return;
 
     try {
       setIsEncrypting(true);
+      const mediaSlots: DocumentMediaSlot[] = [];
 
-      // Procedural fallback preview SVG if no local file was uploaded
-      const frontSvg = createSamplePassportFrontSvg(
-        manifest.persons.find((p) => p.id === personId)?.name || 'Holder',
-        documentNumber,
-        '1999-01-01',
-        expiryDate || '2035-01-01'
-      );
-      const backSvg = createSamplePassportBackSvg('Emergency Contact');
+      // Helper to encrypt a real file with a fresh disposable DEK and upload
+      const encryptAndUploadFile = async (file: File, slot: DocumentMediaSlot['slot'], label: string, pageNumber?: number): Promise<DocumentMediaSlot> => {
+        const dek = await generateDEK();
+        const envelope = await wrapDEK(dek, masterVaultKey);
+        const { ciphertextB64, ivB64 } = await encryptBlob(file, dek);
+        const blobUuid = 'blob_' + Math.random().toString(36).substring(2, 12);
 
-      // Generate a disposable DEK and wrap it with MVK if available
-      let dekEnvelope: WrappedKeyEnvelope | undefined = undefined;
-      if (masterVaultKey) {
-        const docDek = await generateDEK();
-        dekEnvelope = await wrapDEK(docDek, masterVaultKey);
+        // Upload ciphertext to Azure / Google Drive blob store
+        if (authToken) {
+          await fetch('/api/vault/blob/upload', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Session-Token': authToken
+            },
+            body: JSON.stringify({
+              blobUuid,
+              ciphertextBase64: ciphertextB64,
+              mimeType: file.type
+            })
+          }).catch(() => {});
+        }
+
+        return {
+          slot,
+          label,
+          pageNumber,
+          mimeType: file.type || 'image/jpeg',
+          blobUuid,
+          ciphertextBase64: ciphertextB64,
+          ivBase64: ivB64,
+          dekEnvelope: envelope,
+          previewUrl: URL.createObjectURL(file) // ephemeral memory URL
+        };
+      };
+
+      // Process uploaded files based on selected composition layout mode
+      if (layoutMode === 'front_back_separate') {
+        if (frontFile) {
+          const m = await encryptAndUploadFile(frontFile, 'front', 'Front Biographical Page');
+          mediaSlots.push(m);
+        } else {
+          mediaSlots.push({ slot: 'front', label: 'Front Page', mimeType: 'image/jpeg' });
+        }
+
+        if (backFile) {
+          const m = await encryptAndUploadFile(backFile, 'back', 'Back Endorsement Page');
+          mediaSlots.push(m);
+        } else {
+          mediaSlots.push({ slot: 'back', label: 'Back Page', mimeType: 'image/jpeg' });
+        }
+      } else if (layoutMode === 'front_back_combined') {
+        if (combinedFile) {
+          const m = await encryptAndUploadFile(combinedFile, 'combined', 'Combined Front & Back Sheet');
+          mediaSlots.push(m);
+        } else {
+          mediaSlots.push({ slot: 'combined', label: 'Stitched Card', mimeType: 'image/jpeg' });
+        }
+      } else if (layoutMode === 'multi_page_dossier') {
+        if (dossierFiles.length > 0) {
+          for (let i = 0; i < dossierFiles.length; i++) {
+            const m = await encryptAndUploadFile(dossierFiles[i], 'page', `Page ${i + 1}`, i + 1);
+            mediaSlots.push(m);
+          }
+        } else {
+          mediaSlots.push({ slot: 'page', pageNumber: 1, label: 'Page 1', mimeType: 'image/jpeg' });
+        }
+      } else {
+        if (frontFile) {
+          const m = await encryptAndUploadFile(frontFile, 'front', 'Front Face Document');
+          mediaSlots.push(m);
+        } else {
+          mediaSlots.push({ slot: 'front', label: 'Document Face', mimeType: 'image/jpeg' });
+        }
+      }
+
+      // Process related supporting child document if provided
+      const relatedDocs: RelatedChildDocument[] = [];
+      if (relatedTitle.trim()) {
+        let relMedia: DocumentMediaSlot | undefined = undefined;
+        if (relatedFile) {
+          relMedia = await encryptAndUploadFile(relatedFile, 'page', relatedTitle.trim());
+        }
+        relatedDocs.push({
+          id: 'rel_' + Math.random().toString(36).substring(2, 9),
+          title: relatedTitle.trim(),
+          category: relatedCategory,
+          issuedDate: new Date().toISOString().split('T')[0],
+          media: relMedia
+        });
       }
 
       const newDoc: VaultDocument = {
@@ -2228,44 +2495,27 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
         layoutMode,
         status: 'active',
         notes: notes.trim() || undefined,
-        media: [
-          {
-            slot: 'front',
-            label: 'Front Scan',
-            mimeType: 'image/svg+xml',
-            previewUrl: frontSvg,
-            dekEnvelope
-          },
-          ...(layoutMode === 'front_back_separate'
-            ? [
-                {
-                  slot: 'back' as const,
-                  label: 'Back Scan',
-                  mimeType: 'image/svg+xml',
-                  previewUrl: backSvg,
-                  dekEnvelope
-                }
-              ]
-            : [])
-        ],
+        media: mediaSlots,
+        relatedDocuments: relatedDocs.length > 0 ? relatedDocs : undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
 
       setIsEncrypting(false);
       onAddDocument(newDoc);
-    } catch (err) {
+    } catch (err: any) {
       setIsEncrypting(false);
+      alert('Encryption & Upload error: ' + err.message);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
-      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-xl max-h-[92vh] flex flex-col overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden">
         <div className="p-5 border-b border-slate-200 flex items-center justify-between">
           <h2 className="text-base font-bold text-slate-900 serif-heading flex items-center gap-2">
             <Plus className="w-4 h-4 text-blue-600" />
-            Add Secure Document to Vault
+            Add Real Document to Zero-Knowledge Vault
           </h2>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl">
             <X className="w-5 h-5" />
@@ -2276,7 +2526,7 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Person / Profile
+                Family Profile / Custodian
               </label>
               <select
                 value={personId}
@@ -2327,7 +2577,7 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Document Number / ID
+                Document Number / Identifier
               </label>
               <input
                 type="text"
@@ -2395,13 +2645,133 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
             </select>
           </div>
 
+          {/* ── REAL FILE PICKER UPLOAD REGIONS ───────────────────────────────── */}
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Upload className="w-3.5 h-3.5 text-blue-600" />
+              Upload Document Media Files (Encrypted on Device)
+            </span>
+
+            {layoutMode === 'front_back_separate' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase">Front Page Image / Scan</label>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={(e) => setFrontFile(e.target.files?.[0] || null)}
+                    className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  />
+                  {frontFile && <span className="text-[10px] text-emerald-600 font-semibold">Selected: {frontFile.name}</span>}
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase">Back Page Image / Scan</label>
+                  <input
+                    type="file"
+                    accept="image/*,application/pdf"
+                    onChange={(e) => setBackFile(e.target.files?.[0] || null)}
+                    className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                  />
+                  {backFile && <span className="text-[10px] text-emerald-600 font-semibold">Selected: {backFile.name}</span>}
+                </div>
+              </div>
+            )}
+
+            {layoutMode === 'front_back_combined' && (
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Stitched Single-Sheet Scan</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setCombinedFile(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                />
+                {combinedFile && <span className="text-[10px] text-emerald-600 font-semibold">Selected: {combinedFile.name}</span>}
+              </div>
+            )}
+
+            {layoutMode === 'multi_page_dossier' && (
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Upload Dossier Pages (Multiple Images / PDFs)</label>
+                <input
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setDossierFiles(Array.from(e.target.files || []))}
+                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                />
+                {dossierFiles.length > 0 && (
+                  <span className="text-[10px] text-emerald-600 font-semibold">
+                    {dossierFiles.length} page files selected
+                  </span>
+                )}
+              </div>
+            )}
+
+            {layoutMode === 'front_only' && (
+              <div className="space-y-1">
+                <label className="block text-[10px] font-bold text-slate-500 uppercase">Front Face Document Scan</label>
+                <input
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => setFrontFile(e.target.files?.[0] || null)}
+                  className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                />
+                {frontFile && <span className="text-[10px] text-emerald-600 font-semibold">Selected: {frontFile.name}</span>}
+              </div>
+            )}
+          </div>
+
+          {/* ── LINKED / RELATED SUPPORTING DOCUMENT ─────────────────────────── */}
+          <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Paperclip className="w-3.5 h-3.5 text-blue-600" />
+              Link Supporting Document (Relational Cluster)
+            </span>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <input
+                  type="text"
+                  placeholder="e.g. Aadhar Enrollment Slip"
+                  value={relatedTitle}
+                  onChange={(e) => setRelatedTitle(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <select
+                  value={relatedCategory}
+                  onChange={(e) => setRelatedCategory(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:border-blue-500"
+                >
+                  <option value="receipt">Receipt / Slip</option>
+                  <option value="legal">Legal Affidavit / Translation</option>
+                  <option value="photo">Photo Spec</option>
+                  <option value="clearance">Police / Medical Clearance</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => setRelatedFile(e.target.files?.[0] || null)}
+                className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+              />
+            </div>
+          </div>
+
           <div>
             <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
               Private Notes &amp; Custody Details
             </label>
             <textarea
               rows={2}
-              placeholder="e.g. Original stored in bank locker #402"
+              placeholder="e.g. Original stored in safe #2"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500"

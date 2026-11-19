@@ -1,7 +1,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
-import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
 import { connectToMongo, verifySession, extractToken, logAppError } from './db';
+import { executeDriveAction, uploadToFolder, getFileContent } from './gdrive';
 
 // In-memory fallback stores in case MongoDB is temporarily in-flight or offline
 const inMemoryRelaySessions = new Map<string, {
@@ -12,6 +12,62 @@ const inMemoryRelaySessions = new Map<string, {
   createdAt: number;
   expiresAt: number;
 }>();
+
+// Cache for Google Drive Shudkara_Vault folder ID
+let vaultDriveFolderId: string | null = null;
+let vaultBlobsFolderId: string | null = null;
+
+async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; blobsFolderId: string }> {
+  if (vaultDriveFolderId && vaultBlobsFolderId) {
+    return { vaultFolderId: vaultDriveFolderId, blobsFolderId: vaultBlobsFolderId };
+  }
+
+  return executeDriveAction(async (drive): Promise<{ vaultFolderId: string; blobsFolderId: string }> => {
+    // 1. Check if GOOGLE_DRIVE_VAULT_FOLDER_ID is set in env
+    const envFolderId = process.env.GOOGLE_DRIVE_VAULT_FOLDER_ID;
+    if (envFolderId) {
+      vaultDriveFolderId = envFolderId;
+    } else {
+      // Find or create 'Shudkara_Vault' in root
+      const folderRes = await drive.files.list({
+        q: "'root' in parents and name = 'Shudkara_Vault' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+        fields: 'files(id, name)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true
+      });
+      if (folderRes.data.files && folderRes.data.files.length > 0) {
+        vaultDriveFolderId = folderRes.data.files[0].id!;
+      } else {
+        const created = await drive.files.create({
+          requestBody: { name: 'Shudkara_Vault', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+          supportsAllDrives: true,
+          fields: 'id'
+        });
+        vaultDriveFolderId = created.data.id!;
+      }
+    }
+
+    // 2. Find or create 'blobs' inside 'Shudkara_Vault'
+    const blobsRes = await drive.files.list({
+      q: `'${vaultDriveFolderId}' in parents and name = 'blobs' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+      fields: 'files(id, name)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true
+    });
+    if (blobsRes.data.files && blobsRes.data.files.length > 0) {
+      vaultBlobsFolderId = blobsRes.data.files[0].id!;
+    } else {
+      const createdBlobs = await drive.files.create({
+        requestBody: { name: 'blobs', mimeType: 'application/vnd.google-apps.folder', parents: [vaultDriveFolderId] },
+        supportsAllDrives: true,
+        fields: 'id'
+      });
+      vaultBlobsFolderId = createdBlobs.data.id!;
+    }
+
+    return { vaultFolderId: vaultDriveFolderId!, blobsFolderId: vaultBlobsFolderId! };
+  });
+}
 
 // Purge expired in-memory sessions every 30 seconds
 setInterval(() => {
@@ -51,7 +107,7 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
 
     // ── 1. RELAY ENDPOINTS (Method A: Ephemeral ECDH Companion QR Code Relay) ──
 
-    // 1.1 POST /api/vault/relay/init (Laptop requests pairing ticket)
+    // 1.1 POST /api/vault/relay/init (Laptop registers pairing session)
     if (method === 'POST' && (action === 'relay/init' || path.endsWith('relay/init'))) {
       let body: any;
       try {
@@ -259,6 +315,31 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 401, jsonBody: { error: 'Unauthorized. Shudkara session required.' } };
       }
 
+      // Check Google Drive first if configured
+      try {
+        const { vaultFolderId } = await getOrCreateVaultDriveFolders();
+        return await executeDriveAction(async (drive) => {
+          const listRes = await drive.files.list({
+            q: `'${vaultFolderId}' in parents and name = '.vault_manifest.enc' and trashed = false`,
+            fields: 'files(id, name, modifiedTime)',
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
+          });
+          if (listRes.data.files && listRes.data.files.length > 0) {
+            const fileId = listRes.data.files[0].id!;
+            const content = await getFileContent(fileId);
+            const parsed = JSON.parse(content);
+            return {
+              status: 200,
+              jsonBody: parsed
+            };
+          }
+          throw new Error('No Drive manifest file');
+        });
+      } catch {
+        // Fallback to MongoDB
+      }
+
       if (!db) {
         return { status: 503, jsonBody: { error: 'Database unavailable.' } };
       }
@@ -299,29 +380,40 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'manifestCiphertext and iv are required.' } };
       }
 
-      if (!db) {
-        return { status: 503, jsonBody: { error: 'Database unavailable.' } };
+      const now = new Date();
+      const payloadToSave = {
+        key: 'primary_manifest',
+        manifestCiphertext,
+        iv,
+        version: version || 2,
+        updatedAt: now.toISOString()
+      };
+
+      // 1. Sync to Google Drive if credentials exist
+      let driveSyncSuccess = false;
+      try {
+        const { vaultFolderId } = await getOrCreateVaultDriveFolders();
+        const base64Content = Buffer.from(JSON.stringify(payloadToSave)).toString('base64');
+        await uploadToFolder(vaultFolderId, '.vault_manifest.enc', 'application/json', base64Content);
+        driveSyncSuccess = true;
+      } catch (driveErr) {
+        context.warn('[Vault API] Drive sync skipped, proceeding to Mongo:', driveErr);
       }
 
-      const now = new Date();
-      await db.collection('vault_manifests').updateOne(
-        { key: 'primary_manifest' },
-        {
-          $set: {
-            key: 'primary_manifest',
-            manifestCiphertext,
-            iv,
-            version: version || 2,
-            updatedAt: now.toISOString()
-          }
-        },
-        { upsert: true }
-      );
+      // 2. Persist in MongoDB
+      if (db) {
+        await db.collection('vault_manifests').updateOne(
+          { key: 'primary_manifest' },
+          { $set: payloadToSave },
+          { upsert: true }
+        );
+      }
 
       return {
         status: 200,
         jsonBody: {
           success: true,
+          driveSync: driveSyncSuccess,
           updatedAt: now.toISOString()
         }
       };
@@ -349,30 +441,47 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 400, jsonBody: { error: 'blobUuid and ciphertextBase64 are required.' } };
       }
 
-      if (!db) {
-        return { status: 503, jsonBody: { error: 'Database unavailable.' } };
+      const cleanUuid = blobUuid.trim().replace(/[^a-zA-Z0-9._-]/g, '');
+      let driveFileId: string | null = null;
+
+      // 1. Attempt upload to Google Drive Shudkara_Vault/blobs/
+      try {
+        const { blobsFolderId } = await getOrCreateVaultDriveFolders();
+        const uploadRes = await uploadToFolder(
+          blobsFolderId,
+          `${cleanUuid}.enc`,
+          'application/octet-stream',
+          ciphertextBase64
+        );
+        driveFileId = uploadRes.fileId;
+      } catch (driveErr) {
+        context.warn('[Vault API] Drive blob upload fallback to MongoDB:', driveErr);
       }
 
-      const cleanUuid = blobUuid.trim().replace(/[^a-zA-Z0-9._-]/g, '');
-      await db.collection('vault_blobs').updateOne(
-        { blobUuid: cleanUuid },
-        {
-          $set: {
-            blobUuid: cleanUuid,
-            ciphertextBase64,
-            mimeType: mimeType || 'image/jpeg',
-            size: ciphertextBase64.length,
-            uploadedAt: new Date()
-          }
-        },
-        { upsert: true }
-      );
+      // 2. Save in MongoDB vault_blobs
+      if (db) {
+        await db.collection('vault_blobs').updateOne(
+          { blobUuid: cleanUuid },
+          {
+            $set: {
+              blobUuid: cleanUuid,
+              driveFileId,
+              ciphertextBase64,
+              mimeType: mimeType || 'image/jpeg',
+              size: ciphertextBase64.length,
+              uploadedAt: new Date()
+            }
+          },
+          { upsert: true }
+        );
+      }
 
       return {
         status: 200,
         jsonBody: {
           success: true,
-          blobUuid: cleanUuid
+          blobUuid: cleanUuid,
+          driveFileId
         }
       };
     }
@@ -385,7 +494,7 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         return { status: 401, jsonBody: { error: 'Unauthorized.' } };
       }
 
-      const targetUuid = action.replace(/^blob\//, '').trim();
+      const targetUuid = action.replace(/^blob\//, '').trim().replace(/[^a-zA-Z0-9._-]/g, '');
       if (!targetUuid) {
         return { status: 400, jsonBody: { error: 'blobUuid parameter required.' } };
       }
@@ -404,7 +513,8 @@ export async function vaultHandler(request: HttpRequest, context: InvocationCont
         jsonBody: {
           blobUuid: blobDoc.blobUuid,
           ciphertextBase64: blobDoc.ciphertextBase64,
-          mimeType: blobDoc.mimeType
+          mimeType: blobDoc.mimeType,
+          driveFileId: blobDoc.driveFileId
         }
       };
     }
