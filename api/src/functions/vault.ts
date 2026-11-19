@@ -13,9 +13,27 @@ const inMemoryRelaySessions = new Map<string, {
   expiresAt: number;
 }>();
 
-// Cache for Google Drive Shudkara_Vault folder ID
+// Cache for Google Drive folder hierarchy: StorageBuckets / ShudkaraBuckets / Shudkara_Vault / blobs
 let vaultDriveFolderId: string | null = null;
 let vaultBlobsFolderId: string | null = null;
+
+async function getOrCreateDriveFolder(drive: any, parentId: string, folderName: string): Promise<string> {
+  const res = await drive.files.list({
+    q: `'${parentId}' in parents and name = '${folderName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+    fields: 'files(id, name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
+  });
+  if (res.data.files && res.data.files.length > 0) {
+    return res.data.files[0].id!;
+  }
+  const created = await drive.files.create({
+    requestBody: { name: folderName, mimeType: 'application/vnd.google-apps.folder', parents: [parentId] },
+    supportsAllDrives: true,
+    fields: 'id'
+  });
+  return created.data.id!;
+}
 
 async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; blobsFolderId: string }> {
   if (vaultDriveFolderId && vaultBlobsFolderId) {
@@ -28,42 +46,50 @@ async function getOrCreateVaultDriveFolders(): Promise<{ vaultFolderId: string; 
     if (envFolderId) {
       vaultDriveFolderId = envFolderId;
     } else {
-      // Find or create 'Shudkara_Vault' in root
-      const folderRes = await drive.files.list({
-        q: "'root' in parents and name = 'Shudkara_Vault' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-        fields: 'files(id, name)',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true
-      });
-      if (folderRes.data.files && folderRes.data.files.length > 0) {
-        vaultDriveFolderId = folderRes.data.files[0].id!;
-      } else {
-        const created = await drive.files.create({
-          requestBody: { name: 'Shudkara_Vault', mimeType: 'application/vnd.google-apps.folder', parents: ['root'] },
+      // 2. Target Hierarchy: StorageBuckets -> ShudkaraBuckets -> Shudkara_Vault
+      const storageBucketsId = await getOrCreateDriveFolder(drive, 'root', 'StorageBuckets');
+      const shudkaraBucketsId = await getOrCreateDriveFolder(drive, storageBucketsId, 'ShudkaraBuckets');
+
+      // 3. Migration Check: If old 'Shudkara_Vault' existed in 'root', migrate it into ShudkaraBuckets
+      try {
+        const rootOldRes = await drive.files.list({
+          q: "'root' in parents and name = 'Shudkara_Vault' and mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+          fields: 'files(id, name)',
           supportsAllDrives: true,
-          fields: 'id'
+          includeItemsFromAllDrives: true
         });
-        vaultDriveFolderId = created.data.id!;
+        if (rootOldRes.data.files && rootOldRes.data.files.length > 0) {
+          const oldFolderId = rootOldRes.data.files[0].id!;
+          // Check if Shudkara_Vault already exists inside ShudkaraBuckets
+          const insideRes = await drive.files.list({
+            q: `'${shudkaraBucketsId}' in parents and name = 'Shudkara_Vault' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+            fields: 'files(id, name)',
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true
+          });
+          if (!insideRes.data.files || insideRes.data.files.length === 0) {
+            // Move root Shudkara_Vault into StorageBuckets / ShudkaraBuckets
+            await drive.files.update({
+              fileId: oldFolderId,
+              addParents: shudkaraBucketsId,
+              removeParents: 'root',
+              supportsAllDrives: true,
+              fields: 'id, parents'
+            });
+            vaultDriveFolderId = oldFolderId;
+          }
+        }
+      } catch (migrationErr) {
+        // Continue with folder creation
+      }
+
+      if (!vaultDriveFolderId) {
+        vaultDriveFolderId = await getOrCreateDriveFolder(drive, shudkaraBucketsId, 'Shudkara_Vault');
       }
     }
 
-    // 2. Find or create 'blobs' inside 'Shudkara_Vault'
-    const blobsRes = await drive.files.list({
-      q: `'${vaultDriveFolderId}' in parents and name = 'blobs' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'files(id, name)',
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true
-    });
-    if (blobsRes.data.files && blobsRes.data.files.length > 0) {
-      vaultBlobsFolderId = blobsRes.data.files[0].id!;
-    } else {
-      const createdBlobs = await drive.files.create({
-        requestBody: { name: 'blobs', mimeType: 'application/vnd.google-apps.folder', parents: [vaultDriveFolderId] },
-        supportsAllDrives: true,
-        fields: 'id'
-      });
-      vaultBlobsFolderId = createdBlobs.data.id!;
-    }
+    // 4. Find or create 'blobs' inside 'Shudkara_Vault'
+    vaultBlobsFolderId = await getOrCreateDriveFolder(drive, vaultDriveFolderId!, 'blobs');
 
     return { vaultFolderId: vaultDriveFolderId!, blobsFolderId: vaultBlobsFolderId! };
   });
