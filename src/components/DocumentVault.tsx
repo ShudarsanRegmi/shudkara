@@ -5,7 +5,6 @@ import {
   Lock,
   Unlock,
   Key,
-  Smartphone,
   Copy,
   Eye,
   RotateCw,
@@ -47,7 +46,6 @@ import {
 } from 'lucide-react';
 
 import {
-  generateMasterVaultKey,
   generateDEK,
   wrapDEK,
   unwrapDEK,
@@ -55,27 +53,19 @@ import {
   decryptBlob,
   encryptJSON,
   decryptJSON,
-  deriveMVKFromPassphrase,
-  generateEphemeralECDH,
-  importPeerECDHPublicKey,
-  deriveECDHSharedSecret,
-  sealMVKForRelay,
-  unsealMVKFromRelay,
+  createMasterVaultEnvelope,
+  unlockMasterVaultEnvelope,
+  isPlatformBiometricAvailable,
+  isDeviceBiometricsEnrolled,
+  clearDeviceBiometrics,
+  enrollDeviceBiometrics,
   unlockWithDeviceBiometrics,
   authenticateWebAuthnPasskey,
-  generateQRCodeSVG,
-  exportKeyRaw,
-  importKeyRaw,
   base64ToArrayBuffer,
   idbSaveEncryptedBlob,
-  idbGetEncryptedBlob,
-  hasEnrolledBiometrics,
-  clearDeviceVaultBiometrics,
-  registerBiometricsWithExistingMVK,
-  createInstantPairingPayload,
-  decryptInstantPairingPayload
+  idbGetEncryptedBlob
 } from '../utils/vaultCrypto';
-import type { WrappedKeyEnvelope } from '../utils/vaultCrypto';
+import type { WrappedKeyEnvelope, VaultMasterEnvelope } from '../utils/vaultCrypto';
 
 // ── Types & Data Models (Per Proposal Section 6.2) ─────────────────────────────
 
@@ -300,86 +290,67 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const [isAddPersonOpen, setIsAddPersonOpen] = useState<boolean>(false);
   const [isFamilySummaryOpen, setIsFamilySummaryOpen] = useState<boolean>(false);
 
-  // ── Instant Hash-based Zero-Knowledge Pairing (Phone Scans Laptop QR) ──────
-  const [instantPairingMvk, setInstantPairingMvk] = useState<CryptoKey | null>(null);
-  const [showPairPhoneModal, setShowPairPhoneModal] = useState<boolean>(false);
-  const [pairingQRData, setPairingQRData] = useState<{ url: string; qrSvg: string } | null>(null);
-  const [isKeyMismatch, setIsKeyMismatch] = useState<boolean>(false);
-  const resolvingBlobsRef = useRef<Set<string>>(new Set());
+  // ── Envelope & Device Biometrics State (Zero-Knowledge Account Envelope) ────
+  const [envelopeStatus, setEnvelopeStatus] = useState<'loading' | 'unconfigured' | 'configured'>('loading');
+  const [cloudEnvelope, setCloudEnvelope] = useState<VaultMasterEnvelope | null>(null);
+  const [hasRegisteredPasskey, setHasRegisteredPasskey] = useState<boolean>(() => isDeviceBiometricsEnrolled());
+  const [platformBioAvailable, setPlatformBioAvailable] = useState<boolean>(false);
+  const [showPinUnlock, setShowPinUnlock] = useState<boolean>(false);
+  const [showPinInputText, setShowPinInputText] = useState<boolean>(false);
 
-  // ── Pairing Relay State (Method A: Cross-Device ECDH QR Relay) ───────────────
-  const [relaySessionId, setRelaySessionId] = useState<string>('');
-  const [relayKeyPair, setRelayKeyPair] = useState<CryptoKeyPair | null>(null);
-  const [relayStatus, setRelayStatus] = useState<'idle' | 'polling' | 'authorized' | 'expired'>('idle');
-  const [relaySecondsRemaining, setRelaySecondsRemaining] = useState<number>(90);
-  const [qrSvgHtml, setQrSvgHtml] = useState<string>('');
-  const [showLaptopQR, setShowLaptopQR] = useState<boolean>(false);
+  // Setup / Unlock form fields
+  const [masterPinInput, setMasterPinInput] = useState<string>('');
+  const [confirmPinInput, setConfirmPinInput] = useState<string>('');
+  const [enrollBioOnUnlock, setEnrollBioOnUnlock] = useState<boolean>(true);
 
-  // ── Companion Mobile Screen State (if user opens companion pairing URL) ──────
-  const [companionPairingParam, setCompanionPairingParam] = useState<{ sid: string; pk: JsonWebKey } | null>(null);
-  const [companionAuthorized, setCompanionAuthorized] = useState<boolean>(false);
-
-  // ── WebAuthn Passkey Registration State ──────────────────────────────────────
-  const [hasRegisteredPasskey, setHasRegisteredPasskey] = useState<boolean>(() => hasEnrolledBiometrics());
-  const [passkeyNotice, setPasskeyNotice] = useState<string | null>(null);
-
-  // ── Passphrase & TOTP Unlock Form State ──────────────────────────────────────
-  const [passphraseInput, setPassphraseInput] = useState<string>('');
-  const [totpCodeInput, setTotpCodeInput] = useState<string>('');
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [isUnlocking, setIsUnlocking] = useState<boolean>(false);
+  const [passkeyNotice, setPasskeyNotice] = useState<string | null>(null);
+  const resolvingBlobsRef = useRef<Set<string>>(new Set());
 
   // ── Ephemeral Clipboard Wiper State ──────────────────────────────────────────
   const [clipboardNotice, setClipboardNotice] = useState<{ text: string; secondsLeft: number } | null>(null);
 
-  // ── Check if this window was opened as a companion pairing scanner or instant pairing ─
+  // Check platform hardware biometric capability and fetch account envelope on mount
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    isPlatformBiometricAvailable().then((avail) => setPlatformBioAvailable(avail));
+  }, []);
 
-    // Check instant zero-knowledge pairing URL fragment (#pair_s=...)
-    if (window.location.hash && window.location.hash.includes('pair_s=')) {
-      decryptInstantPairingPayload(window.location.hash).then((mvk) => {
-        if (mvk) {
-          setInstantPairingMvk(mvk);
-        }
-      });
+  const fetchEnvelope = useCallback(async () => {
+    if (!effectiveAuthToken) {
+      setEnvelopeStatus('unconfigured');
+      return;
     }
-
-    const params = new URLSearchParams(window.location.search);
-    const isPair = params.get('vault_pair');
-    const sid = params.get('sid');
-    const pkStr = params.get('pk');
-
-    if (isPair && sid) {
-      if (pkStr) {
-        try {
-          const pk = JSON.parse(decodeURIComponent(pkStr));
-          setCompanionPairingParam({ sid, pk });
-        } catch {
-          // invalid param
+    try {
+      setEnvelopeStatus('loading');
+      const res = await fetch('/api/vault/envelope', {
+        headers: { 'X-Session-Token': effectiveAuthToken }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.configured && data.ciphertextB64) {
+          setCloudEnvelope({
+            saltB64: data.saltB64,
+            ivB64: data.ivB64,
+            ciphertextB64: data.ciphertextB64,
+            iterations: data.iterations || 600000
+          });
+          setEnvelopeStatus('configured');
+        } else {
+          setEnvelopeStatus('unconfigured');
         }
       } else {
-        // Fetch laptop's ephemeral ECDH public key from the relay session
-        fetch(`/api/vault/relay/status?sessionId=${sid}`)
-          .then((res) => res.json())
-          .then((data) => {
-            if (data && data.publicKey) {
-              setCompanionPairingParam({ sid, pk: data.publicKey });
-            } else {
-              setUnlockError('Pairing session not found or expired.');
-            }
-          })
-          .catch((err) => {
-            setUnlockError('Failed to contact relay server: ' + err.message);
-          });
+        setEnvelopeStatus('unconfigured');
       }
+    } catch (err) {
+      console.warn('[Vault] Envelope fetch error:', err);
+      setEnvelopeStatus('unconfigured');
     }
+  }, [effectiveAuthToken]);
 
-    // Check if device has registered passkey credentials
-    if (hasEnrolledBiometrics()) {
-      setHasRegisteredPasskey(true);
-    }
-  }, []);
+  useEffect(() => {
+    fetchEnvelope();
+  }, [fetchEnvelope]);
 
   // ── Inactivity Auto-Lock & Window Blur Handlers ──────────────────────────────
   const lockVault = useCallback(() => {
@@ -602,7 +573,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const loadVaultManifest = useCallback(
     async (mvk: CryptoKey) => {
       try {
-        setIsKeyMismatch(false);
         setUnlockError(null);
         let loadedManifest: VaultManifest | null = null;
         let cloudManifestFound = false;
@@ -624,8 +594,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                   );
                 } catch (decErr) {
                   console.error('[Vault] Decryption failed for cloud manifest:', decErr);
-                  setIsKeyMismatch(true);
-                  throw new Error('Key Mismatch: The cryptographic key on this device cannot decrypt your cloud vault. Please re-pair via QR code or enter your Master Passphrase.');
+                  throw new Error('Key Mismatch: The cryptographic key on this device cannot decrypt your cloud vault. Please unlock with your Master PIN / Passphrase.');
                 }
               }
             }
@@ -653,7 +622,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
         // 3. Fallback to initial seed ONLY IF this is a brand new account with no manifest anywhere!
         if (!loadedManifest) {
           if (cloudManifestFound) {
-            // Cloud has data but this key cannot decrypt it! DO NOT overwrite with blank!
             throw new Error('Decryption failed: Cloud vault exists but this key cannot open it.');
           }
           loadedManifest = createInitialManifest();
@@ -662,162 +630,85 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
         // 4. INSTANT FIRST PAINT: Set manifest immediately so UI renders in <10ms!
         setManifest(loadedManifest);
-
-        // Visible cards are progressively decrypted on demand by useEffect without blocking startup!
       } catch (err: any) {
         setUnlockError(err.message || 'Decryption failed: key could not unseal manifest.');
       }
     },
     [effectiveAuthToken, syncManifestToCloud]
   );
-  // ── QR Code Relay Pairing Logic (Laptop Side) ────────────────────────────────
-  const initRelayPairing = useCallback(async () => {
-    try {
-      setRelayStatus('idle');
-      setUnlockError(null);
-      const sessionId = 'pair_' + Math.random().toString(36).substring(2, 10);
-      const { keyPair, publicKeyJWK } = await generateEphemeralECDH();
 
-      setRelaySessionId(sessionId);
-      setRelayKeyPair(keyPair);
-      setRelaySecondsRemaining(90);
-
-      // Generate standard pairing URL (~48 chars) and real scannable ISO QR Code SVG
-      const pairingUrl = `${window.location.origin}${window.location.pathname}?vault_pair=true&sid=${sessionId}`;
-      const svg = generateQRCodeSVG(pairingUrl, 200);
-      setQrSvgHtml(svg);
-
-      // Register session with Azure Function relay
-      await fetch('/api/vault/relay/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, publicKey: publicKeyJWK })
-      }).catch(() => {});
-
-      setRelayStatus('polling');
-    } catch (err: any) {
-      setUnlockError('Failed to initialize ECDH relay: ' + err.message);
+  // ── First-Time Vault Initialization (Create Envelope + Optional Biometric) ──
+  const handleSetupVault = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!masterPinInput.trim() || masterPinInput.length < 6) {
+      setUnlockError('PIN / Passphrase must be at least 6 characters.');
+      return;
     }
-  }, []);
-
-  // Auto-initialize pairing session on mount when vault is locked
-  useEffect(() => {
-    if (!isUnlocked && !companionPairingParam && relayStatus === 'idle') {
-      initRelayPairing();
+    if (masterPinInput !== confirmPinInput) {
+      setUnlockError('PINs do not match. Please verify.');
+      return;
     }
-  }, [isUnlocked, companionPairingParam, relayStatus, initRelayPairing]);
 
-  // Poll relay status while waiting for companion authorization
-  useEffect(() => {
-    if (relayStatus !== 'polling' || !relaySessionId || !relayKeyPair) return;
-
-    const interval = setInterval(async () => {
-      try {
-        setRelaySecondsRemaining((prev) => {
-          if (prev <= 1) {
-            setRelayStatus('expired');
-            return 0;
-          }
-          return prev - 1;
-        });
-
-        const res = await fetch(`/api/vault/relay/status?sessionId=${relaySessionId}`);
-        if (!res.ok) return;
-        const data = await res.json();
-
-        if (data.status === 'authorized' && data.encryptedMvkPayload) {
-          clearInterval(interval);
-          setRelayStatus('authorized');
-
-          // Unseal MVK using laptop's ECDH private key and companion phone's public key
-          const phonePublicKey = await importPeerECDHPublicKey(data.encryptedMvkPayload.phonePublicKeyJWK);
-          const tunnelKey = await deriveECDHSharedSecret(relayKeyPair.privateKey, phonePublicKey);
-          const unsealedMvk = await unsealMVKFromRelay(data.encryptedMvkPayload.sealedEnvelope, tunnelKey);
-
-          setMasterVaultKey(unsealedMvk);
-          setIsUnlocked(true);
-          setInactivitySeconds(600);
-          await loadVaultManifest(unsealedMvk);
-        } else if (data.status === 'expired') {
-          setRelayStatus('expired');
-          clearInterval(interval);
-        }
-      } catch {
-        // Continue polling
-      }
-    }, 1500);
-
-    return () => clearInterval(interval);
-  }, [relayStatus, relaySessionId, relayKeyPair, loadVaultManifest]);
-
-  // ── Companion Mobile Authorization (When opened via scanned QR link) ─────────
-  const handleCompanionAuthorize = async () => {
-    if (!companionPairingParam) return;
     try {
       setIsUnlocking(true);
-      // 1. Companion phone generates ephemeral ECDH pair
-      const phoneECDH = await generateEphemeralECDH();
-      const laptopPeerKey = await importPeerECDHPublicKey(companionPairingParam.pk);
-      const sharedTunnel = await deriveECDHSharedSecret(phoneECDH.keyPair.privateKey, laptopPeerKey);
+      setUnlockError(null);
 
-      // 2. Unseal Master Vault Key via native phone biometric sensor
-      let mvkToShare: CryptoKey;
-      const deviceSealed = localStorage.getItem('shudkara_vault_device_mvk');
-      if (deviceSealed) {
-        mvkToShare = await unlockWithDeviceBiometrics();
-      } else {
-        const cachedMvkRaw = localStorage.getItem('shudkara_vault_mvk_backup');
-        if (cachedMvkRaw) {
-          mvkToShare = await importKeyRaw(cachedMvkRaw);
-        } else {
-          mvkToShare = await generateMasterVaultKey();
-          const exported = await exportKeyRaw(mvkToShare);
-          localStorage.setItem('shudkara_vault_mvk_backup', exported);
+      // 1. Generate MVK and encrypt envelope with PIN
+      const { mvk, envelope } = await createMasterVaultEnvelope(masterPinInput.trim());
+
+      // 2. Persist envelope to Cloud (Google Drive + MongoDB)
+      if (effectiveAuthToken) {
+        const envRes = await fetch('/api/vault/envelope', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Session-Token': effectiveAuthToken
+          },
+          body: JSON.stringify(envelope)
+        });
+        if (!envRes.ok) {
+          throw new Error('Failed to save master envelope to cloud.');
         }
       }
 
-      // 3. Encrypt MVK with shared tunnel key and send to relay
-      const sealedEnvelope = await sealMVKForRelay(mvkToShare, sharedTunnel);
-
-      const res = await fetch('/api/vault/relay/authorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: companionPairingParam.sid,
-          encryptedMvkPayload: {
-            sealedEnvelope,
-            phonePublicKeyJWK: phoneECDH.publicKeyJWK
-          }
-        })
-      });
-
-      if (!res.ok) {
-        throw new Error('Authorization endpoint returned ' + res.status);
+      // 3. Enroll device hardware biometrics if requested
+      if (enrollBioOnUnlock && platformBioAvailable) {
+        try {
+          await enrollDeviceBiometrics(mvk);
+          setHasRegisteredPasskey(true);
+          setPasskeyNotice('1-Tap Fingerprint biometrics successfully enrolled on this device!');
+        } catch (bioErr: any) {
+          console.warn('[Vault] Biometric enrollment skipped:', bioErr);
+        }
       }
 
+      // 4. Create initial manifest & unlock
+      setMasterVaultKey(mvk);
+      setIsUnlocked(true);
+      setInactivitySeconds(600);
+      setCloudEnvelope(envelope);
+      setEnvelopeStatus('configured');
+      setMasterPinInput('');
+      setConfirmPinInput('');
+
+      const initManifest = createInitialManifest();
+      setManifest(initManifest);
+      await syncManifestToCloud(initManifest, mvk);
       setIsUnlocking(false);
-      setCompanionAuthorized(true);
     } catch (err: any) {
       setIsUnlocking(false);
-      setUnlockError('Authorization error: ' + err.message);
+      setUnlockError('Setup error: ' + (err.message || 'Could not initialize vault.'));
     }
   };
 
-  // ── 1-Tap Mobile PWA & Hardware Biometric Unlock ──────────────────────────────
+  // ── 1-Tap Hardware Biometric Unlock ──────────────────────────────────────────
   const handleBiometricUnlock = async () => {
     try {
       setIsUnlocking(true);
       setUnlockError(null);
       setPasskeyNotice(null);
-      setIsKeyMismatch(false);
 
-      if (!hasRegisteredPasskey) {
-        setUnlockError('No fingerprint key enrolled on this device yet. Please unlock with your Master Passphrase/Seed below or scan the Pair Phone QR code on your laptop.');
-        setIsUnlocking(false);
-        return;
-      }
-
-      // Triggers native platform fingerprint / face prompt (Android BiometricPrompt, iOS Touch ID, Windows Hello)
+      // Triggers native platform fingerprint / face prompt (Android, iOS Touch ID, Windows Hello, macOS Touch ID)
       const mvk = await unlockWithDeviceBiometrics();
 
       setMasterVaultKey(mvk);
@@ -830,69 +721,73 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       setIsUnlocking(false);
       if (err.name === 'NotAllowedError') {
         setUnlockError('Fingerprint prompt was cancelled. Tap again when ready.');
-      } else if (err.message === 'NO_REGISTERED_PASSKEY') {
+      } else if (err.message === 'NO_BIOMETRICS_ENROLLED') {
         setHasRegisteredPasskey(false);
-        setUnlockError('No passkey registered on this device. Please unlock with your Master Passphrase or scan the pairing QR code from your laptop.');
+        setUnlockError('No fingerprint enrolled on this device. Please unlock with your Master PIN below.');
       } else {
         setUnlockError('Biometric verification failed: ' + err.message);
       }
     }
   };
 
-  // ── Emergency Recovery Unlock (TOTP Authenticator + Passphrase) ───────────────
-  const handleUnlockWithPassphrase = async (e: React.FormEvent) => {
+  // ── Unlock via Master PIN (New Device Enrollment or Fallback) ─────────────────
+  const handleUnlockWithPin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!passphraseInput.trim() && !totpCodeInput.trim()) {
-      setUnlockError('Please provide a 6-digit TOTP code or emergency passphrase.');
+    if (!masterPinInput.trim()) {
+      setUnlockError('Please enter your Master PIN or Passphrase.');
       return;
     }
 
     try {
       setIsUnlocking(true);
       setUnlockError(null);
-      setIsKeyMismatch(false);
 
-      // If TOTP code provided, verify against Azure /api/vault/verify-totp
-      if (totpCodeInput.trim()) {
-        try {
-          const totpRes = await fetch('/api/vault/verify-totp', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: totpCodeInput.trim() })
-          });
-          if (totpRes.ok) {
-            const totpData = await totpRes.json();
-            if (!totpData.valid) {
-              setUnlockError('Invalid 6-digit TOTP Authenticator code.');
-              setIsUnlocking(false);
-              return;
-            }
+      let targetEnvelope = cloudEnvelope;
+      if (!targetEnvelope && effectiveAuthToken) {
+        const res = await fetch('/api/vault/envelope', {
+          headers: { 'X-Session-Token': effectiveAuthToken }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.configured && data.ciphertextB64) {
+            targetEnvelope = {
+              saltB64: data.saltB64,
+              ivB64: data.ivB64,
+              ciphertextB64: data.ciphertextB64,
+              iterations: data.iterations || 600000
+            };
+            setCloudEnvelope(targetEnvelope);
           }
-        } catch {
-          // If offline, continue with local key derivation
         }
       }
 
-      // 600,000 iterations PBKDF2-HMAC-SHA256 (OWASP recommendation)
-      const seed = passphraseInput.trim() || `shudkara_emergency_seed_${totpCodeInput.trim()}`;
-      const salt = new TextEncoder().encode('shudkara_abhyantara_kosha_master_salt_2026');
-      const derivedKey = await deriveMVKFromPassphrase(
-        seed,
-        salt,
-        totpCodeInput.trim() || undefined,
-        600000
-      );
+      if (!targetEnvelope) {
+        throw new Error('Vault envelope not found in cloud. Please check connection or set up your vault.');
+      }
 
-      setMasterVaultKey(derivedKey);
+      // Decrypt MVK using PBKDF2-HMAC-SHA256 derived key
+      const mvk = await unlockMasterVaultEnvelope(masterPinInput.trim(), targetEnvelope);
+
+      // If user enabled biometric enrollment on this new device, enroll now!
+      if (enrollBioOnUnlock && platformBioAvailable) {
+        try {
+          await enrollDeviceBiometrics(mvk);
+          setHasRegisteredPasskey(true);
+          setPasskeyNotice('Fingerprint biometrics successfully enrolled on this device!');
+        } catch (bioErr) {
+          console.warn('[Vault] Biometric enrollment skipped:', bioErr);
+        }
+      }
+
+      setMasterVaultKey(mvk);
       setIsUnlocked(true);
       setInactivitySeconds(600);
-      setPassphraseInput('');
-      setTotpCodeInput('');
-      await loadVaultManifest(derivedKey);
+      setMasterPinInput('');
+      await loadVaultManifest(mvk);
       setIsUnlocking(false);
     } catch (err: any) {
       setIsUnlocking(false);
-      setUnlockError('Unlock failed: ' + err.message);
+      setUnlockError('Unlock failed: Incorrect Master PIN or Passphrase.');
     }
   };
 
@@ -1241,133 +1136,20 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   };
 
   // ══════════════════════════════════════════════════════════════════════════════
-  // A0. INSTANT ZERO-KNOWLEDGE PHONE PAIRING VIEW (Scanned from Laptop QR)
-  // ══════════════════════════════════════════════════════════════════════════════
-  if (instantPairingMvk) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-xl space-y-6 text-center">
-          <div className="w-16 h-16 rounded-3xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
-            <ShieldCheck className="w-8 h-8" />
-          </div>
-
-          <div className="space-y-1.5">
-            <h2 className="text-xl font-bold text-slate-900 serif-heading">Vault Key Paired!</h2>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Your sovereign encryption key was received securely from your laptop. Touch your fingerprint sensor now to register 1-tap biometric unlock on this phone.
-            </p>
-          </div>
-
-          {unlockError && (
-            <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2.5 text-left">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{unlockError}</span>
-            </div>
-          )}
-
-          <button
-            onClick={async () => {
-              try {
-                setIsUnlocking(true);
-                setUnlockError(null);
-                await registerBiometricsWithExistingMVK(instantPairingMvk);
-                setMasterVaultKey(instantPairingMvk);
-                setIsUnlocked(true);
-                setHasRegisteredPasskey(true);
-                setInactivitySeconds(600);
-                window.history.replaceState(null, '', window.location.pathname + '?tab=vault');
-                await loadVaultManifest(instantPairingMvk);
-                setIsUnlocking(false);
-                setInstantPairingMvk(null);
-              } catch (err: any) {
-                setIsUnlocking(false);
-                setUnlockError('Biometric enrollment cancelled: ' + err.message);
-              }
-            }}
-            disabled={isUnlocking}
-            className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2.5 cursor-pointer"
-          >
-            {isUnlocking ? (
-              <>
-                <RefreshCw className="w-5 h-5 animate-spin" />
-                <span>Enrolling Fingerprint...</span>
-              </>
-            ) : (
-              <>
-                <ShieldCheck className="w-5 h-5" />
-                <span>Touch Fingerprint to Complete Pairing</span>
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════════
-  // A. COMPANION PHONE CLEARANCE VIEW (When opened on mobile via QR link)
-  // ══════════════════════════════════════════════════════════════════════════════
-  if (companionPairingParam) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-xl space-y-6 text-center">
-          <div className="w-16 h-16 rounded-3xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
-            <Smartphone className="w-8 h-8" />
-          </div>
-
-          <div className="space-y-1.5">
-            <h2 className="text-xl font-bold text-slate-900 serif-heading">Companion Clearance</h2>
-            <p className="text-xs text-slate-500">
-              A laptop is requesting clearance to unlock the Abhyantara Kosha zero-knowledge vault.
-            </p>
-            <div className="p-2 bg-slate-100 rounded-xl font-mono text-xs text-slate-700 mt-2">
-              Session Ticket: {companionPairingParam.sid}
-            </div>
-          </div>
-
-          {companionAuthorized ? (
-            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-2">
-              <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto" />
-              <p className="text-sm font-bold">Clearance Granted!</p>
-              <p className="text-xs text-emerald-600">
-                The Master Vault Key has been unsealed and transmitted via end-to-end ECDH encryption. Your laptop is now unlocked.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <button
-                onClick={handleCompanionAuthorize}
-                disabled={isUnlocking}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
-              >
-                {isUnlocking ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    Unsealing MVK...
-                  </>
-                ) : (
-                  <>
-                    <ShieldCheck className="w-4 h-4" />
-                    Touch Fingerprint &amp; Authorize Laptop
-                  </>
-                )}
-              </button>
-              <p className="text-[11px] text-slate-400">
-                Zero-knowledge channel: encrypted with laptop's ephemeral P-256 public key.
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════════
-  // B. LOCKED VAULT VIEW (Zero-Knowledge Enclave Seal)
+  // LOCKED VAULT VIEW (Master Key Envelope & Native Hardware Biometrics)
   // ══════════════════════════════════════════════════════════════════════════════
   if (!isUnlocked) {
+    if (envelopeStatus === 'loading') {
+      return (
+        <div className="min-h-[50vh] flex flex-col items-center justify-center space-y-4">
+          <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin" />
+          <p className="text-sm font-semibold text-slate-600">Connecting to sovereign vault enclave...</p>
+        </div>
+      );
+    }
+
     return (
-      <div className="space-y-6 pb-20 animate-fade-in max-w-xl mx-auto">
+      <div className="space-y-6 pb-20 animate-fade-in max-w-lg mx-auto">
         {/* Header Banner */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5 text-center sm:text-left">
           <div>
@@ -1393,92 +1175,146 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
           </div>
         </div>
 
-        {/* Key Mismatch Warning & Reset Option */}
-        {isKeyMismatch && (
-          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left space-y-3">
-            <div className="flex items-start gap-2.5">
-              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <h4 className="text-xs font-bold text-amber-900">Device Key Mismatch Detected</h4>
-                <p className="text-[11px] text-amber-700 leading-relaxed mt-0.5">
-                  The biometric key saved on this device cannot decrypt your cloud vault (e.g. enrolled before cloud synchronization). Reset device key below to pair with your laptop via QR code or enter your Master Passphrase.
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                clearDeviceVaultBiometrics();
-                setHasRegisteredPasskey(false);
-                setIsKeyMismatch(false);
-                setUnlockError(null);
-              }}
-              className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
-            >
-              Reset Device Key &amp; Re-Pair
-            </button>
-          </div>
-        )}
-
         {/* Security Alerts */}
-        {unlockError && !isKeyMismatch && (
-          <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2.5">
+        {unlockError && (
+          <div className="p-3.5 rounded-2xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2.5 animate-in fade-in duration-200">
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{unlockError}</span>
           </div>
         )}
 
         {passkeyNotice && (
-          <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs flex items-center gap-2.5">
+          <div className="p-3.5 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs flex items-center gap-2.5 animate-in fade-in duration-200">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>{passkeyNotice}</span>
           </div>
         )}
 
-        {/* ── HERO BIOMETRIC UNLOCK CARD (Primary Workflow on Phone PWA & Laptop) ── */}
-        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6 text-center">
-          {/* Pulsating Biometric Sensor Icon */}
-          <div className="relative mx-auto w-24 h-24 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full bg-emerald-100 animate-ping opacity-25" />
-            <div className="w-20 h-20 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center text-emerald-600 shadow-inner">
-              <svg
-                className="w-10 h-10"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.75"
-                strokeLinecap="round"
-                strokeLinejoin="round"
+        {/* CASE 1: Brand New Vault Setup (Create Master PIN) */}
+        {envelopeStatus === 'unconfigured' && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center mx-auto shadow-inner">
+              <Key className="w-8 h-8" />
+            </div>
+
+            <div className="text-center space-y-1.5 max-w-sm mx-auto">
+              <h2 className="text-xl font-bold text-slate-900 serif-heading">
+                Initialize Sovereign Vault
+              </h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Set a Master Vault PIN or Passphrase. This derives your sovereign master key client-side to encrypt your documents before cloud storage.
+              </p>
+            </div>
+
+            <form onSubmit={handleSetupVault} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Master Vault PIN / Passphrase
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPinInputText ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    placeholder="Enter at least 6 characters"
+                    value={masterPinInput}
+                    onChange={(e) => setMasterPinInput(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 focus:bg-white transition pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPinInputText(!showPinInputText)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Confirm Master PIN / Passphrase
+                </label>
+                <input
+                  type={showPinInputText ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  placeholder="Re-enter to confirm"
+                  value={confirmPinInput}
+                  onChange={(e) => setConfirmPinInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-emerald-500 focus:bg-white transition"
+                />
+              </div>
+
+              {platformBioAvailable && (
+                <label className="flex items-start gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl cursor-pointer hover:bg-slate-100/70 transition">
+                  <input
+                    type="checkbox"
+                    checked={enrollBioOnUnlock}
+                    onChange={(e) => setEnrollBioOnUnlock(e.target.checked)}
+                    className="w-4 h-4 rounded text-emerald-600 border-slate-300 focus:ring-emerald-500 mt-0.5 cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Fingerprint className="w-3.5 h-3.5 text-emerald-600" />
+                      Enable 1-Tap Fingerprint / Biometric Unlock
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Seals your master key in this device's hardware enclave for instant 1-tap unlock next time.
+                    </p>
+                  </div>
+                </label>
+              )}
+
+              <button
+                type="submit"
+                disabled={isUnlocking}
+                className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2.5 cursor-pointer"
               >
-                <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 3" />
-                <path d="M14 13.12c0 2.38 0 6.38-1 8.88" />
-                <path d="M2 16h.01" />
-                <path d="M21.8 16c.2-2 .131-5.354 0-6" />
-                <path d="M9 6.8a6 6 0 0 1 9 5.2c0 .47 0 1.17-.02 2" />
-                <path d="M4 10.95C4 6 7.58 2 12 2c4.37 0 7.94 3.91 8 8.78" />
-                <path d="M17 19.88c-.68 1.05-1.47 1.83-2.34 2.12" />
-                <path d="M2 12c0-3.5 2-6.5 5-8" />
-                <path d="M7 21c.64-.32 1.48-.94 2.2-2" />
-              </svg>
+                {isUnlocking ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <span>Encrypting &amp; Initializing Vault...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-5 h-5" />
+                    <span>Initialize &amp; Encrypt Vault</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="text-center pt-2 text-[11px] text-slate-400 font-medium">
+              Zero plaintext storage • PBKDF2-HMAC-SHA256 (600,000 iterations) • AES-256-GCM
             </div>
           </div>
+        )}
 
-          <div className="space-y-1.5 max-w-sm mx-auto">
-            <h2 className="text-xl font-bold text-slate-900 serif-heading">
-              Biometric Enclave Locked
-            </h2>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              {hasRegisteredPasskey
-                ? "Touch your phone's fingerprint sensor or laptop TouchID to unseal your sovereign encryption keys."
-                : "This device is not yet paired with your vault. Unlock using your Master Passphrase below or scan the Pair Phone QR code on your laptop."}
-            </p>
-          </div>
+        {/* CASE 2: Daily 1-Tap Biometric Unlock (Enrolled Device) */}
+        {envelopeStatus === 'configured' && hasRegisteredPasskey && !showPinUnlock && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6 text-center">
+            {/* Pulsating Biometric Sensor Icon */}
+            <div className="relative mx-auto w-24 h-24 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full bg-emerald-100 animate-ping opacity-25" />
+              <div className="w-20 h-20 rounded-full bg-emerald-50 border-2 border-emerald-200 flex items-center justify-center text-emerald-600 shadow-inner">
+                <Fingerprint className="w-10 h-10" />
+              </div>
+            </div>
 
-          {/* Primary Biometric Button */}
-          {hasRegisteredPasskey ? (
+            <div className="space-y-1.5 max-w-sm mx-auto">
+              <h2 className="text-xl font-bold text-slate-900 serif-heading">
+                Biometric Enclave Locked
+              </h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Touch your phone's fingerprint sensor or laptop TouchID to unseal your sovereign encryption keys in under 200ms.
+              </p>
+            </div>
+
             <button
               onClick={handleBiometricUnlock}
               disabled={isUnlocking}
-              className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-lg shadow-emerald-600/25 transition-all flex items-center justify-center gap-2.5 cursor-pointer"
+              className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-lg shadow-emerald-600/25 transition flex items-center justify-center gap-2.5 cursor-pointer"
             >
               {isUnlocking ? (
                 <>
@@ -1492,170 +1328,137 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                 </>
               )}
             </button>
-          ) : (
-            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-600 leading-relaxed space-y-2">
-              <div className="font-semibold text-slate-800 flex items-center justify-center gap-1.5">
-                <Shield className="w-4 h-4 text-emerald-600" />
-                <span>Pairing Required for First-Time Setup</span>
-              </div>
-              <p className="text-[11px] text-slate-500">
-                To link your fingerprint on this phone, unlock using your Master Passphrase below or scan the Pair Phone QR code from your laptop.
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlockError(null);
+                  setShowPinUnlock(true);
+                }}
+                className="text-xs text-slate-500 hover:text-slate-800 font-semibold underline underline-offset-4 cursor-pointer"
+              >
+                Or unlock using Master PIN / Passphrase
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-[11px] text-slate-400">
+              <span className="font-mono">AES-256-GCM</span>
+              <span>•</span>
+              <span className="font-mono">FIDO2 / WebAuthn</span>
+              <span>•</span>
+              <span className="font-semibold text-emerald-700">Zero Plaintext Cloud Memorization</span>
+            </div>
+          </div>
+        )}
+
+        {/* CASE 3: Master PIN Unlock (New Device or Fallback) */}
+        {envelopeStatus === 'configured' && (!hasRegisteredPasskey || showPinUnlock) && (
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="w-16 h-16 rounded-2xl bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center mx-auto shadow-inner">
+              <Key className="w-8 h-8" />
+            </div>
+
+            <div className="text-center space-y-1.5 max-w-sm mx-auto">
+              <h2 className="text-xl font-bold text-slate-900 serif-heading">
+                Unlock Shudkara Vault
+              </h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Enter your Master Vault PIN or Passphrase to decrypt your sovereign vault.
               </p>
             </div>
-          )}
 
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-1 text-[11px] text-slate-400">
-            <span className="font-mono">AES-256-GCM</span>
-            <span>•</span>
-            <span className="font-mono">FIDO2 / WebAuthn</span>
-            <span>•</span>
-            <span className="font-semibold text-emerald-700">Zero Plaintext Memorization</span>
-          </div>
-        </div>
-
-        {/* ── SECONDARY / CROSS-DEVICE OPTIONS ── */}
-        <div className="space-y-3">
-          {/* Laptop Clearance via Phone Camera Scan */}
-          <div className="border border-slate-200 rounded-2xl bg-white overflow-hidden shadow-2xs">
-            <button
-              onClick={() => {
-                if (!showLaptopQR && relayStatus === 'idle') {
-                  initRelayPairing();
-                }
-                setShowLaptopQR(!showLaptopQR);
-              }}
-              className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50 transition"
-            >
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-blue-50 text-blue-600">
-                  <Smartphone className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="text-xs font-bold text-slate-800">
-                    Pairing with Mobile Phone (ECDH Relay)
-                  </h4>
-                  <p className="text-[11px] text-slate-500">
-                    Encrypted zero-knowledge relay to link secondary devices
-                  </p>
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-blue-600 shrink-0">
-                {showLaptopQR ? 'Hide QR' : 'Show QR'}
-              </span>
-            </button>
-
-            {showLaptopQR && (
-              <div className="p-5 border-t border-slate-100 bg-slate-50/50 space-y-4 text-center">
-                <div className="w-52 h-52 mx-auto bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
-                  {qrSvgHtml ? (
-                    <div
-                      className="w-full h-full flex items-center justify-center"
-                      dangerouslySetInnerHTML={{ __html: qrSvgHtml }}
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center gap-2 text-slate-400">
-                      <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
-                      <span className="text-xs">Generating ISO QR Code...</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-slate-500 px-4">
-                  <span className="flex items-center gap-1.5 font-semibold text-emerald-600">
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                    Awaiting Phone Clearance...
-                  </span>
-                  <span className="font-mono text-slate-500">Remaining: {relaySecondsRemaining}s</span>
-                </div>
-
-                <div className="pt-2 flex flex-col sm:flex-row gap-2 justify-center">
-                  <a
-                    href={`${window.location.origin}${window.location.pathname}?vault_pair=true&sid=${relaySessionId}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-1.5"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    Test Companion Clearance in Tab
-                  </a>
+            <form onSubmit={handleUnlockWithPin} className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Master Vault PIN / Passphrase
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPinInputText ? 'text' : 'password'}
+                    required
+                    placeholder="Enter Master PIN or Passphrase"
+                    value={masterPinInput}
+                    onChange={(e) => setMasterPinInput(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition pr-10"
+                  />
                   <button
-                    onClick={initRelayPairing}
-                    className="py-2 px-3 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition"
+                    type="button"
+                    onClick={() => setShowPinInputText(!showPinInputText)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
                   >
-                    Regenerate QR
+                    <Eye className="w-4 h-4" />
                   </button>
                 </div>
               </div>
+
+              {platformBioAvailable && (
+                <label className="flex items-start gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl cursor-pointer hover:bg-slate-100/70 transition">
+                  <input
+                    type="checkbox"
+                    checked={enrollBioOnUnlock}
+                    onChange={(e) => setEnrollBioOnUnlock(e.target.checked)}
+                    className="w-4 h-4 rounded text-blue-600 border-slate-300 focus:ring-blue-500 mt-0.5 cursor-pointer"
+                  />
+                  <div className="text-xs">
+                    <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Fingerprint className="w-3.5 h-3.5 text-blue-600" />
+                      Enroll Fingerprint on this device
+                    </span>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Enables 1-tap biometric unlock on this device forever after.
+                    </p>
+                  </div>
+                </label>
+              )}
+
+              <button
+                type="submit"
+                disabled={isUnlocking}
+                className="w-full py-4 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white rounded-2xl text-sm font-bold shadow-lg shadow-slate-900/20 transition flex items-center justify-center gap-2.5 cursor-pointer"
+              >
+                {isUnlocking ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <span>Decrypting Master Envelope...</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-5 h-5" />
+                    <span>Decrypt &amp; Open Vault</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            {hasRegisteredPasskey && (
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUnlockError(null);
+                    setShowPinUnlock(false);
+                  }}
+                  className="text-xs text-emerald-600 hover:text-emerald-800 font-semibold flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Fingerprint className="w-3.5 h-3.5" />
+                  <span>Back to Fingerprint Unlock</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearDeviceBiometrics();
+                    setHasRegisteredPasskey(false);
+                    setPasskeyNotice('Device biometrics reset. You can re-enroll after unlocking.');
+                  }}
+                  className="text-[11px] text-slate-400 hover:text-red-600 underline cursor-pointer"
+                >
+                  Reset device biometrics
+                </button>
+              </div>
             )}
           </div>
-
-          {/* Emergency Offline / Phone Lost Recovery */}
-          <details className="group border border-slate-200 rounded-2xl bg-white p-4 shadow-2xs transition">
-            <summary className="text-xs font-bold text-slate-700 cursor-pointer flex items-center justify-between list-none">
-              <span className="flex items-center gap-2">
-                <Key className="w-3.5 h-3.5 text-slate-500" />
-                Lost phone or offline emergency recovery?
-              </span>
-              <span className="text-[11px] text-blue-700 font-semibold group-open:rotate-180 transition-transform">
-                ▼
-              </span>
-            </summary>
-
-            <div className="mt-4 pt-3 border-t border-slate-100 space-y-3">
-              <p className="text-xs text-slate-600">
-                If your phone is missing and biometric sensors are offline, unseal your vault using your 6-digit TOTP Authenticator code.
-              </p>
-
-              <form onSubmit={handleUnlockWithPassphrase} className="space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                      Authenticator Code (6-Digit TOTP)
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={6}
-                      placeholder="000 000"
-                      value={totpCodeInput}
-                      onChange={(e) => setTotpCodeInput(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 font-mono tracking-widest placeholder-slate-400 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                      Emergency Passphrase
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="Optional emergency passphrase"
-                      value={passphraseInput}
-                      onChange={(e) => setPassphraseInput(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isUnlocking}
-                  className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center justify-center gap-2"
-                >
-                  {isUnlocking ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      Unsealing with Recovery Keys...
-                    </>
-                  ) : (
-                    <>
-                      <Unlock className="w-3.5 h-3.5" />
-                      Unseal Vault with Emergency Recovery
-                    </>
-                  )}
-                </button>
-              </form>
-            </div>
-          </details>
-        </div>
+        )}
       </div>
     );
   }
@@ -1708,21 +1511,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             <span>Family Dossier</span>
           </button>
 
-          {/* Pair Mobile Phone (Instant QR Biometrics) */}
-          <button
-            onClick={async () => {
-              if (!masterVaultKey) return;
-              const pairData = await createInstantPairingPayload(masterVaultKey);
-              setPairingQRData(pairData);
-              setShowPairPhoneModal(true);
-            }}
-            className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
-            title="Scan with phone camera to instantly pair fingerprint biometrics"
-          >
-            <Smartphone className="w-3.5 h-3.5 text-blue-600" />
-            <span>Pair Phone</span>
-          </button>
-
           {/* Add Document Action */}
           <button
             onClick={() => setIsAddDocOpen(true)}
@@ -1745,11 +1533,11 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       </div>
 
       {/* Banner if biometrics not yet enrolled on this local device */}
-      {!hasRegisteredPasskey && (
+      {!hasRegisteredPasskey && platformBioAvailable && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-emerald-100 text-emerald-800">
-              <ShieldCheck className="w-5 h-5" />
+              <Fingerprint className="w-5 h-5" />
             </div>
             <div>
               <h4 className="text-xs font-bold text-emerald-950">
@@ -1764,7 +1552,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
             onClick={async () => {
               if (!masterVaultKey) return;
               try {
-                await registerBiometricsWithExistingMVK(masterVaultKey);
+                await enrollDeviceBiometrics(masterVaultKey);
                 setHasRegisteredPasskey(true);
                 setPasskeyNotice('Fingerprint biometrics successfully enrolled on this device!');
               } catch (err: any) {
@@ -3186,50 +2974,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
         />
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════════
-          6. INSTANT MOBILE BIOMETRIC PAIRING MODAL (QR Code)
-         ════════════════════════════════════════════════════════════════════════ */}
-      {showPairPhoneModal && pairingQRData && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-sm w-full shadow-2xl space-y-5 text-center">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Smartphone className="w-4 h-4 text-blue-600" />
-                <span>Pair Phone Biometrics</span>
-              </h3>
-              <button
-                onClick={() => setShowPairPhoneModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="w-56 h-56 mx-auto bg-white p-2 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center">
-              <div
-                className="w-full h-full flex items-center justify-center"
-                dangerouslySetInnerHTML={{ __html: pairingQRData.qrSvg }}
-              />
-            </div>
-
-            <div className="space-y-1.5 text-xs text-slate-600 leading-relaxed">
-              <p className="font-semibold text-slate-800">
-                Scan with your phone camera or Google Lens
-              </p>
-              <p className="text-[11px] text-slate-500">
-                The link will open Shudkara Vault on your phone and prompt your fingerprint sensor to securely seal your sovereign keys.
-              </p>
-            </div>
-
-            <button
-              onClick={() => setShowPairPhoneModal(false)}
-              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition cursor-pointer"
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
