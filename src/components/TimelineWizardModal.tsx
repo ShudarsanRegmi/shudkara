@@ -11,6 +11,8 @@ import {
 } from '../utils/bikramSambat';
 import { TimelineCameraModal, type SnappedPhoto } from './TimelineCameraModal';
 import { ModernTimeWheelPicker, getCurrentLocalTime24 } from './ModernTimeWheelPicker';
+import { RichTagSelector } from './RichTagSelector';
+import { TagManagerModal, type TimelineTag } from './TagManagerModal';
 
 export function getLocalIsoString(d: Date = new Date()): string {
   const yyyy = d.getFullYear();
@@ -19,6 +21,83 @@ export function getLocalIsoString(d: Date = new Date()): string {
   const hh = String(d.getHours()).padStart(2, '0');
   const min = String(d.getMinutes()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+}
+
+export function generateVideoThumbnail(videoSource: File | Blob | string): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement('video');
+      video.crossOrigin = 'anonymous';
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = 'metadata';
+
+      let objectUrl = '';
+      if (typeof videoSource === 'string') {
+        video.src = videoSource;
+      } else {
+        objectUrl = URL.createObjectURL(videoSource);
+        video.src = objectUrl;
+      }
+
+      let timeoutId: any = null;
+      let isDone = false;
+
+      const finish = (result: string) => {
+        if (isDone) return;
+        isDone = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        if (objectUrl) {
+          try { URL.revokeObjectURL(objectUrl); } catch {}
+        }
+        video.onloadeddata = null;
+        video.onseeked = null;
+        video.onerror = null;
+        resolve(result);
+      };
+
+      timeoutId = setTimeout(() => {
+        finish('');
+      }, 5000);
+
+      video.onloadeddata = () => {
+        const target = Math.min(0.5, (video.duration && video.duration > 0) ? video.duration / 2 : 0.5);
+        video.currentTime = target;
+      };
+
+      video.onseeked = () => {
+        try {
+          const width = video.videoWidth || 640;
+          const height = video.videoHeight || 360;
+          const canvas = document.createElement('canvas');
+          const maxDim = 480;
+          let scale = 1;
+          if (width > maxDim || height > maxDim) {
+            scale = maxDim / Math.max(width, height);
+          }
+          canvas.width = Math.max(1, Math.round(width * scale));
+          canvas.height = Math.max(1, Math.round(height * scale));
+
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+            finish(dataUrl);
+            return;
+          }
+        } catch (e) {
+          console.warn('Canvas thumbnail capture error:', e);
+        }
+        finish('');
+      };
+
+      video.onerror = () => {
+        finish('');
+      };
+    } catch {
+      resolve('');
+    }
+  });
 }
 
 export interface DraftMediaItem {
@@ -32,6 +111,7 @@ export interface DraftMediaItem {
   streamUrl?: string;
   viewUrl?: string;
   thumbnailUrl?: string;
+  thumbnailBase64?: string;
   googleDriveId?: string;
   uploadStatus?: 'pending' | 'uploading' | 'uploaded' | 'error';
   uploadProgress?: number;
@@ -83,6 +163,9 @@ interface TimelineWizardModalProps {
   }) => void;
   categoriesList?: string[];
   tagsList?: string[];
+  tagPool?: TimelineTag[];
+  onRefreshTagPool?: () => Promise<void>;
+  onOpenTagManager?: () => void;
   initialDraftId?: string;
   authToken?: string | null;
 }
@@ -186,6 +269,7 @@ export async function uploadMediaItemEagerly(
         name: item.name,
         type: item.type || 'image/jpeg',
         base64: base64String,
+        thumbnailBase64: item.thumbnailBase64,
         size
       })
     });
@@ -200,7 +284,7 @@ export async function uploadMediaItemEagerly(
     return {
       googleDriveId: data.mediaItem.googleDriveId,
       viewUrl: data.mediaItem.viewUrl,
-      thumbnailUrl: data.mediaItem.thumbnailUrl,
+      thumbnailUrl: data.mediaItem.thumbnailUrl || item.thumbnailUrl,
       previewUrl: data.mediaItem.previewUrl,
       streamUrl: data.mediaItem.streamUrl,
       size: data.mediaItem.size || size,
@@ -217,6 +301,7 @@ export async function uploadMediaItemEagerly(
     body: JSON.stringify({
       name: item.name,
       type: item.type || 'application/octet-stream',
+      thumbnailBase64: item.thumbnailBase64,
       size
     })
   });
@@ -285,7 +370,7 @@ export async function uploadMediaItemEagerly(
   return {
     googleDriveId: finalMediaItem.googleDriveId,
     viewUrl: finalMediaItem.viewUrl,
-    thumbnailUrl: finalMediaItem.thumbnailUrl,
+    thumbnailUrl: finalMediaItem.thumbnailUrl || item.thumbnailUrl,
     previewUrl: finalMediaItem.previewUrl,
     streamUrl: finalMediaItem.streamUrl,
     size: finalMediaItem.size || size,
@@ -676,6 +761,12 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
   // If video: use lightweight object URL for zero-RAM video playback in preview
   if (mimeType.startsWith('video/')) {
     const objectUrl = URL.createObjectURL(file);
+    let thumbnailBase64 = '';
+    try {
+      thumbnailBase64 = await generateVideoThumbnail(file);
+    } catch (e) {
+      console.warn('Could not generate video thumbnail:', e);
+    }
     return {
       id: fileId,
       name: file.name,
@@ -683,6 +774,8 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
       base64: objectUrl,
       rawFile: file,
       size: file.size,
+      thumbnailUrl: thumbnailBase64 || undefined,
+      thumbnailBase64: thumbnailBase64 || undefined,
       uploadStatus: 'pending',
       uploadProgress: 0
     };
@@ -874,10 +967,42 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
   onClose,
   onSubmit,
   categoriesList = [],
-  tagsList = [],
+  tagsList: _tagsList = [],
+  tagPool = [],
+  onRefreshTagPool,
+  onOpenTagManager,
   initialDraftId,
   authToken
 }) => {
+  // Tag Pool Knowledge Management State
+  const [wizardTagPool, setWizardTagPool] = useState<TimelineTag[]>(tagPool || []);
+  const [showWizardTagManager, setShowWizardTagManager] = useState(false);
+
+  const refreshWizardTagPool = async () => {
+    if (onRefreshTagPool) {
+      await onRefreshTagPool();
+    }
+    try {
+      const res = await fetch('/api/timeline/tags', {
+        headers: authToken ? { 'X-Session-Token': authToken } : {}
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tagPool)) {
+          setWizardTagPool(data.tagPool);
+        }
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (tagPool && tagPool.length > 0) {
+      setWizardTagPool(tagPool);
+    } else {
+      refreshWizardTagPool();
+    }
+  }, [tagPool]);
+
   // Multiple Drafts State
   const [draftsList, setDraftsList] = useState<TimelineDraftMeta[]>(getStoredDrafts);
   const [activeDraftId, setActiveDraftId] = useState<string>(() => {
@@ -1528,7 +1653,6 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
 
   const currentFormBs = adToBs(timestamp);
   const commonCategories = Array.from(new Set([...categoriesList, 'General', 'Life', 'Travel', 'Work', 'Health', 'Milestone'])).slice(0, 8);
-  const commonTags = tagsList.slice(0, 6);
 
   return (
     <div
@@ -2183,35 +2307,30 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
-                    Tags (Comma Separated)
-                  </label>
-                  <input
-                    type="text"
-                    value={rawTags}
-                    onChange={e => setRawTags(e.target.value)}
-                    placeholder="family, nepal, mountain..."
-                    className="w-full px-3.5 py-2 text-xs font-bold bg-slate-50 border border-slate-200 focus:bg-white rounded-xl"
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+                      <span>Tags & Topic Knowledge Pool</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (onOpenTagManager) onOpenTagManager();
+                        else setShowWizardTagManager(true);
+                      }}
+                      className="text-[11px] font-bold text-blue-600 hover:text-blue-700 hover:underline flex items-center gap-1"
+                    >
+                      Manage Tag Pool
+                    </button>
+                  </div>
+                  <RichTagSelector
+                    selectedTags={rawTags.split(',').map(t => t.trim()).filter(Boolean)}
+                    onChange={(newTags) => setRawTags(newTags.join(', '))}
+                    tagPool={wizardTagPool}
+                    onRefreshTags={refreshWizardTagPool}
+                    onOpenTagManager={onOpenTagManager || (() => setShowWizardTagManager(true))}
+                    authToken={authToken}
                   />
-                  {commonTags.length > 0 && (
-                    <div className="flex flex-wrap gap-1 pt-1">
-                      {commonTags.map(tag => (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => {
-                            const tags = rawTags.split(',').map(t => t.trim()).filter(Boolean);
-                            if (!tags.includes(tag)) {
-                              setRawTags(tags.length > 0 ? `${rawTags}, ${tag}` : tag);
-                            }
-                          }}
-                          className="text-[10px] px-2 py-0.5 rounded-md font-semibold bg-slate-100 hover:bg-blue-50 hover:text-blue-600 text-slate-600 transition"
-                        >
-                          #{tag}
-                        </button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               </div>
 
@@ -2398,6 +2517,20 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* ── Standalone Knowledge Pool Tag Manager Modal ── */}
+      {showWizardTagManager && (
+        <TagManagerModal
+          isOpen={showWizardTagManager}
+          onClose={() => {
+            setShowWizardTagManager(false);
+            refreshWizardTagPool();
+          }}
+          tagPool={wizardTagPool}
+          onRefresh={refreshWizardTagPool}
+          authToken={authToken}
+        />
       )}
 
     </div>

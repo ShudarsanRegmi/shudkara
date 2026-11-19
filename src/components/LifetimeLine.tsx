@@ -15,8 +15,11 @@ import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal
 import { 
   TimelineWizardModal, type DraftMediaItem, type TimelineDraftMeta,
   finalizeSuccessfulDraftUpload, loadMediaFromDb, saveFullDraftToDb, 
-  markDraftFailed, listAllDraftsFromDb 
+  markDraftFailed, listAllDraftsFromDb, getLocalIsoString
 } from './TimelineWizardModal';
+import { TagManagerModal, type TimelineTag } from './TagManagerModal';
+import { RichTagSelector } from './RichTagSelector';
+import { ModernTimeWheelPicker } from './ModernTimeWheelPicker';
 import { TimelineSidebar } from './TimelineSidebar';
 import { enqueueOfflineAction, isDeviceOnline } from '../utils/offlineSync';
 import { MediaCollageGrid } from './MediaCollageGrid';
@@ -163,6 +166,8 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
 
   const [categories, setCategories] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
+  const [tagPool, setTagPool] = useState<TimelineTag[]>([]);
+  const [showTagManager, setShowTagManager] = useState(false);
   const [limit] = useState(15);
   const [skip, setSkip] = useState(0);
 
@@ -715,6 +720,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         const data = await res.json();
         setCategories(data.categories || []);
         setTags(data.tags || []);
+        if (Array.isArray(data.tagPool)) {
+          setTagPool(data.tagPool);
+        }
       }
     } catch {}
   };
@@ -1255,7 +1263,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     setEditContent(post.content);
     setEditCategory(post.category);
     setEditRawTags(post.tags.join(', '));
-    const adStr = new Date(post.timestamp).toISOString().substring(0, 16);
+    const adStr = getLocalIsoString(new Date(post.timestamp));
     setEditTimestamp(adStr);
     const bs = adToBs(post.timestamp);
     setEditBsYear(bs.year);
@@ -1566,6 +1574,20 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
             )}
           </button>
 
+          {/* Full-Fledged Tags Knowledge Pool Manager Button */}
+          <button
+            type="button"
+            onClick={() => setShowTagManager(true)}
+            className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+            title="Browse, define, and manage all tags & descriptions"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-blue-500" />
+            <span className="hidden sm:inline">Manage Tags</span>
+            {tagPool.length > 0 && (
+              <span className="text-[10px] text-slate-400 font-mono font-medium">({tagPool.length})</span>
+            )}
+          </button>
+
           {/* Clean Solid Document Moment Button (Zero Garish Gradients) */}
           <button
             type="button"
@@ -1718,10 +1740,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           <button
                             type="button"
                             onClick={() => setShareDayGroup(group)}
-                            className="px-2.5 py-0.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-[11px] font-bold rounded-lg transition flex items-center gap-1 shadow-xs active:scale-95"
+                            className="px-2.5 py-1 bg-blue-50/90 hover:bg-blue-100 text-blue-700 border border-blue-200/80 text-[11px] font-bold rounded-lg transition flex items-center gap-1.5 shadow-xs active:scale-95"
                             title="Share this entire day's story with multiple moments"
                           >
-                            <Share2 className="w-3 h-3" />
+                            <Share2 className="w-3 h-3 text-blue-600" />
                             <span>Share Day</span>
                           </button>
                         )}
@@ -1838,41 +1860,56 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                           editNewMedia={editNewMedia}
                           setEditNewMedia={setEditNewMedia}
                           isSavingEdit={isSavingEdit}
+                          tagPool={tagPool}
+                          onRefreshTagPool={fetchFilterMetadata}
+                          onOpenTagManager={() => setShowTagManager(true)}
+                          authToken={authToken}
                         />
 
-                        {/* Bottom Mini-Thumbnails Strip to Jump Quickly */}
-                        <div className="flex items-center gap-1.5 pt-2 border-t border-slate-100 overflow-x-auto scrollbar-none">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
-                            Day Snaps:
+                        {/* Bottom Mini-Thumbnails Strip in Sequence of Time */}
+                        <div className="flex items-center gap-1.5 pt-2.5 border-t border-slate-100 overflow-x-auto scrollbar-none py-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0 flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>Day Snaps:</span>
                           </span>
-                          {group.posts.map((p, pIdx) => {
-                            const isCurrent = pIdx === currentDayPageIndex;
-                            const firstMedia = p.media && p.media.length > 0 ? p.media[0] : null;
+                          {[...group.posts]
+                            .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                            .map((p) => {
+                              const pIdx = group.posts.findIndex(orig => orig._id === p._id);
+                              const isCurrent = pIdx === currentDayPageIndex;
+                              const firstMedia = p.media && p.media.length > 0 ? p.media[0] : null;
+                              const timeStr = new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-                            return (
-                              <button
-                                key={p._id}
-                                onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
-                                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border transition text-xs shrink-0 ${
-                                  isCurrent
-                                    ? 'bg-blue-50 border-blue-300 text-blue-700 font-bold shadow-xs'
-                                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                                }`}
-                              >
-                                {firstMedia ? (
-                                  <img 
-                                    src={firstMedia.thumbnailUrl || firstMedia.viewUrl} 
-                                    alt="" 
-                                    loading="lazy"
-                                    className="w-4 h-4 rounded-sm object-cover" 
-                                  />
-                                ) : (
-                                  <Sparkles className="w-3 h-3 text-amber-500" />
-                                )}
-                                <span className="truncate max-w-[90px]">{p.title || `Moment #${pIdx + 1}`}</span>
-                              </button>
-                            );
-                          })}
+                              return (
+                                <button
+                                  key={p._id}
+                                  onClick={() => setDayPageIndices(prev => ({ ...prev, [group.dateKey]: pIdx }))}
+                                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border transition text-xs shrink-0 active:scale-95 ${
+                                    isCurrent
+                                      ? 'bg-blue-50 border-blue-300 text-blue-700 font-bold shadow-xs ring-1 ring-blue-300/50'
+                                      : 'bg-slate-50/90 border-slate-200 text-slate-600 hover:bg-slate-100'
+                                  }`}
+                                  title={`${p.title || 'Moment'} at ${timeStr}`}
+                                >
+                                  {firstMedia ? (
+                                    <img 
+                                      src={firstMedia.thumbnailUrl || firstMedia.viewUrl} 
+                                      alt="" 
+                                      loading="lazy"
+                                      className="w-5 h-5 rounded-md object-cover border border-slate-200/60" 
+                                    />
+                                  ) : (
+                                    <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                                  )}
+                                  <span className={`text-[10px] font-mono px-1 py-0.5 rounded font-semibold ${
+                                    isCurrent ? 'bg-blue-100/70 text-blue-800' : 'bg-white/80 text-slate-500'
+                                  }`}>
+                                    {timeStr}
+                                  </span>
+                                  <span className="truncate max-w-[85px] font-medium">{p.title || `Moment #${pIdx + 1}`}</span>
+                                </button>
+                              );
+                            })}
                         </div>
                       </div>
 
@@ -1921,6 +1958,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
                               editNewMedia={editNewMedia}
                               setEditNewMedia={setEditNewMedia}
                               isSavingEdit={isSavingEdit}
+                              tagPool={tagPool}
+                              onRefreshTagPool={fetchFilterMetadata}
+                              onOpenTagManager={() => setShowTagManager(true)}
+                              authToken={authToken}
                             />
                           </div>
                         ))}
@@ -2046,7 +2087,28 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
           onSubmit={handleWizardSubmit}
           categoriesList={categories}
           tagsList={tags}
+          tagPool={tagPool}
+          onRefreshTagPool={fetchFilterMetadata}
+          onOpenTagManager={() => setShowTagManager(true)}
           initialDraftId={selectedDraftIdToOpen || activeUpload?.draftId}
+          authToken={authToken}
+        />
+      )}
+
+      {/* ── Standalone Knowledge Pool Tag Manager Modal ── */}
+      {showTagManager && (
+        <TagManagerModal
+          isOpen={showTagManager}
+          onClose={() => {
+            setShowTagManager(false);
+            fetchFilterMetadata();
+          }}
+          tagPool={tagPool}
+          onRefresh={fetchFilterMetadata}
+          onSelectTagForFilter={(tagName) => {
+            setSelectedTag(tagName);
+            setShowTagManager(false);
+          }}
           authToken={authToken}
         />
       )}
@@ -2533,6 +2595,10 @@ interface MomentCardBodyProps {
   editNewMedia: DraftMediaItem[];
   setEditNewMedia: React.Dispatch<React.SetStateAction<DraftMediaItem[]>>;
   isSavingEdit: boolean;
+  tagPool?: TimelineTag[];
+  onRefreshTagPool?: () => Promise<void>;
+  onOpenTagManager?: () => void;
+  authToken?: string | null;
 }
 
 const MomentCardBody: React.FC<MomentCardBodyProps> = ({
@@ -2570,7 +2636,11 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
   setEditRemovedMediaIds,
   editNewMedia,
   setEditNewMedia,
-  isSavingEdit
+  isSavingEdit,
+  tagPool = [],
+  onRefreshTagPool,
+  onOpenTagManager,
+  authToken
 }) => {
   const dt = new Date(post.timestamp);
   const bsDate = adToBs(post.timestamp);
@@ -2606,77 +2676,129 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="space-y-3">
           <input
             type="text"
             value={editTitle}
             onChange={e => setEditTitle(e.target.value)}
-            placeholder="Title"
-            className="md:col-span-2 px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
+            placeholder="Moment Title (optional)"
+            className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 font-bold focus:bg-white focus:border-blue-500 transition"
           />
 
-          {editDateMode === 'AD' ? (
-            <input
-              type="datetime-local"
-              value={editTimestamp}
-              onChange={e => handleEditAdTimestampChange(e.target.value)}
-              className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50"
-            />
-          ) : (
-            <div className="grid grid-cols-3 gap-1">
-              <select
-                value={editBsYear}
-                onChange={e => handleEditBsDateChange(parseInt(e.target.value, 10), editBsMonth, editBsDay)}
-                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-              >
-                {getAvailableBsYears().map(y => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-              <select
-                value={editBsMonth}
-                onChange={e => handleEditBsDateChange(editBsYear, parseInt(e.target.value, 10), editBsDay)}
-                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-              >
-                {BS_MONTHS.map(m => (
-                  <option key={m.id} value={m.id}>{m.np}</option>
-                ))}
-              </select>
-              <select
-                value={editBsDay}
-                onChange={e => handleEditBsDateChange(editBsYear, editBsMonth, parseInt(e.target.value, 10))}
-                className="px-1.5 py-1 border border-slate-200 rounded-lg text-xs bg-amber-50"
-              >
-                {Array.from({ length: getMonthDays(editBsYear, editBsMonth) }, (_, i) => i + 1).map(d => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+            {/* Date Selection */}
+            <div>
+              <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-1 block">
+                Date ({editDateMode})
+              </span>
+              {editDateMode === 'AD' ? (
+                <input
+                  type="date"
+                  value={editTimestamp ? editTimestamp.substring(0, 10) : ''}
+                  onChange={e => {
+                    const newDate = e.target.value;
+                    const currentTime = editTimestamp ? editTimestamp.substring(11, 16) : '12:00';
+                    handleEditAdTimestampChange(`${newDate}T${currentTime}`);
+                  }}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white"
+                />
+              ) : (
+                <div className="grid grid-cols-3 gap-1">
+                  <select
+                    value={editBsYear}
+                    onChange={e => handleEditBsDateChange(parseInt(e.target.value, 10), editBsMonth, editBsDay)}
+                    className="px-1.5 py-2 border border-slate-200 rounded-xl text-xs bg-amber-50"
+                  >
+                    {getAvailableBsYears().map(y => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={editBsMonth}
+                    onChange={e => handleEditBsDateChange(editBsYear, parseInt(e.target.value, 10), editBsDay)}
+                    className="px-1.5 py-2 border border-slate-200 rounded-xl text-xs bg-amber-50"
+                  >
+                    {BS_MONTHS.map(m => (
+                      <option key={m.id} value={m.id}>{m.np}</option>
+                    ))}
+                  </select>
+                  <select
+                    value={editBsDay}
+                    onChange={e => handleEditBsDateChange(editBsYear, editBsMonth, parseInt(e.target.value, 10))}
+                    className="px-1.5 py-2 border border-slate-200 rounded-xl text-xs bg-amber-50"
+                  >
+                    {Array.from({ length: getMonthDays(editBsYear, editBsMonth) }, (_, i) => i + 1).map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </div>
-          )}
+
+            {/* Clean iPhone-Style Scroll Wheel Time Picker */}
+            <div>
+              <span className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-1 block">
+                Time (Scroll Wheel)
+              </span>
+              <ModernTimeWheelPicker
+                value={editTimestamp ? editTimestamp.substring(11, 16) : '12:00'}
+                onChange={(newTime) => {
+                  const currentDate = editTimestamp ? editTimestamp.substring(0, 10) : new Date().toISOString().substring(0, 10);
+                  handleEditAdTimestampChange(`${currentDate}T${newTime}`);
+                }}
+              />
+            </div>
+          </div>
         </div>
 
         <textarea
           value={editContent}
           onChange={e => setEditContent(e.target.value)}
           rows={3}
-          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-slate-50 resize-y"
+          placeholder="What's the memory writeup?"
+          className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:bg-white resize-y"
         />
 
-        <div className="grid grid-cols-2 gap-2">
-          <input
-            type="text"
-            value={editCategory}
-            onChange={e => setEditCategory(e.target.value)}
-            placeholder="Category"
-            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
-          />
-          <input
-            type="text"
-            value={editRawTags}
-            onChange={e => setEditRawTags(e.target.value)}
-            placeholder="Tags (comma separated)"
-            className="px-3 py-1.5 border border-slate-200 rounded-lg text-sm bg-slate-50 font-medium"
-          />
+        <div className="space-y-2">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-start">
+            <div className="sm:col-span-1">
+              <label className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider mb-1 block">
+                Category
+              </label>
+              <input
+                type="text"
+                value={editCategory}
+                onChange={e => setEditCategory(e.target.value)}
+                placeholder="Category (e.g. Life)"
+                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-bold bg-slate-50 focus:bg-white"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-extrabold uppercase text-slate-500 tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-blue-500" />
+                  <span>Tags Knowledge Pool</span>
+                </label>
+                {onOpenTagManager && (
+                  <button
+                    type="button"
+                    onClick={onOpenTagManager}
+                    className="text-[10px] font-bold text-blue-600 hover:text-blue-700 hover:underline"
+                  >
+                    Manage Tags
+                  </button>
+                )}
+              </div>
+              <RichTagSelector
+                selectedTags={editRawTags.split(',').map(t => t.trim()).filter(Boolean)}
+                onChange={(tags) => setEditRawTags(tags.join(', '))}
+                tagPool={tagPool || []}
+                onRefreshTags={onRefreshTagPool || (async () => {})}
+                onOpenTagManager={onOpenTagManager}
+                authToken={authToken}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Media / Pictures Management in Edit Mode with Drag & Drop */}
