@@ -633,21 +633,133 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       };
     }
 
-    // ── 2. GET /api/timeline/tags (Aggregate all tags and categories) ──
+    // ── 2. GET /api/timeline/tags (Aggregate all tags and categories with descriptions and post counts) ──
     if (method === 'GET' && pathParts[0] === 'tags') {
       const clearanceCondition = activeClearance === 0 
         ? { $or: [{ clearanceLevel: 0 }, { clearanceLevel: { $exists: false } }] }
         : { $or: [{ clearanceLevel: { $lte: activeClearance } }, { clearanceLevel: { $exists: false } }] };
 
       const categories = await col.distinct('category', clearanceCondition);
-      const tags = await col.distinct('tags', clearanceCondition);
+      const rawTags = await col.distinct('tags', clearanceCondition);
+
+      // Aggregate post counts for each tag
+      const tagCounts = await col.aggregate([
+        { $match: clearanceCondition },
+        { $unwind: '$tags' },
+        { $group: { _id: '$tags', count: { $sum: 1 } } }
+      ]).toArray();
+
+      const countMap = new Map<string, number>();
+      tagCounts.forEach((tc: any) => {
+        if (tc._id) countMap.set(String(tc._id).toLowerCase(), tc.count);
+      });
+
+      // Fetch defined tags from timeline_tags collection
+      const tagCol = db.collection('timeline_tags');
+      const storedTags = await tagCol.find({}).sort({ name: 1 }).toArray();
+      const seenNames = new Set<string>();
+
+      const tagPool = storedTags.map((st: any) => {
+        const cleanName = st.name.toLowerCase();
+        seenNames.add(cleanName);
+        return {
+          name: st.name,
+          description: st.description || '',
+          color: st.color || '#3b82f6',
+          postCount: countMap.get(cleanName) || 0,
+          updatedAt: st.updatedAt || st.createdAt
+        };
+      });
+
+      // Also include any raw tags from posts that are not yet in timeline_tags
+      for (const t of rawTags) {
+        if (t && typeof t === 'string') {
+          const cleanName = t.trim().toLowerCase();
+          if (!seenNames.has(cleanName)) {
+            seenNames.add(cleanName);
+            tagPool.push({
+              name: cleanName,
+              description: '',
+              color: '#3b82f6',
+              postCount: countMap.get(cleanName) || 0,
+              updatedAt: new Date()
+            });
+          }
+        }
+      }
+
+      // Sort by postCount descending, then name
+      tagPool.sort((a, b) => (b.postCount - a.postCount) || a.name.localeCompare(b.name));
+
       return {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
         jsonBody: {
           categories: categories.filter(Boolean),
-          tags: tags.filter(Boolean)
+          tags: Array.from(seenNames),
+          tagPool
         }
+      };
+    }
+
+    // ── 2a. POST /api/timeline/tags (Create or update tag with description) ──
+    if (method === 'POST' && pathParts[0] === 'tags' && pathParts.length === 1) {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { name, description, color } = body;
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Tag name is required.' } };
+      }
+
+      const cleanName = name.trim().toLowerCase().replace(/^#/, '');
+      const cleanDesc = (description || '').trim();
+      const tagCol = db.collection('timeline_tags');
+
+      await tagCol.updateOne(
+        { name: cleanName },
+        {
+          $set: {
+            name: cleanName,
+            description: cleanDesc,
+            color: color || '#3b82f6',
+            updatedAt: new Date()
+          },
+          $setOnInsert: {
+            createdAt: new Date()
+          }
+        },
+        { upsert: true }
+      );
+
+      const count = await col.countDocuments({ tags: cleanName });
+
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        jsonBody: {
+          success: true,
+          tag: {
+            name: cleanName,
+            description: cleanDesc,
+            color: color || '#3b82f6',
+            postCount: count
+          }
+        }
+      };
+    }
+
+    // ── 2a-del. DELETE /api/timeline/tags/:name (Delete tag definition) ──
+    if (method === 'DELETE' && pathParts[0] === 'tags' && pathParts.length === 2) {
+      const targetName = decodeURIComponent(pathParts[1]).trim().toLowerCase().replace(/^#/, '');
+      const tagCol = db.collection('timeline_tags');
+      await tagCol.deleteOne({ name: targetName });
+
+      return {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+        jsonBody: { success: true, message: `Tag "${targetName}" deleted from tag pool.` }
       };
     }
 
@@ -672,7 +784,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       try { body = await request.json(); }
       catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
 
-      const { name, type, base64, size } = body;
+      const { name, type, base64, size, thumbnailBase64 } = body;
       if (!name || !base64) {
         return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and base64 data are required.' } };
       }
@@ -681,13 +793,24 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         const bucketId = await executeDriveAction(async (drive) => getSubappBucketId(drive, 'Timeline'));
         const driveRes = await uploadToFolder(bucketId, name, type || 'image/jpeg', base64);
         const isVideo = (type || '').startsWith('video/');
+        let videoThumbUrl = driveRes.thumbnailUrl;
+        if (isVideo && thumbnailBase64) {
+          try {
+            const cleanThumb = thumbnailBase64.split(';base64,').pop() || thumbnailBase64;
+            const thumbRes = await uploadToFolder(bucketId, `${name}.thumb.jpg`, 'image/jpeg', cleanThumb);
+            videoThumbUrl = thumbRes.viewUrl;
+          } catch (tErr: any) {
+            context.warn('Failed to upload video thumbnail image:', tErr.message);
+          }
+        }
+
         const mediaItem = {
           googleDriveId: driveRes.fileId,
           fileName: name,
           mimeType: type || 'image/jpeg',
           size: size || (base64 ? Math.round((base64.length * 3) / 4) : undefined),
           viewUrl: isVideo ? driveRes.previewUrl : driveRes.viewUrl,
-          thumbnailUrl: driveRes.thumbnailUrl,
+          thumbnailUrl: videoThumbUrl || driveRes.thumbnailUrl,
           previewUrl: driveRes.previewUrl,
           streamUrl: driveRes.previewUrl
         };
@@ -713,7 +836,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       try { body = await request.json(); }
       catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
 
-      const { name, type, size } = body;
+      const { name, type, size, thumbnailBase64 } = body;
       if (!name || typeof size !== 'number' || size <= 0) {
         return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and valid positive size are required.' } };
       }
@@ -729,6 +852,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           fileName: name,
           mimeType: type || 'application/octet-stream',
           totalBytes: size,
+          thumbnailBase64: thumbnailBase64 || undefined,
           sessionUrl,
           createdAt: new Date(),
           updatedAt: new Date()
@@ -810,7 +934,17 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         const isVideo = (session.mimeType || '').startsWith('video/');
         const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
         const viewUrl = isVideo ? previewUrl : publicRes.viewUrl;
-        const thumbnailUrl = chunkRes.fileData?.thumbnailLink || `https://lh3.googleusercontent.com/d/${fileId}`;
+        let thumbnailUrl = chunkRes.fileData?.thumbnailLink || `https://lh3.googleusercontent.com/d/${fileId}`;
+
+        if (isVideo && session.thumbnailBase64) {
+          try {
+            const cleanThumb = session.thumbnailBase64.split(';base64,').pop() || session.thumbnailBase64;
+            const thumbRes = await uploadToFolder(session.folderId, `${session.fileName}.thumb.jpg`, 'image/jpeg', cleanThumb);
+            thumbnailUrl = thumbRes.viewUrl;
+          } catch (tErr: any) {
+            context.warn('Failed to upload video thumbnail for session:', tErr.message);
+          }
+        }
 
         const mediaItem = {
           googleDriveId: fileId,

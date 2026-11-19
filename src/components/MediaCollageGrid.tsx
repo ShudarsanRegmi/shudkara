@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Play, Film } from 'lucide-react';
 
 export interface CollageMediaItem {
@@ -17,6 +17,37 @@ interface MediaCollageGridProps {
   onOpenLightbox: (index: number) => void;
   className?: string;
 }
+
+const VideoThumbnailPoster: React.FC<{
+  posterUrl: string;
+  streamUrl?: string;
+  alt: string;
+  className?: string;
+}> = ({ posterUrl, streamUrl, alt, className = '' }) => {
+  const [imgFailed, setImgFailed] = useState(false);
+
+  if ((imgFailed || !posterUrl) && streamUrl) {
+    return (
+      <video
+        src={`${streamUrl}#t=0.5`}
+        preload="metadata"
+        muted
+        playsInline
+        className={`${className} pointer-events-none`}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={posterUrl}
+      alt={alt}
+      onError={() => setImgFailed(true)}
+      className={className}
+      loading="lazy"
+    />
+  );
+};
 
 export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
   media,
@@ -41,11 +72,11 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
       >
         {isVideo ? (
           <div className="w-full h-full flex flex-col items-center justify-center relative bg-slate-950">
-            <img
-              src={posterUrl}
+            <VideoThumbnailPoster
+              posterUrl={posterUrl}
+              streamUrl={item.streamUrl || item.viewUrl}
               alt={item.fileName || 'Video thumbnail'}
               className="w-full h-full object-cover opacity-85 group-hover:scale-105 transition duration-300"
-              loading="lazy"
             />
             {/* Play Button Overlay */}
             <div className="absolute inset-0 bg-black/25 group-hover:bg-black/15 flex items-center justify-center transition">
@@ -90,12 +121,21 @@ export const MediaCollageGrid: React.FC<MediaCollageGridProps> = ({
         className="relative w-full h-full bg-slate-900 overflow-hidden cursor-pointer group select-none"
         style={{ touchAction: 'pan-y' }}
       >
-        <img
-          src={posterUrl}
-          alt={item.fileName || `Photo ${idx + 1}`}
-          className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-          loading="lazy"
-        />
+        {isVideo ? (
+          <VideoThumbnailPoster
+            posterUrl={posterUrl}
+            streamUrl={item.streamUrl || item.viewUrl}
+            alt={item.fileName || `Video ${idx + 1}`}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+          />
+        ) : (
+          <img
+            src={posterUrl}
+            alt={item.fileName || `Photo ${idx + 1}`}
+            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+            loading="lazy"
+          />
+        )}
 
         {/* Video Play Overlay */}
         {isVideo && (
