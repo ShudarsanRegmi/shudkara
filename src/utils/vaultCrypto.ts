@@ -121,9 +121,13 @@ export async function wrapDEK(dek: CryptoKey, mvk: CryptoKey): Promise<WrappedKe
 /**
  * Unwraps (decrypts) a document DEK using the user's Master Vault Key (MVK).
  */
-export async function unwrapDEK(envelope: WrappedKeyEnvelope, mvk: CryptoKey): Promise<CryptoKey> {
-  const wrappedKeyBytes = base64ToArrayBuffer(envelope.wrappedKeyB64);
-  const ivBytes = base64ToUint8Array(envelope.ivB64);
+export async function unwrapDEK(envelope: WrappedKeyEnvelope | string, mvk: CryptoKey): Promise<CryptoKey> {
+  const env: WrappedKeyEnvelope = typeof envelope === 'string' ? JSON.parse(envelope) : envelope;
+  if (!env || !env.wrappedKeyB64 || !env.ivB64) {
+    throw new Error('Invalid wrapped key envelope: missing wrappedKeyB64 or ivB64');
+  }
+  const wrappedKeyBytes = base64ToArrayBuffer(env.wrappedKeyB64);
+  const ivBytes = base64ToUint8Array(env.ivB64);
 
   return await crypto.subtle.unwrapKey(
     'raw',
@@ -475,8 +479,48 @@ export async function unsealDeviceMVK(sealedJsonStr: string, credentialRawIdB64:
 }
 
 /**
- * 1-Tap Biometric Registration & MVK Setup for Phone PWA / Laptop.
- * Prompts native fingerprint dialog, registers passkey, generates MVK, and seals it on device.
+ * Checks whether biometric credentials and sealed MVK are enrolled on this local device.
+ */
+export function hasEnrolledBiometrics(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    localStorage.getItem('shudkara_vault_passkey_raw_id') &&
+    localStorage.getItem('shudkara_vault_device_mvk')
+  );
+}
+
+/**
+ * Resets local device biometric keys (e.g. if key was corrupted or desynced).
+ */
+export function clearDeviceVaultBiometrics(): void {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('shudkara_vault_device_mvk');
+  localStorage.removeItem('shudkara_vault_passkey_raw_id');
+  localStorage.removeItem('shudkara_vault_passkey_cred_id');
+  localStorage.removeItem('shudkara_vault_manifest_enc');
+}
+
+/**
+ * Seals an EXISTING Master Vault Key (MVK) with the device's native fingerprint/passkey.
+ * Used when enrolling a secondary device (phone) after pairing via QR or deriving from passphrase.
+ */
+export async function registerBiometricsWithExistingMVK(
+  mvk: CryptoKey,
+  username: string = 'shudarsan@shudkara'
+): Promise<{ credentialId: string; rawIdB64: string }> {
+  const reg = await registerWebAuthnPasskey(username);
+  const sealed = await sealDeviceMVK(mvk, reg.rawIdB64);
+
+  localStorage.setItem('shudkara_vault_device_mvk', sealed);
+  localStorage.setItem('shudkara_vault_passkey_raw_id', reg.rawIdB64);
+  localStorage.setItem('shudkara_vault_passkey_cred_id', reg.credentialId);
+
+  return reg;
+}
+
+/**
+ * 1-Tap Biometric Registration & MVK Setup for Brand-New Vault Setup (First time account setup).
+ * Prompts native fingerprint dialog, registers passkey, generates a fresh MVK, and seals it on device.
  */
 export async function registerAndSealDeviceMVK(username: string = 'shudarsan@shudkara'): Promise<{ mvk: CryptoKey; credentialId: string }> {
   const reg = await registerWebAuthnPasskey(username);
@@ -499,9 +543,7 @@ export async function unlockWithDeviceBiometrics(): Promise<CryptoKey> {
   const sealed = localStorage.getItem('shudkara_vault_device_mvk');
 
   if (!rawIdB64 || !sealed) {
-    // If not registered yet, perform 1-tap registration + unlock
-    const { mvk } = await registerAndSealDeviceMVK();
-    return mvk;
+    throw new Error('NO_REGISTERED_PASSKEY');
   }
 
   // Native hardware biometric verification prompt
@@ -1182,6 +1224,112 @@ export async function idbGetEncryptedBlob(blobUuid: string): Promise<string | nu
     });
   } catch (err) {
     console.warn('[Vault IDB] get error:', err);
+    return null;
+  }
+}
+
+/**
+ * Generates an encrypted URL payload for instant zero-knowledge cross-device pairing.
+ * The ephemeral secret is in the hash fragment (#) so it is NEVER sent to any server.
+ */
+export async function createInstantPairingPayload(mvk: CryptoKey): Promise<{ url: string; qrSvg: string }> {
+  const rawMvkB64 = await exportKeyRaw(mvk);
+
+  // Generate random 16-byte ephemeral secret
+  const secretBytes = generateRandomBytes(16);
+  const secretB64Url = arrayBufferToBase64(secretBytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    secretBytes as BufferSource,
+    { name: 'PBKDF2' },
+    false,
+    ['deriveKey']
+  );
+  const transferKey = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: new TextEncoder().encode('shudkara_instant_pairing_salt'),
+      iterations: 10000,
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+
+  const encoder = new TextEncoder();
+  const iv = generateRandomBytes(12);
+  const encryptedBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
+    transferKey,
+    encoder.encode(rawMvkB64)
+  );
+
+  const cipherB64Url = arrayBufferToBase64(encryptedBuf).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const ivB64Url = arrayBufferToBase64(iv).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  const baseUrl = typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '';
+  const url = `${baseUrl}?tab=vault#pair_s=${secretB64Url}&pair_c=${cipherB64Url}&pair_iv=${ivB64Url}`;
+  const qrSvg = generateQRCodeSVG(url, 220);
+
+  return { url, qrSvg };
+}
+
+/**
+ * Decrypts the Master Vault Key (MVK) from the instant pairing URL hash fragment.
+ */
+export async function decryptInstantPairingPayload(hash: string): Promise<CryptoKey | null> {
+  try {
+    const cleanHash = hash.startsWith('#') ? hash.slice(1) : hash;
+    const params = new URLSearchParams(cleanHash);
+    const secretB64Url = params.get('pair_s');
+    const cipherB64Url = params.get('pair_c');
+    const ivB64Url = params.get('pair_iv');
+
+    if (!secretB64Url || !cipherB64Url || !ivB64Url) return null;
+
+    const toB64 = (s: string) => {
+      let b = s.replace(/-/g, '+').replace(/_/g, '/');
+      while (b.length % 4) b += '=';
+      return b;
+    };
+
+    const secretBytes = base64ToUint8Array(toB64(secretB64Url));
+    const cipherBytes = base64ToArrayBuffer(toB64(cipherB64Url));
+    const ivBytes = base64ToUint8Array(toB64(ivB64Url));
+
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      secretBytes as BufferSource,
+      { name: 'PBKDF2' },
+      false,
+      ['deriveKey']
+    );
+    const transferKey = await crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt: new TextEncoder().encode('shudkara_instant_pairing_salt'),
+        iterations: 10000,
+        hash: 'SHA-256'
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+
+    const decryptedBuf = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: ivBytes as BufferSource },
+      transferKey,
+      cipherBytes as BufferSource
+    );
+
+    const rawMvkB64 = new TextDecoder().decode(decryptedBuf);
+    return await importKeyRaw(rawMvkB64);
+  } catch (err) {
+    console.error('[Vault] Failed to decrypt pairing payload from hash:', err);
     return null;
   }
 }
