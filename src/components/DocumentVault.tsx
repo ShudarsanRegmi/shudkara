@@ -190,303 +190,8 @@ function createInitialManifest(): VaultManifest {
   return {
     version: 2,
     updatedAt: new Date().toISOString(),
-    persons: [
-      {
-        id: 'person_self',
-        name: 'Shudarsan Regmi',
-        relationship: 'self',
-        avatarColor: 'emerald',
-        dob: '1999-05-14',
-        bloodGroup: 'O+',
-        emergencyPhone: '+977-9842000000',
-        email: 'shudarsan@shudkara.com',
-        primaryAddress: 'Kathmandu / Biratnagar, Nepal',
-        countries: ['Nepal', 'India'],
-        isDefault: true,
-        notes: 'Primary Vault Custodian'
-      },
-      {
-        id: 'person_father',
-        name: 'Baidyanath Regmi',
-        relationship: 'father',
-        avatarColor: 'blue',
-        dob: '1968-08-20',
-        bloodGroup: 'A+',
-        emergencyPhone: '+977-9852000000',
-        primaryAddress: 'Morang, Nepal',
-        countries: ['Nepal', 'India']
-      },
-      {
-        id: 'person_mother',
-        name: 'Gita Regmi',
-        relationship: 'mother',
-        avatarColor: 'rose',
-        dob: '1972-11-12',
-        bloodGroup: 'B+',
-        emergencyPhone: '+977-9842111111',
-        primaryAddress: 'Morang, Nepal & Phuntsholing, Bhutan',
-        countries: ['Nepal', 'Bhutan']
-      },
-      {
-        id: 'person_sibling',
-        name: 'Sujan Regmi',
-        relationship: 'sibling',
-        avatarColor: 'amber',
-        dob: '2002-03-25',
-        bloodGroup: 'O+',
-        emergencyPhone: '+977-9842222222',
-        countries: ['Nepal']
-      }
-    ],
-    documents: [
-      {
-        id: 'doc_passport_self',
-        personId: 'person_self',
-        category: 'travel',
-        title: 'International Passport (E-Passport)',
-        documentNumber: 'PA0829141',
-        issuingCountry: 'Nepal',
-        issuingAuthority: 'Department of Passports Kathmandu',
-        issuedDate: '2021-04-12',
-        expiryDate: '2031-04-11',
-        layoutMode: 'front_back_separate',
-        status: 'active',
-        notes: '10-Year Ordinary 34-page machine readable biometric passport',
-        media: [
-          {
-            slot: 'front',
-            label: 'Biographical Page',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'back',
-            label: 'Signature & Endorsement Page',
-            mimeType: 'image/svg+xml'
-          }
-        ],
-        previousVersions: [
-          {
-            versionId: 'ver_passport_old_2011',
-            versionLabel: 'Previous MRP Passport (2011–2021)',
-            documentNumber: '07891234',
-            issuedDate: '2011-03-10',
-            expiryDate: '2021-03-09',
-            status: 'expired',
-            notes: '⚠️ Contains active 10-year US B1/B2 Visa on Page 14 (valid through 2028)'
-          }
-        ],
-        relatedDocuments: [
-          {
-            id: 'rel_photo_spec',
-            title: 'Official MRP Digital Photo Spec (35x45mm)',
-            category: 'photo',
-            description: 'Approved biometric white background passport photo asset'
-          },
-          {
-            id: 'rel_police_report',
-            title: 'Police Clearance Certificate',
-            category: 'clearance',
-            issuedDate: '2024-01-15',
-            description: 'Nepal Police Crime Investigation Department Verification'
-          }
-        ],
-        createdAt: '2026-11-18T10:00:00Z',
-        updatedAt: '2026-11-18T10:00:00Z'
-      },
-      {
-        id: 'doc_aadhar_self',
-        personId: 'person_self',
-        category: 'identity',
-        title: 'National Identity / Aadhar Card',
-        documentNumber: 'XXXX-XXXX-9812',
-        issuingCountry: 'India',
-        issuedDate: '2019-06-20',
-        layoutMode: 'front_back_separate',
-        status: 'active',
-        notes: 'Official UIDAI national identity holding physical PVC, digital PDF, and stitched formats',
-        media: [
-          {
-            slot: 'front',
-            label: 'PVC Front (Photo, QR & UID)',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'back',
-            label: 'PVC Reverse (Address & Verification)',
-            mimeType: 'image/svg+xml'
-          }
-        ],
-        editions: [
-          {
-            id: 'edt_aadhar_pvc',
-            label: 'PVC Smart Card',
-            formatType: 'front_back_separate',
-            fileFormat: 'jpg',
-            isPrimary: true,
-            notes: 'High-durability credit-card format with holographic laminate',
-            media: [
-              {
-                slot: 'front',
-                label: 'PVC Front (Photo, QR & UID)',
-                mimeType: 'image/svg+xml'
-              },
-              {
-                slot: 'back',
-                label: 'PVC Reverse (Address & Verification)',
-                mimeType: 'image/svg+xml'
-              }
-            ],
-            createdAt: '2026-11-18T11:00:00Z'
-          },
-          {
-            id: 'edt_aadhar_pdf',
-            label: 'Official e-Aadhar (PDF)',
-            formatType: 'multi_page_dossier',
-            fileFormat: 'pdf',
-            passwordHint: 'SHUD1999 (First 4 letters of name in CAPITAL + 4-digit Birth Year)',
-            notes: 'Digitally signed official electronic PDF downloaded from UIDAI portal',
-            media: [
-              {
-                slot: 'page',
-                pageNumber: 1,
-                label: 'Page 1: Digital Certificate & Cut-out Identity Slip',
-                mimeType: 'image/svg+xml'
-              },
-              {
-                slot: 'page',
-                pageNumber: 2,
-                label: 'Page 2: Cryptographic Signature & Verification Seal',
-                mimeType: 'image/svg+xml'
-              }
-            ],
-            createdAt: '2026-11-18T11:15:00Z'
-          },
-          {
-            id: 'edt_aadhar_scan',
-            label: 'Stitched Photocopy Scan',
-            formatType: 'front_back_combined',
-            fileFormat: 'png',
-            notes: 'Single A4 sheet scan showing front and reverse side-by-side for bank/sim verification',
-            media: [
-              {
-                slot: 'combined',
-                label: 'Front & Back Stitched Photocopy Sheet',
-                mimeType: 'image/svg+xml'
-              }
-            ],
-            createdAt: '2026-11-18T11:30:00Z'
-          }
-        ],
-        relatedDocuments: [
-          {
-            id: 'rel_aadhar_slip',
-            title: 'Aadhar Enrollment Acknowledgment Slip',
-            category: 'receipt',
-            description: 'Original UIDAI acknowledgment receipt and demographic update confirmation'
-          }
-        ],
-        createdAt: '2026-11-18T11:00:00Z',
-        updatedAt: '2026-11-18T11:00:00Z'
-      },
-      {
-        id: 'doc_cit_father',
-        personId: 'person_father',
-        category: 'identity',
-        title: 'Nepali Citizenship Certificate (Nagarikata)',
-        documentNumber: '27-01-76-04912',
-        issuingCountry: 'Nepal',
-        issuingAuthority: 'District Administration Office Morang',
-        issuedDate: '1986-10-14',
-        layoutMode: 'front_back_separate',
-        status: 'active',
-        notes: 'Permanent sovereign citizenship by descent',
-        media: [
-          {
-            slot: 'front',
-            label: 'Front Face (Personal Details & Photo)',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'back',
-            label: 'Reverse Endorsement & Seal',
-            mimeType: 'image/svg+xml'
-          }
-        ],
-        relatedDocuments: [
-          {
-            id: 'rel_ward_translation',
-            title: 'Ward Municipal English Translation Affidavit',
-            category: 'legal',
-            description: 'Official notarized English translation issued by Biratnagar Ward No. 3'
-          }
-        ],
-        createdAt: '2026-11-18T12:00:00Z',
-        updatedAt: '2026-11-18T12:00:00Z'
-      },
-      {
-        id: 'doc_bhutan_permit',
-        personId: 'person_mother',
-        category: 'travel',
-        title: 'Bhutan Entry & Stay Permit',
-        documentNumber: 'BTN-PER-2024-819',
-        issuingCountry: 'Bhutan',
-        issuingAuthority: 'Department of Immigration, Thimphu',
-        issuedDate: '2024-02-10',
-        expiryDate: '2027-02-09',
-        layoutMode: 'front_back_separate',
-        status: 'active',
-        notes: 'Official Department of Immigration Royal Government of Bhutan Border Stay & Travel Permit',
-        media: [
-          {
-            slot: 'front',
-            label: 'Permit Face & Biometric Stamp',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'back',
-            label: 'Immigration Endorsement & Border Checkpoints',
-            mimeType: 'image/svg+xml'
-          }
-        ],
-        createdAt: '2026-11-18T13:00:00Z',
-        updatedAt: '2026-11-18T13:00:00Z'
-      },
-      {
-        id: 'doc_land_deed',
-        personId: 'person_father',
-        category: 'legal',
-        title: 'Ancestral Land Ownership Deed (Lalpurja)',
-        documentNumber: 'Kitta No. 492',
-        issuingCountry: 'Nepal',
-        issuingAuthority: 'Land Revenue Office Morang',
-        issuedDate: '2005-02-18',
-        layoutMode: 'multi_page_dossier',
-        status: 'active',
-        notes: 'Multi-page cadastral property registration dossier with municipal boundaries',
-        media: [
-          {
-            slot: 'page',
-            pageNumber: 1,
-            label: 'Page 1: Title Grant & Registry Identification',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'page',
-            pageNumber: 2,
-            label: 'Page 2: Cadastral Bounds & Municipal Survey Map',
-            mimeType: 'image/svg+xml'
-          },
-          {
-            slot: 'page',
-            pageNumber: 3,
-            label: 'Page 3: Notarial Endorsements & Tax Clearance Seals',
-            mimeType: 'image/svg+xml'
-          }
-        ],
-        createdAt: '2026-11-18T14:00:00Z',
-        updatedAt: '2026-11-18T14:00:00Z'
-      }
-    ]
+    persons: [],
+    documents: []
   };
 }
 
@@ -494,14 +199,14 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   // ── Cryptographic Key & Vault Locking State (RAM Only) ────────────────────────
   const [isUnlocked, setIsUnlocked] = useState<boolean>(false);
   const [masterVaultKey, setMasterVaultKey] = useState<CryptoKey | null>(null);
-  const [inactivitySeconds, setInactivitySeconds] = useState<number>(120);
+  const [inactivitySeconds, setInactivitySeconds] = useState<number>(600);
 
   // ── Manifest & Filter State ──────────────────────────────────────────────────
   const [manifest, setManifest] = useState<VaultManifest | null>(null);
-  const [selectedPersonId, setSelectedPersonId] = useState<string>('all');
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedCountry, setSelectedCountry] = useState<string>('all');
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const [selectedEditionByDoc, setSelectedEditionByDoc] = useState<Record<string, string>>({});
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [isAddEditionDoc, setIsAddEditionDoc] = useState<VaultDocument | null>(null);
@@ -605,7 +310,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     setFlippedCards({});
   }, [manifest]);
 
-  // 120-second inactivity ticker
+  // 10-Minute (600 seconds) Inactivity Auto-Lock (No Tab Switch Lock)
   useEffect(() => {
     if (!isUnlocked) return;
 
@@ -613,7 +318,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       setInactivitySeconds((prev) => {
         if (prev <= 1) {
           lockVault();
-          return 120;
+          return 600;
         }
         return prev - 1;
       });
@@ -622,33 +327,22 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     return () => clearInterval(interval);
   }, [isUnlocked, lockVault]);
 
-  // Activity listeners to reset 120-second timer
+  // Activity listeners to reset 10-minute timer (no blur/visibilitychange listener)
   useEffect(() => {
     if (!isUnlocked) return;
 
-    const resetTimer = () => setInactivitySeconds(120);
+    const resetTimer = () => setInactivitySeconds(600);
 
     window.addEventListener('mousemove', resetTimer);
     window.addEventListener('keydown', resetTimer);
     window.addEventListener('touchstart', resetTimer);
     window.addEventListener('scroll', resetTimer);
 
-    // Instant lock on window blur or tab switch
-    const handleBlur = () => lockVault();
-    const handleVisibilityChange = () => {
-      if (document.hidden) lockVault();
-    };
-
-    window.addEventListener('blur', handleBlur);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
     return () => {
       window.removeEventListener('mousemove', resetTimer);
       window.removeEventListener('keydown', resetTimer);
       window.removeEventListener('touchstart', resetTimer);
       window.removeEventListener('scroll', resetTimer);
-      window.removeEventListener('blur', handleBlur);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [isUnlocked, lockVault]);
 
@@ -841,7 +535,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
           setMasterVaultKey(unsealedMvk);
           setIsUnlocked(true);
-          setInactivitySeconds(120);
+          setInactivitySeconds(600);
           await loadVaultManifest(unsealedMvk);
         } else if (data.status === 'expired') {
           setRelayStatus('expired');
@@ -920,7 +614,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
       setMasterVaultKey(mvk);
       setIsUnlocked(true);
-      setInactivitySeconds(120);
+      setInactivitySeconds(600);
       setHasRegisteredPasskey(true);
       await loadVaultManifest(mvk);
       setIsUnlocking(false);
@@ -979,7 +673,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
       setMasterVaultKey(derivedKey);
       setIsUnlocked(true);
-      setInactivitySeconds(120);
+      setInactivitySeconds(600);
       setPassphraseInput('');
       setTotpCodeInput('');
       await loadVaultManifest(derivedKey);
@@ -990,12 +684,22 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     }
   };
 
-  // ── Delete Document Handler ──────────────────────────────────────────────────
+  // ── Delete Document Handler (Critical Action: Requires Biometric Re-auth) ────
   const handleDeleteDocument = async (docId: string) => {
-    if (!window.confirm('Are you sure you want to delete this document from the zero-knowledge vault?')) {
+    if (!manifest || !masterVaultKey) return;
+    if (!window.confirm('Are you sure you want to permanently delete this document?')) {
       return;
     }
-    if (!manifest || !masterVaultKey) return;
+
+    try {
+      const verified = await authenticateWebAuthnPasskey();
+      if (!verified) {
+        alert('Biometric verification cancelled. Document deletion aborted.');
+        return;
+      }
+    } catch {
+      // Fallback if hardware not supported
+    }
 
     const updatedDocuments = manifest.documents.filter((d) => d.id !== docId);
     const updatedManifest: VaultManifest = {
@@ -1009,24 +713,37 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     await syncManifestToCloud(updatedManifest, masterVaultKey);
   };
 
-  // ── Delete Person Profile Handler ────────────────────────────────────────────
+  // ── Delete Person Profile Handler (Critical Action: Requires Biometric Re-auth) ──
   const handleDeletePerson = async (personId: string) => {
     if (!manifest || !masterVaultKey) return;
-    if (manifest.persons.length <= 1) {
-      alert('You must have at least one registered family person.');
+    if (!window.confirm('Permanently delete this family member profile and associated credentials?')) {
       return;
     }
-    if (!window.confirm('Delete this family profile and all associated persona filtering?')) return;
+
+    try {
+      const verified = await authenticateWebAuthnPasskey();
+      if (!verified) {
+        alert('Biometric verification cancelled. Profile deletion aborted.');
+        return;
+      }
+    } catch {
+      // Fallback if hardware not supported
+    }
 
     const updatedPersons = manifest.persons.filter((p) => p.id !== personId);
+    const updatedDocuments = manifest.documents.filter((d) => d.personId !== personId);
     const updatedManifest: VaultManifest = {
       ...manifest,
       persons: updatedPersons,
+      documents: updatedDocuments,
       updatedAt: new Date().toISOString()
     };
 
     setManifest(updatedManifest);
-    if (selectedPersonId === personId) setSelectedPersonId('all');
+    if (selectedPersonId === personId) {
+      setSelectedPersonId(null);
+      setSelectedCountry(null);
+    }
     await syncManifestToCloud(updatedManifest, masterVaultKey);
   };
 
@@ -1661,365 +1378,692 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
         </div>
       )}
 
-      {/* ── Section 3.1: Multi-Person / Family Persona Gallery Grid ──────────── */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-amber-700" />
-              Family Member Gallery &amp; Profiles
-            </span>
-            <p className="text-[11px] text-slate-500">
-              Select any profile to filter credentials, view medical &amp; emergency info, or create new family members
-            </p>
-          </div>
+      {/* ── Hierarchical Sovereign Navigation Bar / Breadcrumbs ─────────────── */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2 flex-wrap text-xs">
           <button
-            onClick={() => setIsFamilySummaryOpen(true)}
-            className="text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200/80 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-2xs"
-          >
-            <FileText className="w-3.5 h-3.5" />
-            Consolidated Dossier
-          </button>
-        </div>
-
-        {/* Gallery Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
-          {/* Card 1: All Family Overview */}
-          <div
-            onClick={() => setSelectedPersonId('all')}
-            className={`p-4 rounded-2xl cursor-pointer transition-all duration-200 border flex flex-col justify-between relative group ${
-              selectedPersonId === 'all'
-                ? 'bg-amber-50/70 border-amber-300 ring-2 ring-amber-400/40 shadow-xs'
-                : 'bg-white hover:bg-slate-50/80 border-slate-200 shadow-2xs hover:shadow-xs'
+            onClick={() => {
+              setSelectedPersonId(null);
+              setSelectedCountry(null);
+            }}
+            className={`font-bold transition flex items-center gap-1.5 px-2.5 py-1 rounded-xl ${
+              selectedPersonId === null
+                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-                  <Users className="w-5 h-5 text-amber-300" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900 serif-heading">All Family</h4>
-                  <span className="text-[10px] text-slate-500 font-medium">Entire Vault Portfolio</span>
-                </div>
-              </div>
-              {selectedPersonId === 'all' && (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 ring-4 ring-amber-100" />
-              )}
-            </div>
+            <Users className="w-4 h-4 text-amber-700" />
+            <span>1. Family Members</span>
+          </button>
 
-            <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-              <span className="text-slate-500">{manifest?.persons.length || 0} Members</span>
-              <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md font-mono text-[11px]">
-                {manifest?.documents.length || 0} Docs
+          {selectedPersonId !== null && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+              <button
+                onClick={() => setSelectedCountry(null)}
+                className={`font-bold transition flex items-center gap-1.5 px-2.5 py-1 rounded-xl ${
+                  selectedCountry === null
+                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                <span>2. {selectedPersonId === 'all' ? 'All Family' : (manifest?.persons.find((p) => p.id === selectedPersonId)?.name || 'Member')}</span>
+              </button>
+            </>
+          )}
+
+          {selectedPersonId !== null && selectedCountry !== null && (
+            <>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+              <span className="font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-xl flex items-center gap-1">
+                <span>3.</span>
+                <span>{selectedCountry === 'all' ? '🌐' : getCountryFlag(selectedCountry)}</span>
+                <span>{selectedCountry === 'all' ? 'All Sovereign Records' : selectedCountry}</span>
               </span>
+            </>
+          )}
+        </div>
+
+        {/* Global Action CTAs */}
+        <div className="flex items-center gap-2">
+          {selectedPersonId === null && (
+            <button
+              onClick={() => setIsAddPersonOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Member
+            </button>
+          )}
+
+          <button
+            onClick={() => setIsAddDocOpen(true)}
+            className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold transition shadow-xs flex items-center gap-1.5"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            Add Document
+          </button>
+        </div>
+      </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          LEVEL 1: FAMILY MEMBER SELECTION (When no member is selected)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {selectedPersonId === null && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-bold text-slate-800 serif-heading uppercase tracking-wider flex items-center gap-2">
+                <Users className="w-4 h-4 text-amber-700" />
+                Select Family Member
+              </h2>
+              <p className="text-xs text-slate-500">
+                Choose an individual to browse their sovereign credentials by issuing country
+              </p>
             </div>
           </div>
 
-          {/* Cards for each Person */}
-          {manifest?.persons.map((person) => {
-            const isSelected = selectedPersonId === person.id;
-            const count = personDocCounts[person.id] || 0;
-            return (
-              <div
-                key={person.id}
-                onClick={() => setSelectedPersonId(person.id)}
-                className={`p-4 rounded-2xl cursor-pointer transition-all duration-200 border flex flex-col justify-between relative group ${
-                  isSelected
-                    ? 'bg-amber-50/70 border-amber-300 ring-2 ring-amber-400/40 shadow-xs'
-                    : 'bg-white hover:bg-slate-50/80 border-slate-200 shadow-2xs hover:shadow-xs'
-                }`}
+          {manifest?.persons.length === 0 ? (
+            <div className="p-12 text-center bg-white rounded-3xl border border-slate-200 space-y-4 max-w-lg mx-auto shadow-sm">
+              <div className="w-16 h-16 rounded-2xl bg-amber-50 text-amber-700 mx-auto flex items-center justify-center">
+                <Users className="w-8 h-8" />
+              </div>
+              <h3 className="text-base font-bold text-slate-900 serif-heading">
+                Zero-Knowledge Document Vault Ready
+              </h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                No profiles are registered yet. Create your primary custodian profile or a family member to begin storing encrypted passports, identity cards, and sovereign paperwork.
+              </p>
+              <button
+                onClick={() => setIsAddPersonOpen(true)}
+                className="px-5 py-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl text-xs font-bold transition shadow-xs inline-flex items-center gap-2"
               >
-                {/* Header with Avatar & Relationship */}
+                <Plus className="w-4 h-4" />
+                Create Primary Custodian Profile
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Card: All Family Members */}
+              <div
+                onClick={() => {
+                  setSelectedPersonId('all');
+                  setSelectedCountry('all');
+                }}
+                className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
+              >
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-sm text-slate-800 shadow-2xs">
-                      {person.name.substring(0, 2).toUpperCase()}
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center font-bold text-base shadow-xs">
+                      <Users className="w-6 h-6 text-amber-300" />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-slate-900 serif-heading line-clamp-1">{person.name}</h4>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600">
-                          {person.relationship}
-                        </span>
+                      <h3 className="text-sm font-bold text-slate-900 serif-heading">All Family Members</h3>
+                      <span className="text-[11px] text-slate-500">Entire Vault Portfolio</span>
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-slate-400 group-hover:text-amber-700 group-hover:translate-x-1 transition" />
+                </div>
+
+                <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                  <span className="text-slate-500">{manifest?.persons.length || 0} Registered Members</span>
+                  <span className="font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg font-mono text-[11px]">
+                    {manifest?.documents.length || 0} Docs Total
+                  </span>
+                </div>
+              </div>
+
+              {/* Cards for each person */}
+              {manifest?.persons.map((person) => {
+                const count = personDocCounts[person.id] || 0;
+                return (
+                  <div
+                    key={person.id}
+                    onClick={() => {
+                      setSelectedPersonId(person.id);
+                      setSelectedCountry(null);
+                    }}
+                    className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-center font-bold text-base shadow-2xs">
+                            {person.name.substring(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-bold text-slate-900 serif-heading line-clamp-1">{person.name}</h3>
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 mt-1 inline-block">
+                              {person.relationship}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingPerson(person);
+                            }}
+                            title="Edit Profile"
+                            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeletePerson(person.id);
+                            }}
+                            title="Delete Profile"
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Vitals row */}
+                      <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        {person.bloodGroup && (
+                          <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold">
+                            🩸 {person.bloodGroup}
+                          </span>
+                        )}
+                        {person.dob && (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono">
+                            🎂 {person.dob}
+                          </span>
+                        )}
+                        {person.emergencyPhone && (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono truncate max-w-[130px]">
+                            📞 {person.emergencyPhone}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Countries badges */}
+                      <div className="mt-3 flex items-center gap-1 flex-wrap">
                         {person.countries && person.countries.map((c) => (
-                          <span key={c} title={c} className="text-xs">
-                            {getCountryFlag(c)}
+                          <span
+                            key={c}
+                            className="px-2 py-0.5 rounded-lg bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-bold flex items-center gap-1"
+                          >
+                            <span>{getCountryFlag(c)}</span>
+                            <span>{c}</span>
                           </span>
                         ))}
                       </div>
                     </div>
+
+                    <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                      <span className="text-slate-500 font-medium group-hover:text-amber-800 transition">
+                        Select Member →
+                      </span>
+                      <span className="font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg font-mono text-[11px]">
+                        {count} {count === 1 ? 'Doc' : 'Docs'}
+                      </span>
+                    </div>
                   </div>
+                );
+              })}
 
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingPerson(person);
-                      }}
-                      title="Edit personal profile"
-                      className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                    </button>
-                    {manifest.persons.length > 1 && !person.isDefault && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeletePerson(person.id);
-                        }}
-                        title="Delete profile"
-                        className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Persona Details Pill row */}
-                <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[10px]">
-                  {person.bloodGroup && (
-                    <span className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-bold">
-                      🩸 {person.bloodGroup}
-                    </span>
-                  )}
-                  {person.dob && (
-                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono">
-                      🎂 {person.dob}
-                    </span>
-                  )}
-                  {person.emergencyPhone && (
-                    <span className="px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-mono truncate max-w-[120px]">
-                      📞 {person.emergencyPhone}
-                    </span>
-                  )}
-                </div>
-
-                {/* Footer Count */}
-                <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-slate-400">
-                    {person.isDefault ? 'Vault Custodian' : 'Family Member'}
-                  </span>
-                  <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md font-mono text-[11px]">
-                    {count} {count === 1 ? 'Doc' : 'Docs'}
-                  </span>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* Card + Add Family Member */}
-          <button
-            type="button"
-            onClick={() => setIsAddPersonOpen(true)}
-            className="p-4 rounded-2xl border-2 border-dashed border-slate-300 hover:border-amber-400 bg-slate-50/50 hover:bg-amber-50/20 transition-all duration-200 flex flex-col items-center justify-center text-center group min-h-[130px]"
-          >
-            <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 group-hover:border-amber-300 group-hover:bg-amber-50 text-slate-400 group-hover:text-amber-700 flex items-center justify-center transition shadow-2xs mb-2">
-              <Plus className="w-5 h-5" />
-            </div>
-            <span className="text-xs font-bold text-slate-700 group-hover:text-amber-800">
-              Add Family Member
-            </span>
-            <span className="text-[10px] text-slate-400 mt-0.5">
-              Personal profile &amp; credentials
-            </span>
-          </button>
-        </div>
-      </div>
-
-      {/* ── Country Filter Strip ── */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-        <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 shrink-0 mr-1">
-          <Globe className="w-3 h-3 text-slate-500" />
-          Country:
-        </span>
-        <button
-          onClick={() => setSelectedCountry('all')}
-          className={`px-2.5 py-1 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1 ${
-            selectedCountry === 'all'
-              ? 'bg-slate-900 text-white shadow-2xs'
-              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-          }`}
-        >
-          <span>🌐</span>
-          <span>All Sovereign Documents</span>
-        </button>
-        {COUNTRIES_LIST.filter((c) => c.code !== 'XX').map((c) => {
-          const isSelected = selectedCountry === c.name;
-          return (
-            <button
-              key={c.code}
-              onClick={() => setSelectedCountry(c.name)}
-              className={`px-2.5 py-1 rounded-xl text-xs font-bold transition shrink-0 flex items-center gap-1.5 ${
-                isSelected
-                  ? 'bg-amber-700 text-white shadow-2xs'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-              }`}
-            >
-              <span>{c.flag}</span>
-              <span>{c.name}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Category Filters & Search Bar ───────────────────────────────────── */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        {/* Category Scroll Strip */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-          {categories.map((cat) => {
-            const isSelected = selectedCategory === cat.key;
-            return (
+              {/* Card + Add Family Member */}
               <button
-                key={cat.key}
-                onClick={() => setSelectedCategory(cat.key)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 flex items-center gap-1.5 ${
-                  isSelected
-                    ? 'bg-slate-200 text-slate-900 font-bold border border-slate-300'
-                    : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
+                type="button"
+                onClick={() => setIsAddPersonOpen(true)}
+                className="p-6 rounded-3xl border-2 border-dashed border-slate-300 hover:border-amber-400 bg-slate-50/50 hover:bg-amber-50/20 transition-all duration-200 flex flex-col items-center justify-center text-center group min-h-[170px]"
               >
-                <span>{cat.icon}</span>
-                <span>{cat.label}</span>
+                <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 group-hover:border-amber-300 group-hover:bg-amber-50 text-slate-400 group-hover:text-amber-700 flex items-center justify-center transition shadow-2xs mb-2">
+                  <Plus className="w-6 h-6" />
+                </div>
+                <span className="text-sm font-bold text-slate-800 group-hover:text-amber-800">
+                  Add Family Member
+                </span>
+                <span className="text-xs text-slate-400 mt-0.5">
+                  Register new individual &amp; personal credentials
+                </span>
               </button>
-            );
-          })}
-        </div>
-
-        {/* Search input */}
-        <div className="relative min-w-[240px]">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            placeholder="Search documents, numbers, persons..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            </div>
           )}
         </div>
-      </div>
+      )}
 
-      {/* ── Section 3.2: Documents Grid with 3D Flip & Media Composition ────── */}
-      {filteredDocuments.length === 0 ? (
-        <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-3 shadow-xs">
-          <FileText className="w-10 h-10 text-slate-300 mx-auto" />
-          <h3 className="text-base font-bold text-slate-800 serif-heading">No Documents Found</h3>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            No records matched your persona or category criteria. Try resetting filters or adding a new record.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredDocuments.map((doc) => {
-            const person = manifest?.persons.find((p) => p.id === doc.personId);
-            const isFlipped = !!flippedCards[doc.id];
-
-            // Resolve active format edition for this card
-            const activeEditionId = selectedEditionByDoc[doc.id] || doc.editions?.find((e) => e.isPrimary)?.id || doc.editions?.[0]?.id;
-            const activeEdition = doc.editions?.find((e) => e.id === activeEditionId);
-            const currentLayoutMode = activeEdition ? activeEdition.formatType : doc.layoutMode;
-            const currentMedia = activeEdition ? activeEdition.media : doc.media;
-            const frontMedia = currentMedia.find((m) => m.slot === 'front' || m.slot === 'combined' || m.slot === 'page');
-            const backMedia = currentMedia.find((m) => m.slot === 'back');
+      {/* ══════════════════════════════════════════════════════════════════════════
+          LEVEL 2: COUNTRY SELECTION (When a member is chosen, but country is not)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {selectedPersonId !== null && selectedCountry === null && (
+        <div className="space-y-6">
+          {/* Active Member Header Banner */}
+          {(() => {
+            const member = manifest?.persons.find((p) => p.id === selectedPersonId);
+            const docsForMember = manifest?.documents.filter((d) => d.personId === selectedPersonId) || [];
+            const countries = Array.from(
+              new Set([
+                ...(member?.countries || []),
+                ...docsForMember.map((d) => d.issuingCountry).filter(Boolean)
+              ])
+            );
 
             return (
-              <div
-                key={doc.id}
-                className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between"
-              >
-                {/* ── Top Header of Card ── */}
-                <div className="p-4 border-b border-slate-100 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center gap-1">
-                      <span>{getCountryFlag(doc.issuingCountry)}</span>
-                      <span>{doc.category.toUpperCase()} • {doc.issuingCountry || 'SOVEREIGN'}</span>
-                    </span>
-                    {getAvatarBadge(person)}
-                  </div>
-                  <h3 className="text-sm font-bold text-slate-900 serif-heading line-clamp-1" title={doc.title}>
-                    {doc.title}
-                  </h3>
-                </div>
-
-                {/* ── Format Edition Switcher Strip (if multiple editions exist) ── */}
-                {doc.editions && doc.editions.length > 0 && (
-                  <div className="px-4 py-1.5 bg-slate-50/70 border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
-                      Format:
-                    </span>
-                    {doc.editions.map((ed) => {
-                      const isEdActive = activeEdition?.id === ed.id;
-                      return (
-                        <button
-                          key={ed.id}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedEditionByDoc((prev) => ({ ...prev, [doc.id]: ed.id }));
-                          }}
-                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0 ${
-                            isEdActive
-                              ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs'
-                              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
-                          }`}
-                        >
-                          {ed.fileFormat === 'pdf' ? (
-                            <FileText className="w-2.5 h-2.5 text-red-500" />
-                          ) : (
-                            <Layers className="w-2.5 h-2.5 text-amber-600" />
-                          )}
-                          <span>{ed.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* ── PDF Password Formula Banner (if protected) ── */}
-                {activeEdition?.passwordHint && (
-                  <div className="px-4 py-1 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-1 text-[10px] text-amber-900">
-                    <div className="flex items-center gap-1 truncate">
-                      <Key className="w-2.5 h-2.5 text-amber-600 shrink-0" />
-                      <span className="truncate font-semibold">PDF Pwd: {activeEdition.passwordHint}</span>
+              <>
+                <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-center font-bold text-base shadow-2xs">
+                      {member ? member.name.substring(0, 2).toUpperCase() : 'ALL'}
                     </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-base font-bold text-slate-900 serif-heading">
+                          {member ? member.name : 'All Family Members'}
+                        </h2>
+                        {member && (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                            {member.relationship}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
+                        {member?.bloodGroup && <span>Blood: <strong className="text-rose-700">{member.bloodGroup}</strong></span>}
+                        {member?.dob && <span>DOB: {member.dob}</span>}
+                        {member?.emergencyPhone && <span>📞 {member.emergencyPhone}</span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {member && (
+                      <button
+                        onClick={() => setEditingPerson(member)}
+                        className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition flex items-center gap-1.5"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                        Edit Profile
+                      </button>
+                    )}
                     <button
-                      onClick={() => copyToClipboardWithWipe(activeEdition.passwordHint!, 'PDF Password')}
-                      className="underline hover:text-amber-950 font-bold shrink-0 ml-1"
+                      onClick={() => setIsAddDocOpen(true)}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-700 hover:bg-amber-800 text-white text-xs font-bold transition shadow-xs flex items-center gap-1.5"
                     >
-                      Copy
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Document
                     </button>
                   </div>
-                )}
+                </div>
 
-                {/* ── Card Media Viewport (Dynamically adapts to active layout format) ── */}
-                <div className="p-4 flex-1 flex flex-col items-center justify-center bg-slate-50/50">
-                  {currentLayoutMode === 'front_back_separate' ? (
-                    // ── 3D FLIP CARD VIEW ──
+                <div>
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 flex items-center gap-1.5">
+                    <Globe className="w-4 h-4 text-amber-700" />
+                    Select Issuing Sovereign Country
+                  </h3>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Choose a country to view official documents issued to this individual
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* All Countries Card */}
                     <div
-                      className="w-full relative cursor-pointer"
-                      style={{ perspective: '1000px', height: '210px' }}
-                      onClick={(e) => toggleCardFlip(doc.id, e)}
+                      onClick={() => setSelectedCountry('all')}
+                      className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
                     >
-                      <div
-                        className="w-full h-full relative transition-transform duration-700 rounded-2xl"
-                        style={{
-                          transformStyle: 'preserve-3d',
-                          transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)'
-                        }}
-                      >
-                        {/* Front Face */}
+                      <div className="flex items-start justify-between">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 border border-slate-200 flex items-center justify-center text-2xl shadow-2xs">
+                          🌐
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                          Worldwide
+                        </span>
+                      </div>
+
+                      <div className="mt-4">
+                        <h4 className="text-sm font-bold text-slate-900 serif-heading">All Countries</h4>
+                        <p className="text-[11px] text-slate-500 mt-0.5">Browse all records regardless of jurisdiction</p>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                        <span className="text-slate-500 group-hover:text-amber-800 font-medium">Browse All →</span>
+                        <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md font-mono text-[11px]">
+                          {docsForMember.length} Docs
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Specific Countries Cards */}
+                    {countries.map((countryName) => {
+                      const count = docsForMember.filter((d) => d.issuingCountry?.toLowerCase() === countryName.toLowerCase()).length;
+                      return (
                         <div
-                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
-                          style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
+                          key={countryName}
+                          onClick={() => setSelectedCountry(countryName)}
+                          className="p-5 rounded-3xl cursor-pointer transition-all duration-200 border bg-white hover:bg-slate-50/80 border-slate-200 shadow-sm hover:shadow-md flex flex-col justify-between group"
                         >
+                          <div className="flex items-start justify-between">
+                            <div className="w-12 h-12 rounded-2xl bg-amber-50/50 border border-amber-200 flex items-center justify-center text-3xl shadow-2xs">
+                              {getCountryFlag(countryName)}
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                              {count > 0 ? `${count} On File` : 'Paperwork'}
+                            </span>
+                          </div>
+
+                          <div className="mt-4">
+                            <h4 className="text-sm font-bold text-slate-900 serif-heading">{countryName}</h4>
+                            <p className="text-[11px] text-slate-500 mt-0.5">Sovereign issued credentials &amp; registry</p>
+                          </div>
+
+                          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                            <span className="text-slate-500 group-hover:text-amber-800 font-medium">View Records →</span>
+                            <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-md font-mono text-[11px]">
+                              {count} {count === 1 ? 'Doc' : 'Docs'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Add Document from New Country Card */}
+                    <button
+                      type="button"
+                      onClick={() => setIsAddDocOpen(true)}
+                      className="p-5 rounded-3xl border-2 border-dashed border-slate-300 hover:border-amber-400 bg-slate-50/50 hover:bg-amber-50/20 transition-all duration-200 flex flex-col items-center justify-center text-center group min-h-[160px]"
+                    >
+                      <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 group-hover:border-amber-300 group-hover:bg-amber-50 text-slate-400 group-hover:text-amber-700 flex items-center justify-center transition shadow-2xs mb-2">
+                        <Plus className="w-5 h-5" />
+                      </div>
+                      <span className="text-xs font-bold text-slate-800 group-hover:text-amber-800">
+                        Add New Country Document
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-0.5">
+                        Upload credential for another jurisdiction
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════
+          LEVEL 3: DOCUMENTS GRID (When both Member and Country are selected)
+         ══════════════════════════════════════════════════════════════════════════ */}
+      {selectedPersonId !== null && selectedCountry !== null && (
+        <div className="space-y-5">
+          {/* Category Filters & Search Bar */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            {/* Category Scroll Strip */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+              {categories.map((cat) => {
+                const isSelected = selectedCategory === cat.key;
+                return (
+                  <button
+                    key={cat.key}
+                    onClick={() => setSelectedCategory(cat.key)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-amber-100 text-amber-900 font-bold border border-amber-300'
+                        : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+                    }`}
+                  >
+                    <span>{cat.icon}</span>
+                    <span>{cat.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Search input */}
+            <div className="relative min-w-[240px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search documents, numbers..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-amber-500"
+              />
+              {searchQuery && (
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Documents Grid */}
+          {filteredDocuments.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-3xl p-12 text-center space-y-4 shadow-sm max-w-lg mx-auto">
+              <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-700 mx-auto flex items-center justify-center">
+                <FileText className="w-7 h-7" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900 serif-heading">No Documents Found</h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                  No credentials cataloged under {selectedCountry === 'all' ? 'All Countries' : selectedCountry}. Upload your first document to store it with end-to-end encryption.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsAddDocOpen(true)}
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs inline-flex items-center gap-2"
+              >
+                <Plus className="w-4 h-4" />
+                Upload Document Now
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {/* Inline Add Document Card */}
+              <button
+                type="button"
+                onClick={() => setIsAddDocOpen(true)}
+                className="bg-slate-50/50 hover:bg-amber-50/20 border-2 border-dashed border-slate-300 hover:border-amber-400 rounded-3xl p-6 transition flex flex-col items-center justify-center text-center group min-h-[260px]"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 group-hover:border-amber-300 group-hover:bg-amber-50 text-slate-400 group-hover:text-amber-700 flex items-center justify-center transition shadow-2xs mb-3">
+                  <Plus className="w-6 h-6" />
+                </div>
+                <h4 className="text-sm font-bold text-slate-800 group-hover:text-amber-800">
+                  Add New Document
+                </h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-[200px]">
+                  Upload dual-sided scan, e-Aadhar PDF, or passport
+                </p>
+              </button>
+
+              {filteredDocuments.map((doc) => {
+                const person = manifest?.persons.find((p) => p.id === doc.personId);
+                const isFlipped = !!flippedCards[doc.id];
+
+                // Resolve active format edition for this card
+                const activeEditionId = selectedEditionByDoc[doc.id] || doc.editions?.find((e) => e.isPrimary)?.id || doc.editions?.[0]?.id;
+                const activeEdition = doc.editions?.find((e) => e.id === activeEditionId);
+                const currentLayoutMode = activeEdition ? activeEdition.formatType : doc.layoutMode;
+                const currentMedia = activeEdition ? activeEdition.media : doc.media;
+                const frontMedia = currentMedia.find((m) => m.slot === 'front' || m.slot === 'combined' || m.slot === 'page');
+                const backMedia = currentMedia.find((m) => m.slot === 'back');
+
+                return (
+                  <div
+                    key={doc.id}
+                    className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm hover:shadow-md transition-all duration-200 flex flex-col justify-between"
+                  >
+                    {/* Top Header of Card */}
+                    <div className="p-4 border-b border-slate-100 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500 flex items-center gap-1">
+                          <span>{getCountryFlag(doc.issuingCountry)}</span>
+                          <span>{doc.category.toUpperCase()} • {doc.issuingCountry || 'SOVEREIGN'}</span>
+                        </span>
+                        {getAvatarBadge(person)}
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900 serif-heading line-clamp-1" title={doc.title}>
+                        {doc.title}
+                      </h3>
+                    </div>
+
+                    {/* Format Edition Switcher Strip */}
+                    {doc.editions && doc.editions.length > 0 && (
+                      <div className="px-4 py-1.5 bg-slate-50/70 border-b border-slate-100 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
+                          Format:
+                        </span>
+                        {doc.editions.map((ed) => {
+                          const isEdActive = activeEdition?.id === ed.id;
+                          return (
+                            <button
+                              key={ed.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedEditionByDoc((prev) => ({ ...prev, [doc.id]: ed.id }));
+                              }}
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0 ${
+                                isEdActive
+                                  ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs'
+                                  : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              {ed.fileFormat === 'pdf' ? (
+                                <FileText className="w-2.5 h-2.5 text-red-500" />
+                              ) : (
+                                <Layers className="w-2.5 h-2.5 text-amber-600" />
+                              )}
+                              <span>{ed.label}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* PDF Password Formula Banner */}
+                    {activeEdition?.passwordHint && (
+                      <div className="px-4 py-1 bg-amber-50/90 border-b border-amber-200/80 flex items-center justify-between gap-1 text-[10px] text-amber-900">
+                        <div className="flex items-center gap-1 truncate">
+                          <Key className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                          <span className="truncate font-semibold">PDF Pwd: {activeEdition.passwordHint}</span>
+                        </div>
+                        <button
+                          onClick={() => copyToClipboardWithWipe(activeEdition.passwordHint!, 'PDF Password')}
+                          className="underline hover:text-amber-950 font-bold shrink-0 ml-1"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Card Media Viewport */}
+                    <div className="p-4 flex-1 flex flex-col items-center justify-center bg-slate-50/50">
+                      {currentLayoutMode === 'front_back_separate' ? (
+                        // 3D FLIP CARD VIEW
+                        <div
+                          className="w-full relative cursor-pointer"
+                          style={{ perspective: '1000px', height: '210px' }}
+                          onClick={(e) => toggleCardFlip(doc.id, e)}
+                        >
+                          <div
+                            className="w-full h-full relative transition-transform duration-700 rounded-2xl"
+                            style={{
+                              transformStyle: 'preserve-3d',
+                              transform: isFlipped ? 'rotateY(180deg)' : 'rotateY(0deg)'
+                            }}
+                          >
+                            {/* Front Face */}
+                            <div
+                              className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
+                              style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
+                            >
+                              {frontMedia?.previewUrl ? (
+                                <img
+                                  src={frontMedia.previewUrl}
+                                  alt={frontMedia.label}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>{frontMedia?.label || 'Front Scan'}</span>
+                                </div>
+                              )}
+                              <div className="absolute bottom-2 right-2">
+                                <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1 font-bold">
+                                  <RotateCw className="w-2.5 h-2.5" /> Tap to Flip
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Back Face */}
+                            <div
+                              className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
+                              style={{
+                                backfaceVisibility: 'hidden',
+                                WebkitBackfaceVisibility: 'hidden',
+                                transform: 'rotateY(180deg)'
+                              }}
+                            >
+                              {backMedia?.previewUrl ? (
+                                <img
+                                  src={backMedia.previewUrl}
+                                  alt={backMedia.label}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
+                                  <FileText className="w-8 h-8 text-slate-300" />
+                                  <span>{backMedia?.label || 'Back Scan'}</span>
+                                </div>
+                              )}
+                              <div className="absolute bottom-2 right-2">
+                                <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1 font-bold">
+                                  <RotateCw className="w-2.5 h-2.5" /> Flip Front
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : currentLayoutMode === 'front_back_combined' ? (
+                        // COMBINED STITCHED VIEW
+                        <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
+                          {frontMedia?.previewUrl ? (
+                            <img
+                              src={frontMedia.previewUrl}
+                              alt={frontMedia.label}
+                              className="w-full h-full object-contain p-1"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
+                              <FileText className="w-8 h-8 text-slate-300" />
+                              <span>Stitched Dual-Sided Scan</span>
+                            </div>
+                          )}
+                          <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
+                            Stitched Front &amp; Back
+                          </div>
+                        </div>
+                      ) : currentLayoutMode === 'multi_page_dossier' ? (
+                        // MULTI-PAGE DOSSIER / PDF VIEW
+                        <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative p-2 flex flex-col items-center justify-center">
+                          {frontMedia?.previewUrl ? (
+                            <img
+                              src={frontMedia.previewUrl}
+                              alt={frontMedia.label}
+                              className="w-full h-full object-contain"
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
+                              <FileText className="w-12 h-12 text-red-400" />
+                              <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
+                            </div>
+                          )}
+                          <div className="absolute top-2 left-2 bg-amber-700/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <FileText className="w-2.5 h-2.5" />
+                            PDF Dossier • {currentMedia.length} Pages
+                          </div>
+                        </div>
+                      ) : (
+                        // FRONT ONLY VIEW
+                        <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
                           {frontMedia?.previewUrl ? (
                             <img
                               src={frontMedia.previewUrl}
@@ -2027,204 +2071,116 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
                               <FileText className="w-8 h-8 text-slate-300" />
-                              <span>{frontMedia?.label || 'Front Scan'}</span>
+                              <span>Single Face Document</span>
                             </div>
                           )}
-                          <div className="absolute bottom-2 right-2">
-                            <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1 font-bold">
-                              <RotateCw className="w-2.5 h-2.5" /> Tap to Flip
-                            </span>
+                          <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
+                            Single Face
                           </div>
                         </div>
+                      )}
+                    </div>
 
-                        {/* Back Face (Reverse) */}
-                        <div
-                          className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white flex flex-col items-center justify-center"
-                          style={{
-                            backfaceVisibility: 'hidden',
-                            WebkitBackfaceVisibility: 'hidden',
-                            transform: 'rotateY(180deg)'
-                          }}
+                    {/* Quick-Copy Identity Micro-Chips */}
+                    <div className="px-4 py-2.5 bg-slate-50/80 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
+                      <button
+                        onClick={() => copyToClipboardWithWipe(doc.documentNumber, 'Document No')}
+                        className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono font-bold transition flex items-center gap-1 shadow-2xs"
+                        title="Click to copy (auto-clears in 15s)"
+                      >
+                        <span>{doc.documentNumber}</span>
+                        <Copy className="w-3 h-3 text-slate-400" />
+                      </button>
+
+                      {doc.expiryDate && (
+                        <button
+                          onClick={() => copyToClipboardWithWipe(doc.expiryDate!, 'Expiry Date')}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono transition flex items-center gap-1 shadow-2xs"
+                          title="Expiry Date"
                         >
-                          {backMedia?.previewUrl ? (
-                            <img
-                              src={backMedia.previewUrl}
-                              alt={backMedia.label}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1 p-4 text-center">
-                              <FileText className="w-8 h-8 text-slate-300" />
-                              <span>{backMedia?.label || 'Back Scan'}</span>
-                            </div>
-                          )}
-                          <div className="absolute bottom-2 right-2">
-                            <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-xs flex items-center gap-1 font-bold">
-                              <RotateCw className="w-2.5 h-2.5" /> Flip Front
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : currentLayoutMode === 'front_back_combined' ? (
-                    // ── COMBINED STITCHED VIEW ──
-                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
-                      {frontMedia?.previewUrl ? (
-                        <img
-                          src={frontMedia.previewUrl}
-                          alt={frontMedia.label}
-                          className="w-full h-full object-contain p-1"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                          <FileText className="w-8 h-8 text-slate-300" />
-                          <span>Stitched Dual-Sided Scan</span>
-                        </div>
+                          <span className="text-[10px] text-slate-400">EXP:</span>
+                          <span>{doc.expiryDate}</span>
+                        </button>
                       )}
-                      <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
-                        Stitched Front &amp; Back
-                      </div>
-                    </div>
-                  ) : currentLayoutMode === 'multi_page_dossier' ? (
-                    // ── MULTI-PAGE DOSSIER / PDF VIEW ──
-                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative p-2 flex flex-col items-center justify-center">
-                      {frontMedia?.previewUrl ? (
-                        <img
-                          src={frontMedia.previewUrl}
-                          alt={frontMedia.label}
-                          className="w-full h-full object-contain"
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                          <FileText className="w-12 h-12 text-red-400" />
-                          <span className="font-semibold text-slate-600">{activeEdition?.label || 'Official PDF Dossier'}</span>
-                        </div>
+
+                      {doc.editions && doc.editions.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold flex items-center gap-1">
+                          <Layers className="w-3 h-3" />
+                          {doc.editions.length} Formats
+                        </span>
                       )}
-                      <div className="absolute top-2 left-2 bg-amber-700/90 text-white text-[9px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
-                        <FileText className="w-2.5 h-2.5" />
-                        PDF Dossier • {currentMedia.length} Pages
-                      </div>
-                    </div>
-                  ) : (
-                    // ── FRONT ONLY VIEW ──
-                    <div className="w-full h-[210px] rounded-2xl overflow-hidden border border-slate-200 shadow-sm bg-white relative flex items-center justify-center">
-                      {frontMedia?.previewUrl ? (
-                        <img
-                          src={frontMedia.previewUrl}
-                          alt={frontMedia.label}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs space-y-1">
-                          <FileText className="w-8 h-8 text-slate-300" />
-                          <span>Single Face Document</span>
-                        </div>
+
+                      {doc.previousVersions && doc.previousVersions.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 text-[10px] font-bold flex items-center gap-1">
+                          <History className="w-3 h-3" />
+                          {doc.previousVersions.length} Old
+                        </span>
                       )}
-                      <div className="absolute top-2 left-2 bg-slate-900/70 text-white text-[9px] font-bold px-2 py-0.5 rounded-full">
-                        Single Face
-                      </div>
+
+                      {doc.relatedDocuments && doc.relatedDocuments.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold flex items-center gap-1">
+                          <Paperclip className="w-3 h-3" />
+                          {doc.relatedDocuments.length} Linked
+                        </span>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* ── Section 3.5.A: Quick-Copy Identity Micro-Chips ── */}
-                <div className="px-4 py-2.5 bg-slate-50/80 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={() => copyToClipboardWithWipe(doc.documentNumber, 'Document No')}
-                    className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono font-bold transition flex items-center gap-1 shadow-2xs"
-                    title="Click to copy (auto-clears in 15s)"
-                  >
-                    <span>{doc.documentNumber}</span>
-                    <Copy className="w-3 h-3 text-slate-400" />
-                  </button>
+                    {/* Card Footer Actions */}
+                    <div className="p-3 bg-white border-t border-slate-100 flex items-center justify-between gap-2">
+                      <button
+                        onClick={() => {
+                          setViewingDoc(doc);
+                          setDossierPage(1);
+                          setActiveVersionId(null);
+                        }}
+                        className="flex-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>View Dossier</span>
+                      </button>
 
-                  {doc.expiryDate && (
-                    <button
-                      onClick={() => copyToClipboardWithWipe(doc.expiryDate!, 'Expiry Date')}
-                      className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-mono transition flex items-center gap-1 shadow-2xs"
-                      title="Expiry Date"
-                    >
-                      <span className="text-[10px] text-slate-400">EXP:</span>
-                      <span>{doc.expiryDate}</span>
-                    </button>
-                  )}
+                      {/* Biometric-Protected Download Button */}
+                      <button
+                        onClick={() => handleDownloadWithBiometric(doc, activeEdition)}
+                        disabled={biometricDownloadingDocId === doc.id}
+                        className="py-1.5 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center gap-1"
+                        title="Download decrypted file (Biometric verification required)"
+                      >
+                        {biometricDownloadingDocId === doc.id ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                        ) : (
+                          <>
+                            <Download className="w-3.5 h-3.5 text-amber-700" />
+                            <Fingerprint className="w-3 h-3 text-slate-400" />
+                          </>
+                        )}
+                      </button>
 
-                  {/* Badges for Formats, Versions and Linked Dossiers */}
-                  {doc.editions && doc.editions.length > 0 && (
-                    <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold flex items-center gap-1">
-                      <Layers className="w-3 h-3" />
-                      {doc.editions.length} Formats
-                    </span>
-                  )}
+                      <button
+                        onClick={() => setWatermarkDoc(doc)}
+                        className="py-1.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+                        title="Export with client-side watermark and redaction"
+                      >
+                        <Sliders className="w-3.5 h-3.5" />
+                        <span>Watermark</span>
+                      </button>
 
-                  {doc.previousVersions && doc.previousVersions.length > 0 && (
-                    <span className="px-2 py-0.5 rounded-md bg-yellow-50 text-yellow-800 border border-yellow-200 text-[10px] font-bold flex items-center gap-1">
-                      <History className="w-3 h-3" />
-                      {doc.previousVersions.length} Old Version
-                    </span>
-                  )}
-
-                  {doc.relatedDocuments && doc.relatedDocuments.length > 0 && (
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] font-bold flex items-center gap-1">
-                      <Paperclip className="w-3 h-3" />
-                      {doc.relatedDocuments.length} Linked
-                    </span>
-                  )}
-                </div>
-
-                {/* ── Card Footer Actions ── */}
-                <div className="p-3 bg-white border-t border-slate-100 flex items-center justify-between gap-2">
-                  <button
-                    onClick={() => {
-                      setViewingDoc(doc);
-                      setDossierPage(1);
-                      setActiveVersionId(null);
-                    }}
-                    className="flex-1 py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>View Dossier</span>
-                  </button>
-
-                  {/* Biometric-Protected Download Button */}
-                  <button
-                    onClick={() => handleDownloadWithBiometric(doc, activeEdition)}
-                    disabled={biometricDownloadingDocId === doc.id}
-                    className="py-1.5 px-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center gap-1"
-                    title="Download decrypted file (Biometric verification required)"
-                  >
-                    {biometricDownloadingDocId === doc.id ? (
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                    ) : (
-                      <>
-                        <Download className="w-3.5 h-3.5 text-amber-700" />
-                        <Fingerprint className="w-3 h-3 text-slate-400" />
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    onClick={() => setWatermarkDoc(doc)}
-                    className="py-1.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
-                    title="Export with client-side watermark and redaction"
-                  >
-                    <Sliders className="w-3.5 h-3.5" />
-                    <span>Watermark</span>
-                  </button>
-
-                  <button
-                    onClick={() => handleDeleteDocument(doc.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
-                    title="Delete document"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            );
-          })}        </div>
+                      <button
+                        onClick={() => handleDeleteDocument(doc.id)}
+                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition"
+                        title="Delete document (Requires Biometric Re-auth)"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ════════════════════════════════════════════════════════════════════════
@@ -2899,11 +2855,15 @@ const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
   onClose,
   onAddDocument
 }) => {
-  const [personId, setPersonId] = useState<string>(manifest.persons[0]?.id || 'person_self');
+  const defaultPersonId = (selectedPersonId && selectedPersonId !== 'all') ? selectedPersonId : (manifest.persons[0]?.id || '');
+  const [personId, setPersonId] = useState<string>(defaultPersonId);
   const [category, setCategory] = useState<DocumentCategory>('identity');
   const [title, setTitle] = useState<string>('');
   const [documentNumber, setDocumentNumber] = useState<string>('');
-  const [issuingCountry, setIssuingCountry] = useState<string>('Nepal');
+  const defaultCountry = (selectedCountry && selectedCountry !== 'all') 
+    ? selectedCountry 
+    : (manifest.persons.find((p) => p.id === defaultPersonId)?.countries?.[0] || 'Nepal');
+  const [issuingCountry, setIssuingCountry] = useState<string>(defaultCountry);
   const [issuedDate, setIssuedDate] = useState<string>('');
   const [expiryDate, setExpiryDate] = useState<string>('');
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('front_back_separate');
