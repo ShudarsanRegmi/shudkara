@@ -27,6 +27,15 @@ export async function caretakerCronHandler(
     } catch (pushErr: any) {
       context.warn('Failed to dispatch Caretaker push notification:', pushErr?.message || pushErr);
     }
+
+    // Run Pratigya Commitment Horizon Alert Audit
+    try {
+      const { runPratigyaAlertAudit } = await import('./todos');
+      const pratigyaStats = await runPratigyaAlertAudit(db, context);
+      context.log(`Pratigya alert audit finished. Checked: ${pratigyaStats.checkedCount}, Dispatched: ${pratigyaStats.sentCount} email alert(s).`);
+    } catch (pratigyaErr: any) {
+      context.warn('Failed to run Pratigya alert audit in Caretaker Cron:', pratigyaErr?.message || pratigyaErr);
+    }
   } catch (err: any) {
     context.error('Caretaker Cron Error:', err);
   }
