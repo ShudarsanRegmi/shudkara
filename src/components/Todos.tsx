@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   CheckSquare, Square, Plus, Trash2, Edit2, Lock, Unlock, 
-  LayoutGrid, Sparkles, Shield, Award, Clock, Calendar, 
-  User, CheckCircle2, RefreshCw, Mail, 
-  FolderPlus, Flame, MoveRight, AlertCircle, Layers
+  LayoutGrid, List, Sparkles, Shield, Award, Clock, Calendar, 
+  User, CheckCircle2, RefreshCw, FolderPlus, MoveRight, Layers, 
+  SlidersHorizontal, Briefcase, BookOpen, Code, Home, Bookmark, 
+  Folder, Check, AlertCircle, X
 } from 'lucide-react';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -18,7 +19,6 @@ export interface WhiteboardNote {
   createdAt: string;
 }
 
-// Backward compatibility alias
 export type TodoItem = WhiteboardNote;
 
 export interface TaskWorkset {
@@ -102,16 +102,24 @@ const PASTEL_COLORS = {
   rose:    'bg-rose-100/95 border-rose-300 text-rose-950 shadow-rose-200/50',
 };
 
-const WORKSET_COLOR_MAP: Record<string, { bg: string; text: string; border: string }> = {
-  blue:    { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200' },
-  purple:  { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
-  emerald: { bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
-  amber:   { bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-  rose:    { bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
-  indigo:  { bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
+// ── Standard Lucide Icon Renderer for Worksets (No Emojis) ────────────────────
+const renderWorksetIcon = (iconName?: string, className = 'w-3.5 h-3.5') => {
+  switch (iconName) {
+    case 'Briefcase': return <Briefcase className={className} />;
+    case 'BookOpen': return <BookOpen className={className} />;
+    case 'Code': return <Code className={className} />;
+    case 'Home': return <Home className={className} />;
+    case 'Bookmark': return <Bookmark className={className} />;
+    case 'Sparkles': return <Sparkles className={className} />;
+    case 'Layers': return <Layers className={className} />;
+    default: return <Folder className={className} />;
+  }
 };
 
-// ── Main Todos Component ─────────────────────────────────────────────────────
+const AVAILABLE_WORKSET_ICONS = [
+  'Folder', 'Briefcase', 'BookOpen', 'Code', 'Home', 'Bookmark', 'Sparkles', 'Layers'
+];
+
 export const Todos: React.FC<TodosProps> = ({ 
   authToken, 
   todos, 
@@ -120,7 +128,6 @@ export const Todos: React.FC<TodosProps> = ({
   onBoardPrivacyChange
 }) => {
   // ── Pillar Tab Navigation ──────────────────────────────────────────────────
-  // Read initial pillar from URL (?pillar=whiteboard|karya|pratigya)
   const getInitialPillar = (): 'whiteboard' | 'karya' | 'pratigya' => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -132,7 +139,6 @@ export const Todos: React.FC<TodosProps> = ({
 
   const [activePillar, setActivePillar] = useState<'whiteboard' | 'karya' | 'pratigya'>(getInitialPillar);
 
-  // Sync URL pillar query param
   const switchPillar = (pillar: 'whiteboard' | 'karya' | 'pratigya') => {
     setActivePillar(pillar);
     try {
@@ -144,7 +150,7 @@ export const Todos: React.FC<TodosProps> = ({
 
   const isLoggedIn = !!authToken;
 
-  // ── State for Three Pillars ────────────────────────────────────────────────
+  // ── Ecosystem State ────────────────────────────────────────────────────────
   const [worksets, setWorksets] = useState<TaskWorkset[]>([]);
   const [tasks, setTasks] = useState<KaryaTask[]>([]);
   const [commitments, setCommitments] = useState<PratigyaCommitment[]>([]);
@@ -153,10 +159,10 @@ export const Todos: React.FC<TodosProps> = ({
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setFeedbackToast({ message, type });
-    setTimeout(() => setFeedbackToast(null), 4000);
+    setTimeout(() => setFeedbackToast(null), 3500);
   };
 
-  // ── Fetch Full Ecosystem State ─────────────────────────────────────────────
+  // ── Fetch Full Ecosystem ───────────────────────────────────────────────────
   const loadEcosystemData = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -175,7 +181,7 @@ export const Todos: React.FC<TodosProps> = ({
         if (Array.isArray(data.commitments)) setCommitments(data.commitments);
       }
     } catch (err) {
-      console.error('Failed to load ecosystem state:', err);
+      console.error('Failed to load ecosystem data:', err);
     } finally {
       setIsLoading(false);
     }
@@ -186,21 +192,23 @@ export const Todos: React.FC<TodosProps> = ({
   }, [loadEcosystemData]);
 
   // ───────────────────────────────────────────────────────────────────────────
-  // ── PILLAR 1: WHITEBOARD (CHITRA-PATRA) LOGIC ─────────────────────────────
+  // ── PILLAR 1: WHITEBOARD (CHITRA-PATRA) ───────────────────────────────────
   // ───────────────────────────────────────────────────────────────────────────
-  const [whiteboardViewMode, setWhiteboardViewMode] = useState<'canvas' | 'grid'>('canvas');
+  // Restores original top-level viewMode: 'whiteboard' (pastel cards) vs 'list' (flat list)
+  const [whiteboardViewMode, setWhiteboardViewMode] = useState<'whiteboard' | 'list'>('whiteboard');
+  const [canvasLayout, setCanvasLayout] = useState<'canvas' | 'grid'>('canvas');
   const [newWhiteboardText, setNewWhiteboardText] = useState('');
   const [newWhiteboardColor, setNewWhiteboardColor] = useState<WhiteboardNote['color']>('yellow');
   const [newWhiteboardPrivate, setNewWhiteboardPrivate] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [editNoteText, setEditNoteText] = useState('');
 
-  // Dragging state for canvas mode
+  // Canvas dragging
   const canvasRef = useRef<HTMLDivElement>(null);
   const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Promote Modal State
+  // Promote Modal
   const [promotingNote, setPromotingNote] = useState<WhiteboardNote | null>(null);
   const [promoteMode, setPromoteMode] = useState<'task' | 'pratigya' | null>(null);
   const [promoteWorksetId, setPromoteWorksetId] = useState('work');
@@ -282,7 +290,7 @@ export const Todos: React.FC<TodosProps> = ({
   };
 
   const handleDeleteWhiteboardNote = (id: string) => {
-    if (window.confirm('Delete this sticky note?')) {
+    if (window.confirm('Delete this task?')) {
       onTodosChange(todos.filter(t => t.id !== id));
       const headers: Record<string, string> = {};
       if (authToken) headers['X-Session-Token'] = authToken;
@@ -305,9 +313,9 @@ export const Todos: React.FC<TodosProps> = ({
     }).catch(console.error);
   };
 
-  // Canvas Drag Handling
+  // Canvas Mouse Dragging
   const handleMouseDownOnNote = (e: React.MouseEvent, note: WhiteboardNote) => {
-    if (whiteboardViewMode !== 'canvas' || !isLoggedIn) return;
+    if (canvasLayout !== 'canvas' || !isLoggedIn) return;
     const cardEl = (e.target as HTMLElement).closest('.draggable-sticky');
     if (!cardEl) return;
     const rect = cardEl.getBoundingClientRect();
@@ -342,101 +350,96 @@ export const Todos: React.FC<TodosProps> = ({
     setDraggingNoteId(null);
   };
 
-  // Promote Actions
+  // Promotion
   const executePromoteToTask = async () => {
     if (!promotingNote) return;
-    const newTaskPayload = {
+    const newTaskPayload: KaryaTask = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
       worksetId: promoteWorksetId,
       title: promotingNote.text,
-      notes: `Promoted from Whiteboard sticky note on ${new Date().toLocaleDateString()}`,
+      notes: `Promoted from Whiteboard note on ${new Date().toLocaleDateString()}`,
       dueDate: promoteDueDate || null,
       priority: promotePriority,
       subtasks: [],
-      tags: ['whiteboard-promoted'],
-      completed: false
+      tags: ['promoted'],
+      completed: false,
+      createdAt: new Date().toISOString()
     };
+
+    setTasks(prev => [newTaskPayload, ...prev]);
+    showToast('Promoted sticky note to Task');
+    setPromotingNote(null);
+    setPromoteMode(null);
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch('/api/todos/tasks', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(newTaskPayload)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTasks(prev => [data.task, ...prev]);
-        showToast('Successfully promoted sticky note to Task!');
-        setPromotingNote(null);
-        setPromoteMode(null);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to promote to Task.', 'error');
-    }
+    fetch('/api/todos/tasks', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(newTaskPayload)
+    }).catch(console.error);
   };
 
   const executePromoteToPratigya = async () => {
     if (!promotingNote || !promoteRecipient.trim() || !promoteDeadline) {
-      alert('Recipient name and deadline are required for Pratigya.');
+      alert('Recipient name and deadline are required.');
       return;
     }
-    const newCommitmentPayload = {
+    const newCommitmentPayload: PratigyaCommitment = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
       title: promotingNote.text,
       recipientName: promoteRecipient.trim(),
       deadline: new Date(promoteDeadline).toISOString(),
       urgency: promoteUrgency,
       description: `Promoted from Whiteboard note: "${promotingNote.text}"`,
-      status: 'active'
+      status: 'active',
+      createdAt: new Date().toISOString()
     };
+
+    setCommitments(prev => [newCommitmentPayload, ...prev]);
+    showToast('Recorded as Pratigya covenant');
+    setPromotingNote(null);
+    setPromoteMode(null);
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch('/api/todos/commitments', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(newCommitmentPayload)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCommitments(prev => [data.commitment, ...prev]);
-        showToast('Successfully bound sticky note into a Sacred Pratigya Covenant!');
-        setPromotingNote(null);
-        setPromoteMode(null);
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to bind to Pratigya.', 'error');
-    }
+    fetch('/api/todos/commitments', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(newCommitmentPayload)
+    }).catch(console.error);
   };
 
   // ───────────────────────────────────────────────────────────────────────────
-  // ── PILLAR 2: TASKS & WORKSETS (KĀRYA) LOGIC ──────────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────
-  const [selectedWorksetId, setSelectedWorksetId] = useState<string>('all'); // 'all' = Common Board
+  // ── PILLAR 2: TASKS & WORKSETS (KĀRYA) ────────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
+  const [selectedWorksetId, setSelectedWorksetId] = useState<string>('all');
   const [taskFilter, setTaskFilter] = useState<'all' | 'today' | 'upcoming' | 'overdue' | 'completed'>('all');
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<'all' | 'p1' | 'p2' | 'p3'>('all');
   const [taskSearch, setTaskSearch] = useState('');
 
-  // Task Creation State
-  const [newTaskTitle, setNewTaskTitle] = useState('');
-  const [newTaskWorkset, setNewTaskWorkset] = useState('work');
-  const [newTaskPriority, setNewTaskPriority] = useState<TaskPriority>('p3');
-  const [newTaskDueDate, setNewTaskDueDate] = useState('');
-  const [newTaskNotes, setNewTaskNotes] = useState('');
-  const [isTaskFormExpanded, setIsTaskFormExpanded] = useState(false);
-  const [newTaskSubtasks, setNewTaskSubtasks] = useState<string[]>([]);
+  // Simple, Responsive, Idempotent Task Creation State
+  const [quickTaskTitle, setQuickTaskTitle] = useState('');
+  const [isTaskDetailsOpen, setIsTaskDetailsOpen] = useState(false);
+  const [extraTaskWorkset, setExtraTaskWorkset] = useState('work');
+  const [extraTaskPriority, setExtraTaskPriority] = useState<TaskPriority>('p3');
+  const [extraTaskDueDate, setExtraTaskDueDate] = useState('');
+  const [extraTaskNotes, setExtraTaskNotes] = useState('');
+  const [extraSubtasks, setExtraSubtasks] = useState<string[]>([]);
   const [newSubtaskInput, setNewSubtaskInput] = useState('');
+  const [isSubmittingTask, setIsSubmittingTask] = useState(false);
 
-  // Workset Creation Modal
-  const [isNewWorksetModalOpen, setIsNewWorksetModalOpen] = useState(false);
+  // Worksets Management Modal
+  const [isWorksetsModalOpen, setIsWorksetsModalOpen] = useState(false);
   const [newWorksetTitle, setNewWorksetTitle] = useState('');
-  const [newWorksetIcon, setNewWorksetIcon] = useState('📁');
+  const [newWorksetIcon, setNewWorksetIcon] = useState('Folder');
   const [newWorksetColor, setNewWorksetColor] = useState('blue');
+
+  const currentWorksetName = useMemo(() => {
+    if (selectedWorksetId === 'all') return 'All Tasks';
+    const found = worksets.find(w => w.id === selectedWorksetId);
+    return found ? found.title : 'Workset';
+  }, [selectedWorksetId, worksets]);
 
   const filteredTasks = useMemo(() => {
     const now = new Date();
@@ -444,87 +447,92 @@ export const Todos: React.FC<TodosProps> = ({
     const sevenDaysLater = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     return tasks.filter(t => {
-      // Workset filter
       if (selectedWorksetId !== 'all' && t.worksetId !== selectedWorksetId) return false;
-
-      // Priority filter
       if (taskPriorityFilter !== 'all' && t.priority !== taskPriorityFilter) return false;
-
-      // Search filter
       if (taskSearch.trim() && !t.title.toLowerCase().includes(taskSearch.toLowerCase())) return false;
 
-      // Status / Time Horizon filter
       if (taskFilter === 'completed') return t.completed;
       if (taskFilter === 'all') return true;
-
-      // For uncompleted time-based filters
       if (t.completed) return false;
 
       const taskDate = t.dueDate ? t.dueDate.slice(0, 10) : null;
-      if (taskFilter === 'today') {
-        return taskDate === todayStr;
-      }
-      if (taskFilter === 'upcoming') {
-        return taskDate && taskDate >= todayStr && taskDate <= sevenDaysLater;
-      }
-      if (taskFilter === 'overdue') {
-        return taskDate && taskDate < todayStr;
-      }
+      if (taskFilter === 'today') return taskDate === todayStr;
+      if (taskFilter === 'upcoming') return taskDate && taskDate >= todayStr && taskDate <= sevenDaysLater;
+      if (taskFilter === 'overdue') return taskDate && taskDate < todayStr;
       return true;
     });
   }, [tasks, selectedWorksetId, taskPriorityFilter, taskSearch, taskFilter]);
 
-  const handleCreateTask = async (e: React.FormEvent) => {
+  // Idempotent & Instant Task Creation Handler
+  const handleQuickCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTaskTitle.trim()) return;
+    const trimmedTitle = quickTaskTitle.trim();
+    if (!trimmedTitle || isSubmittingTask) return;
 
-    const subtasksPayload: SubTask[] = newTaskSubtasks.map(s => ({
+    setIsSubmittingTask(true);
+
+    const clientTaskId = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11);
+    const targetWorkset = selectedWorksetId === 'all' 
+      ? (isTaskDetailsOpen ? extraTaskWorkset : (worksets[0]?.id || 'work'))
+      : selectedWorksetId;
+
+    const subtasksPayload: SubTask[] = extraSubtasks.map(s => ({
       id: Math.random().toString(36).substring(2, 9),
       text: s,
       completed: false
     }));
 
-    const payload = {
-      worksetId: selectedWorksetId === 'all' ? newTaskWorkset : selectedWorksetId,
-      title: newTaskTitle.trim(),
-      notes: newTaskNotes.trim(),
-      dueDate: newTaskDueDate || null,
-      priority: newTaskPriority,
+    const newTask: KaryaTask = {
+      id: clientTaskId,
+      worksetId: targetWorkset,
+      title: trimmedTitle,
+      notes: isTaskDetailsOpen ? extraTaskNotes.trim() : '',
+      dueDate: (isTaskDetailsOpen && extraTaskDueDate) ? extraTaskDueDate : null,
+      priority: isTaskDetailsOpen ? extraTaskPriority : 'p3',
       subtasks: subtasksPayload,
       tags: [],
-      completed: false
+      completed: false,
+      createdAt: new Date().toISOString()
     };
 
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (authToken) headers['X-Session-Token'] = authToken;
+    // 0ms Optimistic UI Update: immediately clears input and adds task to list
+    setTasks(prev => [newTask, ...prev]);
+    setQuickTaskTitle('');
+    if (isTaskDetailsOpen) {
+      setIsTaskDetailsOpen(false);
+      setExtraTaskNotes('');
+      setExtraTaskDueDate('');
+      setExtraSubtasks([]);
+      setExtraTaskPriority('p3');
+    }
+    showToast('Task added');
 
+    // Async persistence in background
     try {
-      const res = await fetch('/api/todos/tasks', {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (authToken) headers['X-Session-Token'] = authToken;
+
+      await fetch('/api/todos/tasks', {
         method: 'POST',
         headers,
-        body: JSON.stringify(payload)
+        body: JSON.stringify(newTask)
       });
-      if (res.ok) {
-        const data = await res.json();
-        setTasks(prev => [data.task, ...prev]);
-        setNewTaskTitle('');
-        setNewTaskNotes('');
-        setNewTaskDueDate('');
-        setNewTaskSubtasks([]);
-        setIsTaskFormExpanded(false);
-        showToast('Task added to Kārya!');
-      }
     } catch (err) {
-      console.error(err);
-      showToast('Failed to add task.', 'error');
+      console.error('Task persistence error:', err);
+    } finally {
+      setIsSubmittingTask(false);
     }
   };
 
-  const handleToggleTaskComplete = async (id: string) => {
+  const handleToggleTaskComplete = (id: string) => {
     const target = tasks.find(t => t.id === id);
     if (!target) return;
     const nextCompleted = !target.completed;
-    const updated = tasks.map(t => t.id === id ? { ...t, completed: nextCompleted, completedAt: nextCompleted ? new Date().toISOString() : null } : t);
+    const updated = tasks.map(t => t.id === id ? { 
+      ...t, 
+      completed: nextCompleted, 
+      completedAt: nextCompleted ? new Date().toISOString() : null 
+    } : t);
     setTasks(updated);
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -536,7 +544,7 @@ export const Todos: React.FC<TodosProps> = ({
     }).catch(console.error);
   };
 
-  const handleToggleSubtask = async (taskId: string, subtaskId: string) => {
+  const handleToggleSubtask = (taskId: string, subtaskId: string) => {
     const targetTask = tasks.find(t => t.id === taskId);
     if (!targetTask) return;
     const updatedSubtasks = targetTask.subtasks.map(s => s.id === subtaskId ? { ...s, completed: !s.completed } : s);
@@ -552,31 +560,30 @@ export const Todos: React.FC<TodosProps> = ({
     }).catch(console.error);
   };
 
-  const handleDeleteTask = async (id: string) => {
-    if (window.confirm('Delete this task?')) {
-      setTasks(prev => prev.filter(t => t.id !== id));
-      const headers: Record<string, string> = {};
-      if (authToken) headers['X-Session-Token'] = authToken;
-      fetch(`/api/todos/tasks/${id}`, { method: 'DELETE', headers }).catch(console.error);
-    }
+  const handleDeleteTask = (id: string) => {
+    setTasks(prev => prev.filter(t => t.id !== id));
+    const headers: Record<string, string> = {};
+    if (authToken) headers['X-Session-Token'] = authToken;
+    fetch(`/api/todos/tasks/${id}`, { method: 'DELETE', headers }).catch(console.error);
   };
 
-  const handleClearCompletedTasks = async () => {
+  const handleClearCompletedTasks = () => {
     if (!window.confirm('Clear all completed tasks?')) return;
     setTasks(prev => prev.filter(t => !t.completed));
     const headers: Record<string, string> = {};
     if (authToken) headers['X-Session-Token'] = authToken;
     fetch('/api/todos/tasks/completed', { method: 'DELETE', headers }).catch(console.error);
-    showToast('Completed tasks cleared.');
+    showToast('Completed tasks cleared');
   };
 
+  // Worksets CRUD & Deletion
   const handleCreateWorkset = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newWorksetTitle.trim()) return;
 
     const payload = {
       title: newWorksetTitle.trim(),
-      icon: newWorksetIcon || '📁',
+      icon: newWorksetIcon || 'Folder',
       color: newWorksetColor || 'blue'
     };
 
@@ -593,19 +600,42 @@ export const Todos: React.FC<TodosProps> = ({
         const data = await res.json();
         setWorksets(prev => [...prev, data.workset]);
         setSelectedWorksetId(data.workset.id);
-        setIsNewWorksetModalOpen(false);
         setNewWorksetTitle('');
-        showToast(`Workset "${data.workset.title}" created!`);
+        showToast(`Workset "${data.workset.title}" created`);
       }
     } catch (err) {
       console.error(err);
-      showToast('Failed to create workset.', 'error');
+      showToast('Failed to create workset', 'error');
+    }
+  };
+
+  const handleDeleteWorkset = async (worksetId: string) => {
+    const target = worksets.find(w => w.id === worksetId);
+    if (!target) return;
+    if (!window.confirm(`Delete workset "${target.title}"? Tasks will be moved to the default workset.`)) return;
+
+    const headers: Record<string, string> = {};
+    if (authToken) headers['X-Session-Token'] = authToken;
+
+    try {
+      const res = await fetch(`/api/todos/worksets/${worksetId}`, { method: 'DELETE', headers });
+      if (res.ok) {
+        setWorksets(prev => prev.filter(w => w.id !== worksetId));
+        setTasks(prev => prev.map(t => t.worksetId === worksetId ? { ...t, worksetId: 'work' } : t));
+        if (selectedWorksetId === worksetId) {
+          setSelectedWorksetId('all');
+        }
+        showToast(`Workset "${target.title}" deleted`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to delete workset', 'error');
     }
   };
 
   // ───────────────────────────────────────────────────────────────────────────
-  // ── PILLAR 3: PRATIGYA COMMITMENT MANAGER LOGIC ───────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────
+  // ── PILLAR 3: PRATIGYA (COVENANT LEDGER) ──────────────────────────────────
+  // ───────────────────────────────────────────────────────────────────────────
   const [pratigyaFilter, setPratigyaFilter] = useState<'all' | 'active' | 'sacred' | 'overdue' | 'honored' | 'renegotiated'>('all');
   const [isNewCommitmentModalOpen, setIsNewCommitmentModalOpen] = useState(false);
   const [newCommitmentTitle, setNewCommitmentTitle] = useState('');
@@ -615,17 +645,14 @@ export const Todos: React.FC<TodosProps> = ({
   const [newCommitmentUrgency, setNewCommitmentUrgency] = useState<CommitmentUrgency>('sacred');
   const [newCommitmentDesc, setNewCommitmentDesc] = useState('');
 
-  // Honor / Fulfillment Modal
+  // Honor Modal
   const [honoringCommitment, setHonoringCommitment] = useState<PratigyaCommitment | null>(null);
   const [honorProofNotes, setHonorProofNotes] = useState('');
 
-  // Renegotiation Modal
+  // Renegotiate Modal
   const [renegotiatingCommitment, setRenegotiatingCommitment] = useState<PratigyaCommitment | null>(null);
   const [renegotiateNewDeadline, setRenegotiateNewDeadline] = useState('');
   const [renegotiateReason, setRenegotiateReason] = useState('');
-
-  // Test Alert Dispatch State
-  const [isSendingTestAlert, setIsSendingTestAlert] = useState(false);
 
   const filteredCommitments = useMemo(() => {
     const now = new Date().getTime();
@@ -670,132 +697,100 @@ export const Todos: React.FC<TodosProps> = ({
       return;
     }
 
-    const payload = {
+    const payload: PratigyaCommitment = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 11),
       title: newCommitmentTitle.trim(),
       recipientName: newCommitmentRecipient.trim(),
       recipientContact: newCommitmentContact.trim(),
       deadline: new Date(newCommitmentDeadline).toISOString(),
       urgency: newCommitmentUrgency,
-      description: newCommitmentDesc.trim()
+      description: newCommitmentDesc.trim(),
+      status: 'active',
+      createdAt: new Date().toISOString()
     };
+
+    setCommitments(prev => [payload, ...prev]);
+    setIsNewCommitmentModalOpen(false);
+    setNewCommitmentTitle('');
+    setNewCommitmentRecipient('');
+    setNewCommitmentContact('');
+    setNewCommitmentDeadline('');
+    setNewCommitmentDesc('');
+    showToast('Covenant recorded in Pratigya ledger');
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch('/api/todos/commitments', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCommitments(prev => [data.commitment, ...prev]);
-        setIsNewCommitmentModalOpen(false);
-        setNewCommitmentTitle('');
-        setNewCommitmentRecipient('');
-        setNewCommitmentContact('');
-        setNewCommitmentDeadline('');
-        setNewCommitmentDesc('');
-        showToast('Sacred covenant recorded in Pratigya ledger!');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to record commitment.', 'error');
-    }
+    fetch('/api/todos/commitments', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    }).catch(console.error);
   };
 
   const handleExecuteHonor = async () => {
     if (!honoringCommitment) return;
+    const now = new Date().toISOString();
+    setCommitments(prev => prev.map(c => c.id === honoringCommitment.id ? {
+      ...c,
+      status: 'honored',
+      fulfilledAt: now,
+      proofNotes: honorProofNotes.trim()
+    } : c));
+
+    const id = honoringCommitment.id;
+    const notes = honorProofNotes.trim();
+    setHonoringCommitment(null);
+    setHonorProofNotes('');
+    showToast('Word honored and fulfilled');
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch(`/api/todos/commitments/${honoringCommitment.id}/honor`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ proofNotes: honorProofNotes.trim() })
-      });
-      if (res.ok) {
-        setCommitments(prev => prev.map(c => c.id === honoringCommitment.id ? {
-          ...c,
-          status: 'honored',
-          fulfilledAt: new Date().toISOString(),
-          proofNotes: honorProofNotes.trim()
-        } : c));
-        setHonoringCommitment(null);
-        setHonorProofNotes('');
-        showToast('Word honored! Commitment fulfilled with integrity. 🌟');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to honor commitment.', 'error');
-    }
+    fetch(`/api/todos/commitments/${id}/honor`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ proofNotes: notes })
+    }).catch(console.error);
   };
 
   const handleExecuteRenegotiate = async () => {
     if (!renegotiatingCommitment || !renegotiateNewDeadline || !renegotiateReason.trim()) {
-      alert('New deadline and justification reason are required to renegotiate.');
+      alert('New deadline and justification reason are required.');
       return;
     }
 
+    const renegRecord: RenegotiationRecord = {
+      previousDeadline: renegotiatingCommitment.deadline,
+      newDeadline: new Date(renegotiateNewDeadline).toISOString(),
+      reason: renegotiateReason.trim(),
+      timestamp: new Date().toISOString()
+    };
+
+    setCommitments(prev => prev.map(c => c.id === renegotiatingCommitment.id ? {
+      ...c,
+      deadline: renegRecord.newDeadline,
+      status: 'renegotiated',
+      renegotiationHistory: [...(c.renegotiationHistory || []), renegRecord]
+    } : c));
+
+    const id = renegotiatingCommitment.id;
+    setRenegotiatingCommitment(null);
+    setRenegotiateNewDeadline('');
+    setRenegotiateReason('');
+    showToast('Commitment renegotiated with documented justification');
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch(`/api/todos/commitments/${renegotiatingCommitment.id}/renegotiate`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({
-          newDeadline: new Date(renegotiateNewDeadline).toISOString(),
-          reason: renegotiateReason.trim()
-        })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCommitments(prev => prev.map(c => c.id === renegotiatingCommitment.id ? {
-          ...c,
-          deadline: new Date(renegotiateNewDeadline).toISOString(),
-          status: 'renegotiated',
-          renegotiationHistory: [...(c.renegotiationHistory || []), data.renegotiation]
-        } : c));
-        setRenegotiatingCommitment(null);
-        setRenegotiateNewDeadline('');
-        setRenegotiateReason('');
-        showToast('Commitment renegotiated with documented justification.');
-      }
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to renegotiate commitment.', 'error');
-    }
+    fetch(`/api/todos/commitments/${id}/renegotiate`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        newDeadline: renegRecord.newDeadline,
+        reason: renegRecord.reason
+      })
+    }).catch(console.error);
   };
 
-  const handleTriggerTestAlert = async (commitment?: PratigyaCommitment) => {
-    setIsSendingTestAlert(true);
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (authToken) headers['X-Session-Token'] = authToken;
-
-    try {
-      const res = await fetch('/api/todos/commitments/test-alert', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(commitment ? { id: commitment.id, commitment } : {})
-      });
-      const data = await res.json();
-      if (res.ok) {
-        showToast(data.message || 'Test email dispatched to owner address!');
-      } else {
-        showToast(data.error || 'Failed to dispatch test alert.', 'error');
-      }
-    } catch (err: any) {
-      console.error(err);
-      showToast('Error sending test alert: ' + err.message, 'error');
-    } finally {
-      setIsSendingTestAlert(false);
-    }
-  };
-
-  const handleDeleteCommitment = async (id: string) => {
+  const handleDeleteCommitment = (id: string) => {
     if (window.confirm('Delete this commitment from the Pratigya ledger?')) {
       setCommitments(prev => prev.filter(c => c.id !== id));
       const headers: Record<string, string> = {};
@@ -804,7 +799,6 @@ export const Todos: React.FC<TodosProps> = ({
     }
   };
 
-  // Helper for Pratigya Remaining Time Display
   const getCommitmentTiming = (deadlineStr: string) => {
     const now = new Date().getTime();
     const dTime = new Date(deadlineStr).getTime();
@@ -823,14 +817,12 @@ export const Todos: React.FC<TodosProps> = ({
       label = days > 0 ? `${days}d ${hours % 24}h remaining` : `${hours}h ${mins}m remaining`;
     }
 
-    return { isPast, label, days, hours };
+    return { isPast, label };
   };
 
   // ───────────────────────────────────────────────────────────────────────────
   // ── RENDER ────────────────────────────────────────────────────────────────
   // ───────────────────────────────────────────────────────────────────────────
-
-  // Lockpad banner if board is private and visitor is unauthenticated
   if (!isLoggedIn && isBoardPrivate) {
     return (
       <div className="max-w-md mx-auto my-20 bg-white border border-slate-200 rounded-3xl p-8 text-center space-y-4 shadow-sm">
@@ -848,10 +840,10 @@ export const Todos: React.FC<TodosProps> = ({
       
       {/* Toast Notification */}
       {feedbackToast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl text-xs font-bold shadow-xl border flex items-center gap-2 animate-bounce ${
-          feedbackToast.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-slate-900 text-white border-slate-700'
+        <div className={`fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl text-xs font-bold shadow-lg border flex items-center gap-2 animate-fade-in ${
+          feedbackToast.type === 'error' ? 'bg-red-50 text-red-800 border-red-200' : 'bg-slate-900 text-white border-slate-800'
         }`}>
-          {feedbackToast.type === 'error' ? <AlertCircle className="w-4 h-4 text-red-500" /> : <Sparkles className="w-4 h-4 text-amber-400" />}
+          {feedbackToast.type === 'error' ? <AlertCircle className="w-4 h-4 text-red-500" /> : <Check className="w-4 h-4 text-blue-400" />}
           {feedbackToast.message}
         </div>
       )}
@@ -861,12 +853,12 @@ export const Todos: React.FC<TodosProps> = ({
         <div>
           <div className="flex items-center gap-2 text-blue-600 text-xs font-extrabold uppercase tracking-wider mb-1">
             <Sparkles className="w-4 h-4" />
-            Execution & Integrity Ecosystem
+            Task Management & Word Ledger
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
-            Todos & Pratigya
-            <span className="text-sm font-semibold text-slate-400 font-serif">
-              (कार्य & प्रतिज्ञा)
+            Todos
+            <span className="text-sm font-normal text-slate-500 font-serif">
+              (Whiteboard, Tasks & Pratigya)
             </span>
             {isBoardPrivate && (
               <span className="text-xs font-semibold px-2.5 py-0.5 bg-amber-50 text-amber-800 rounded-lg border border-amber-200 flex items-center gap-1">
@@ -888,7 +880,6 @@ export const Todos: React.FC<TodosProps> = ({
           >
             <LayoutGrid className="w-4 h-4" />
             <span>Whiteboard</span>
-            <span className="text-[10px] px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded-md">चित्रपट</span>
           </button>
 
           <button
@@ -901,20 +892,18 @@ export const Todos: React.FC<TodosProps> = ({
           >
             <CheckSquare className="w-4 h-4" />
             <span>Tasks & Worksets</span>
-            <span className="text-[10px] px-1.5 py-0.2 bg-blue-100 text-blue-800 rounded-md">कार्य</span>
           </button>
 
           <button
             onClick={() => switchPillar('pratigya')}
             className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
               activePillar === 'pratigya'
-                ? 'bg-white text-amber-700 shadow-sm'
+                ? 'bg-white text-blue-600 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Shield className="w-4 h-4 text-amber-600" />
+            <Shield className="w-4 h-4" />
             <span>Pratigya</span>
-            <span className="text-[10px] px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-md font-bold">प्रतिज्ञा</span>
           </button>
         </div>
 
@@ -939,7 +928,7 @@ export const Todos: React.FC<TodosProps> = ({
             onClick={loadEcosystemData}
             disabled={isLoading}
             className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl border border-slate-200 transition"
-            title="Refresh All"
+            title="Refresh"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
           </button>
@@ -951,33 +940,56 @@ export const Todos: React.FC<TodosProps> = ({
       {/* ───────────────────────────────────────────────────────────────────── */}
       {activePillar === 'whiteboard' && (
         <div className="space-y-5 animate-fade-in">
-          {/* Whiteboard Controls & Add Sticky Bar */}
+          {/* Top Control Bar: Switches between Whiteboard Pastel Canvas & Flat List View */}
           <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-extrabold uppercase text-slate-400 tracking-wider">Canvas Layout:</span>
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">View:</span>
                 <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
                   <button
-                    onClick={() => setWhiteboardViewMode('canvas')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                      whiteboardViewMode === 'canvas' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
+                    onClick={() => setWhiteboardViewMode('whiteboard')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      whiteboardViewMode === 'whiteboard' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                     }`}
                   >
-                    Spatial Canvas
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    Whiteboard
                   </button>
                   <button
-                    onClick={() => setWhiteboardViewMode('grid')}
-                    className={`px-3 py-1 text-xs font-bold rounded-lg transition ${
-                      whiteboardViewMode === 'grid' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
+                    onClick={() => setWhiteboardViewMode('list')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                      whiteboardViewMode === 'list' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                     }`}
                   >
-                    Grid View
+                    <List className="w-3.5 h-3.5" />
+                    Flat List
                   </button>
                 </div>
+
+                {whiteboardViewMode === 'whiteboard' && (
+                  <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 ml-2">
+                    <button
+                      onClick={() => setCanvasLayout('canvas')}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
+                        canvasLayout === 'canvas' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500'
+                      }`}
+                    >
+                      Freeform
+                    </button>
+                    <button
+                      onClick={() => setCanvasLayout('grid')}
+                      className={`px-2.5 py-1 text-xs font-semibold rounded-md transition ${
+                        canvasLayout === 'grid' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500'
+                      }`}
+                    >
+                      Grid
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="text-xs text-slate-500 font-medium">
-                {visibleWhiteboardNotes.length} notes on board • Drag freely to reposition
+                {visibleWhiteboardNotes.length} notes
               </div>
             </div>
 
@@ -986,31 +998,33 @@ export const Todos: React.FC<TodosProps> = ({
               <form onSubmit={handleAddWhiteboardNote} className="flex flex-col md:flex-row items-center gap-3">
                 <input
                   type="text"
-                  placeholder="Drop a thought or sticky note on Chitra-Patra..."
+                  placeholder="Add a new task or sticky note..."
                   value={newWhiteboardText}
                   onChange={e => setNewWhiteboardText(e.target.value)}
                   className="flex-1 w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
 
                 <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-end">
-                  {/* Color Selector */}
-                  <div className="flex gap-1.5">
-                    {(['yellow', 'blue', 'emerald', 'purple', 'rose'] as const).map(color => (
-                      <button
-                        type="button"
-                        key={color}
-                        onClick={() => setNewWhiteboardColor(color)}
-                        className={`w-6 h-6 rounded-full border-2 transition ${
-                          newWhiteboardColor === color ? 'border-slate-900 scale-110 shadow-sm' : 'border-transparent'
-                        } ${
-                          color === 'yellow' ? 'bg-amber-300' :
-                          color === 'blue' ? 'bg-sky-300' :
-                          color === 'emerald' ? 'bg-emerald-300' :
-                          color === 'purple' ? 'bg-purple-300' : 'bg-rose-300'
-                        }`}
-                      />
-                    ))}
-                  </div>
+                  {/* Color Selector for Whiteboard Mode */}
+                  {whiteboardViewMode === 'whiteboard' && (
+                    <div className="flex gap-1.5">
+                      {(['yellow', 'blue', 'emerald', 'purple', 'rose'] as const).map(color => (
+                        <button
+                          type="button"
+                          key={color}
+                          onClick={() => setNewWhiteboardColor(color)}
+                          className={`w-6 h-6 rounded-full border-2 transition ${
+                            newWhiteboardColor === color ? 'border-slate-800 scale-110 shadow-sm' : 'border-transparent'
+                          } ${
+                            color === 'yellow' ? 'bg-amber-300' :
+                            color === 'blue' ? 'bg-sky-300' :
+                            color === 'emerald' ? 'bg-emerald-300' :
+                            color === 'purple' ? 'bg-purple-300' : 'bg-rose-300'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
 
                   {/* Privacy Toggle */}
                   <button
@@ -1019,7 +1033,7 @@ export const Todos: React.FC<TodosProps> = ({
                     className={`p-2 rounded-xl border transition ${
                       newWhiteboardPrivate ? 'bg-amber-50 text-amber-700 border-amber-200' : 'bg-slate-50 text-slate-400 border-slate-200'
                     }`}
-                    title={newWhiteboardPrivate ? 'Private Note' : 'Public Note'}
+                    title={newWhiteboardPrivate ? 'Private Task' : 'Public Task'}
                   >
                     {newWhiteboardPrivate ? <Lock className="w-4 h-4 text-amber-600" /> : <Unlock className="w-4 h-4" />}
                   </button>
@@ -1030,48 +1044,151 @@ export const Todos: React.FC<TodosProps> = ({
                     className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-md shrink-0 flex items-center gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
-                    Stick Note
+                    Add Entry
                   </button>
                 </div>
               </form>
             )}
           </div>
 
-          {/* Whiteboard Board Canvas / Grid */}
-          {whiteboardViewMode === 'canvas' ? (
-            <div
-              ref={canvasRef}
-              onMouseMove={handleCanvasMouseMove}
-              onMouseUp={handleCanvasMouseUp}
-              className="relative min-h-[580px] bg-slate-900 border border-slate-800 rounded-3xl p-6 overflow-hidden shadow-2xl bg-[radial-gradient(#334155_1.5px,transparent_1.5px)] [background-size:24px_24px]"
-            >
-              <div className="absolute top-4 right-4 text-[10px] font-mono text-slate-500 uppercase tracking-widest pointer-events-none">
-                Chitra-Patra • Spatial Canvas (चित्रपट)
-              </div>
+          {/* ── View Mode 1: Aesthetic Whiteboard Canvas ── */}
+          {whiteboardViewMode === 'whiteboard' && (
+            canvasLayout === 'canvas' ? (
+              <div
+                ref={canvasRef}
+                onMouseMove={handleCanvasMouseMove}
+                onMouseUp={handleCanvasMouseUp}
+                className="relative min-h-[580px] bg-slate-900 border border-slate-800 rounded-3xl p-6 overflow-hidden shadow-xl bg-[radial-gradient(#334155_1.5px,transparent_1.5px)] [background-size:24px_24px]"
+              >
+                <div className="absolute top-4 right-4 text-[10px] font-mono text-slate-500 uppercase tracking-widest pointer-events-none">
+                  Aesthetic Whiteboard Canvas
+                </div>
 
-              {visibleWhiteboardNotes.length > 0 ? (
-                visibleWhiteboardNotes.map(t => {
+                {visibleWhiteboardNotes.length > 0 ? (
+                  visibleWhiteboardNotes.map(t => {
+                    const colorClass = PASTEL_COLORS[t.color || 'yellow'];
+                    const isEditing = editingNoteId === t.id;
+                    const isDragging = draggingNoteId === t.id;
+
+                    return (
+                      <div
+                        key={t.id}
+                        onMouseDown={(e) => handleMouseDownOnNote(e, t)}
+                        style={{
+                          position: 'absolute',
+                          left: `${t.x ?? 40}px`,
+                          top: `${t.y ?? 40}px`,
+                          width: '240px',
+                          zIndex: isDragging ? 40 : 10
+                        }}
+                        className={`draggable-sticky p-4 rounded-2xl border-2 ${colorClass} cursor-grab active:cursor-grabbing select-none transition-shadow ${
+                          isDragging ? 'shadow-2xl scale-105 opacity-90' : 'hover:shadow-lg'
+                        } flex flex-col justify-between min-h-[160px] group`}
+                      >
+                        <div className="flex items-center justify-between pb-2 border-b border-black/10">
+                          <button
+                            onClick={() => handleToggleWhiteboardComplete(t.id)}
+                            className="text-slate-800 hover:opacity-80 transition"
+                          >
+                            {t.completed ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                          </button>
+
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                            {isLoggedIn && (
+                              <button
+                                onClick={() => { setPromotingNote(t); setPromoteMode('task'); }}
+                                className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
+                                title="Promote to Structured Task"
+                              >
+                                <MoveRight className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {isLoggedIn && (
+                              <button
+                                onClick={() => { setPromotingNote(t); setPromoteMode('pratigya'); setPromoteRecipient(''); setPromoteDeadline(''); }}
+                                className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
+                                title="Promote to Pratigya Covenant"
+                              >
+                                <Shield className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                            {isLoggedIn && (
+                              <button
+                                onClick={() => handleToggleWhiteboardPrivacy(t.id)}
+                                className="p-1 rounded hover:bg-black/10 transition"
+                              >
+                                {t.isPrivate ? <Lock className="w-3 h-3 text-amber-800" /> : <Unlock className="w-3 h-3 text-slate-500" />}
+                              </button>
+                            )}
+                            {isLoggedIn && (
+                              <button
+                                onClick={() => { setEditingNoteId(t.id); setEditNoteText(t.text); }}
+                                className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                              </button>
+                            )}
+                            {isLoggedIn && (
+                              <button
+                                onClick={() => handleDeleteWhiteboardNote(t.id)}
+                                className="p-1 rounded hover:bg-black/10 text-rose-700 transition"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="py-2 flex-1">
+                          {isEditing ? (
+                            <div className="space-y-2">
+                              <textarea
+                                value={editNoteText}
+                                onChange={e => setEditNoteText(e.target.value)}
+                                rows={3}
+                                className="w-full p-2 text-xs font-semibold bg-white/90 rounded-lg border border-slate-300 focus:outline-none"
+                              />
+                              <button
+                                onClick={() => handleSaveWhiteboardEdit(t.id)}
+                                className="w-full py-1 bg-slate-900 text-white rounded text-[10px] font-bold"
+                              >
+                                Save
+                              </button>
+                            </div>
+                          ) : (
+                            <p className={`text-xs font-semibold leading-relaxed break-words ${t.completed ? 'line-through opacity-60' : ''}`}>
+                              {t.text}
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between text-[9px] font-mono font-bold opacity-60 pt-2 border-t border-black/10">
+                          <span>{t.createdAt}</span>
+                          {t.isPrivate && <span className="uppercase text-amber-800">Private</span>}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="h-64 flex flex-col items-center justify-center text-slate-500 space-y-2">
+                    <Sparkles className="w-8 h-8 opacity-40" />
+                    <p className="text-xs font-semibold">Whiteboard is clean</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Grid Layout */
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
+                {visibleWhiteboardNotes.map(t => {
                   const colorClass = PASTEL_COLORS[t.color || 'yellow'];
                   const isEditing = editingNoteId === t.id;
-                  const isDragging = draggingNoteId === t.id;
 
                   return (
                     <div
                       key={t.id}
-                      onMouseDown={(e) => handleMouseDownOnNote(e, t)}
-                      style={{
-                        position: 'absolute',
-                        left: `${t.x ?? 40}px`,
-                        top: `${t.y ?? 40}px`,
-                        width: '240px',
-                        zIndex: isDragging ? 40 : 10
-                      }}
-                      className={`draggable-sticky p-4 rounded-2xl border-2 ${colorClass} cursor-grab active:cursor-grabbing select-none transition-shadow ${
-                        isDragging ? 'shadow-2xl scale-105 opacity-90' : 'hover:shadow-lg'
-                      } flex flex-col justify-between min-h-[160px] group`}
+                      className={`relative p-5 rounded-2xl border-2 ${colorClass} transition-all duration-200 hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between min-h-[160px] group`}
                     >
-                      {/* Top Bar Icons */}
-                      <div className="flex items-center justify-between pb-2 border-b border-black/10">
+                      <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10">
                         <button
                           onClick={() => handleToggleWhiteboardComplete(t.id)}
                           className="text-slate-800 hover:opacity-80 transition"
@@ -1084,7 +1201,7 @@ export const Todos: React.FC<TodosProps> = ({
                             <button
                               onClick={() => { setPromotingNote(t); setPromoteMode('task'); }}
                               className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
-                              title="Promote to Workset Task (कार्य)"
+                              title="Promote to Task"
                             >
                               <MoveRight className="w-3.5 h-3.5" />
                             </button>
@@ -1092,8 +1209,8 @@ export const Todos: React.FC<TodosProps> = ({
                           {isLoggedIn && (
                             <button
                               onClick={() => { setPromotingNote(t); setPromoteMode('pratigya'); setPromoteRecipient(''); setPromoteDeadline(''); }}
-                              className="p-1 rounded hover:bg-black/10 text-amber-800 transition"
-                              title="Promote to Pratigya Covenant (प्रतिज्ञा)"
+                              className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
+                              title="Promote to Pratigya"
                             >
                               <Shield className="w-3.5 h-3.5" />
                             </button>
@@ -1111,7 +1228,7 @@ export const Todos: React.FC<TodosProps> = ({
                               onClick={() => { setEditingNoteId(t.id); setEditNoteText(t.text); }}
                               className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
                             >
-                              <Edit2 className="w-3 h-3" />
+                              <Edit2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                           {isLoggedIn && (
@@ -1119,13 +1236,12 @@ export const Todos: React.FC<TodosProps> = ({
                               onClick={() => handleDeleteWhiteboardNote(t.id)}
                               className="p-1 rounded hover:bg-black/10 text-rose-700 transition"
                             >
-                              <Trash2 className="w-3 h-3" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
                       </div>
 
-                      {/* Content */}
                       <div className="py-2 flex-1">
                         {isEditing ? (
                           <div className="space-y-2">
@@ -1149,109 +1265,83 @@ export const Todos: React.FC<TodosProps> = ({
                         )}
                       </div>
 
-                      {/* Footer */}
                       <div className="flex items-center justify-between text-[9px] font-mono font-bold opacity-60 pt-2 border-t border-black/10">
                         <span>{t.createdAt}</span>
                         {t.isPrivate && <span className="uppercase text-amber-800">Private</span>}
                       </div>
                     </div>
                   );
-                })
-              ) : (
-                <div className="h-64 flex flex-col items-center justify-center text-slate-500 space-y-2">
-                  <Sparkles className="w-8 h-8 opacity-40" />
-                  <p className="text-xs font-semibold">Whiteboard is clean</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* Grid View */
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
-              {visibleWhiteboardNotes.map(t => {
-                const colorClass = PASTEL_COLORS[t.color || 'yellow'];
-                const isEditing = editingNoteId === t.id;
+                })}
+              </div>
+            )
+          )}
 
-                return (
+          {/* ── View Mode 2: Restored Flat List View ── */}
+          {whiteboardViewMode === 'list' && (
+            <div className="bg-white border border-slate-200 rounded-3xl p-6 shadow-sm space-y-3">
+              {visibleWhiteboardNotes.length > 0 ? (
+                visibleWhiteboardNotes.map((t) => (
                   <div
                     key={t.id}
-                    className={`relative p-5 rounded-2xl border-2 ${colorClass} transition-all duration-200 hover:-translate-y-1 hover:shadow-xl flex flex-col justify-between min-h-[160px] group`}
+                    className="flex items-center justify-between p-4 bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 rounded-2xl transition group"
                   >
-                    <div className="flex items-center justify-between gap-2 pb-2 border-b border-black/10">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       <button
                         onClick={() => handleToggleWhiteboardComplete(t.id)}
-                        className="text-slate-800 hover:opacity-80 transition"
+                        className="text-blue-600 hover:text-blue-700 transition shrink-0"
                       >
-                        {t.completed ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                        {t.completed ? <CheckSquare className="w-5 h-5" /> : <Square className="w-5 h-5 text-slate-400" />}
                       </button>
 
-                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                        {isLoggedIn && (
-                          <button
-                            onClick={() => { setPromotingNote(t); setPromoteMode('task'); }}
-                            className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
-                            title="Promote to Task (कार्य)"
-                          >
-                            <MoveRight className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {isLoggedIn && (
-                          <button
-                            onClick={() => { setPromotingNote(t); setPromoteMode('pratigya'); setPromoteRecipient(''); setPromoteDeadline(''); }}
-                            className="p-1 rounded hover:bg-black/10 text-amber-800 transition"
-                            title="Promote to Pratigya (प्रतिज्ञा)"
-                          >
-                            <Shield className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {isLoggedIn && (
-                          <button
-                            onClick={() => { setEditingNoteId(t.id); setEditNoteText(t.text); }}
-                            className="p-1 rounded hover:bg-black/10 text-slate-700 transition"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        {isLoggedIn && (
-                          <button
-                            onClick={() => handleDeleteWhiteboardNote(t.id)}
-                            className="p-1 rounded hover:bg-black/10 text-rose-700 transition"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                      <span className={`text-sm font-medium text-slate-800 truncate ${t.completed ? 'line-through text-slate-400' : ''}`}>
+                        {t.text}
+                      </span>
 
-                    <div className="py-2 flex-1">
-                      {isEditing ? (
-                        <div className="space-y-2">
-                          <textarea
-                            value={editNoteText}
-                            onChange={e => setEditNoteText(e.target.value)}
-                            rows={3}
-                            className="w-full p-2 text-xs font-semibold bg-white/90 rounded-lg border border-slate-300 focus:outline-none"
-                          />
-                          <button
-                            onClick={() => handleSaveWhiteboardEdit(t.id)}
-                            className="w-full py-1 bg-slate-900 text-white rounded text-[10px] font-bold"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      ) : (
-                        <p className={`text-xs font-semibold leading-relaxed break-words ${t.completed ? 'line-through opacity-60' : ''}`}>
-                          {t.text}
-                        </p>
+                      {t.isPrivate && (
+                        <span className="px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-bold rounded flex items-center gap-1 shrink-0">
+                          <Lock className="w-3 h-3" /> Private
+                        </span>
                       )}
                     </div>
 
-                    <div className="flex items-center justify-between text-[9px] font-mono font-bold opacity-60 pt-2 border-t border-black/10">
-                      <span>{t.createdAt}</span>
-                      {t.isPrivate && <span className="uppercase text-amber-800">Private</span>}
-                    </div>
+                    {isLoggedIn && (
+                      <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          onClick={() => { setPromotingNote(t); setPromoteMode('task'); }}
+                          className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-white"
+                          title="Promote to Task"
+                        >
+                          <MoveRight className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => { setPromotingNote(t); setPromoteMode('pratigya'); setPromoteRecipient(''); setPromoteDeadline(''); }}
+                          className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-white"
+                          title="Promote to Pratigya"
+                        >
+                          <Shield className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleToggleWhiteboardPrivacy(t.id)}
+                          className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-white"
+                          title={t.isPrivate ? 'Private' : 'Public'}
+                        >
+                          {t.isPrivate ? <Lock className="w-4 h-4 text-amber-600" /> : <Unlock className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteWhiteboardNote(t.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-white"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </div>
-                );
-              })}
+                ))
+              ) : (
+                <div className="text-center py-12 text-slate-400 text-xs font-semibold">
+                  No tasks found in flat list.
+                </div>
+              )}
             </div>
           )}
 
@@ -1262,7 +1352,7 @@ export const Todos: React.FC<TodosProps> = ({
                 <div className="flex items-center justify-between border-b pb-3">
                   <div className="flex items-center gap-2 font-bold text-slate-900">
                     <Sparkles className="w-5 h-5 text-blue-600" />
-                    Promote Sticky Note: "{promotingNote.text.slice(0, 30)}..."
+                    Promote Note: "{promotingNote.text.slice(0, 30)}..."
                   </div>
                   <button onClick={() => setPromotingNote(null)} className="text-slate-400 hover:text-slate-700">✕</button>
                 </div>
@@ -1274,15 +1364,15 @@ export const Todos: React.FC<TodosProps> = ({
                       promoteMode === 'task' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                     }`}
                   >
-                    To Kārya Task (कार्य)
+                    To Task
                   </button>
                   <button
                     onClick={() => setPromoteMode('pratigya')}
                     className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition ${
-                      promoteMode === 'pratigya' ? 'bg-white text-amber-700 shadow-xs' : 'text-slate-600'
+                      promoteMode === 'pratigya' ? 'bg-white text-blue-600 shadow-xs' : 'text-slate-600'
                     }`}
                   >
-                    To Pratigya Covenant (प्रतिज्ञा)
+                    To Pratigya Covenant
                   </button>
                 </div>
 
@@ -1296,7 +1386,7 @@ export const Todos: React.FC<TodosProps> = ({
                         className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
                       >
                         {worksets.map(w => (
-                          <option key={w.id} value={w.id}>{w.icon} {w.title}</option>
+                          <option key={w.id} value={w.id}>{w.title}</option>
                         ))}
                       </select>
                     </div>
@@ -1309,9 +1399,9 @@ export const Todos: React.FC<TodosProps> = ({
                           onChange={e => setPromotePriority(e.target.value as TaskPriority)}
                           className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
                         >
-                          <option value="p1">P1: Urgent</option>
-                          <option value="p2">P2: High</option>
-                          <option value="p3">P3: Normal</option>
+                          <option value="p1">P1 (Urgent)</option>
+                          <option value="p2">P2 (High)</option>
+                          <option value="p3">P3 (Normal)</option>
                         </select>
                       </div>
 
@@ -1330,7 +1420,7 @@ export const Todos: React.FC<TodosProps> = ({
                       onClick={executePromoteToTask}
                       className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md"
                     >
-                      Promote into Task
+                      Promote to Task
                     </button>
                   </div>
                 ) : (
@@ -1339,7 +1429,7 @@ export const Todos: React.FC<TodosProps> = ({
                       <label className="text-xs font-bold text-slate-700">Word Given To (Recipient Name) *</label>
                       <input
                         type="text"
-                        placeholder="e.g. Prof. Sharma, Mom, Client Alex..."
+                        placeholder="e.g. Prof. Sharma, Mom, Alex..."
                         value={promoteRecipient}
                         onChange={e => setPromoteRecipient(e.target.value)}
                         className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -1354,10 +1444,10 @@ export const Todos: React.FC<TodosProps> = ({
                           onChange={e => setPromoteUrgency(e.target.value as CommitmentUrgency)}
                           className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
                         >
-                          <option value="sacred">🔥 Sacred (Unbreakable)</option>
-                          <option value="high">⚡ High</option>
-                          <option value="standard">📜 Standard</option>
-                          <option value="flexible">🌱 Flexible</option>
+                          <option value="sacred">Sacred (Critical Word)</option>
+                          <option value="high">High</option>
+                          <option value="standard">Standard</option>
+                          <option value="flexible">Flexible</option>
                         </select>
                       </div>
 
@@ -1374,9 +1464,9 @@ export const Todos: React.FC<TodosProps> = ({
 
                     <button
                       onClick={executePromoteToPratigya}
-                      className="w-full py-3 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs transition shadow-md"
+                      className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md"
                     >
-                      Bind into Sacred Pratigya
+                      Record in Pratigya
                     </button>
                   </div>
                 )}
@@ -1387,24 +1477,24 @@ export const Todos: React.FC<TodosProps> = ({
       )}
 
       {/* ───────────────────────────────────────────────────────────────────── */}
-      {/* ── PILLAR 2: TASKS & WORKSETS (GOOGLE TASKS STYLE — KĀRYA) ────────── */}
+      {/* ── PILLAR 2: TASKS & WORKSETS (KĀRYA) ──────────────────────────────── */}
       {/* ───────────────────────────────────────────────────────────────────── */}
       {activePillar === 'karya' && (
         <div className="space-y-6 animate-fade-in">
-          {/* Workset Chips Selector Bar */}
+          {/* Workset Selector & Management Bar */}
           <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
-              {/* Common Board Chip */}
+              {/* Common Board Tab */}
               <button
                 onClick={() => setSelectedWorksetId('all')}
                 className={`flex items-center gap-2 px-4 py-2 rounded-2xl text-xs font-bold transition border ${
                   selectedWorksetId === 'all'
                     ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                    : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
-                <span>🌐 Common Board (All)</span>
+                <span>All Tasks</span>
                 <span className="text-[10px] px-1.5 py-0.2 bg-white/20 rounded-md">
                   {tasks.filter(t => !t.completed).length}
                 </span>
@@ -1412,7 +1502,6 @@ export const Todos: React.FC<TodosProps> = ({
 
               {/* Individual Worksets */}
               {worksets.map(w => {
-                const colorScheme = WORKSET_COLOR_MAP[w.color || 'blue'] || WORKSET_COLOR_MAP.blue;
                 const isSelected = selectedWorksetId === w.id;
                 const count = tasks.filter(t => t.worksetId === w.id && !t.completed).length;
 
@@ -1422,11 +1511,11 @@ export const Todos: React.FC<TodosProps> = ({
                     onClick={() => setSelectedWorksetId(w.id)}
                     className={`flex items-center gap-2 px-3.5 py-2 rounded-2xl text-xs font-bold transition border ${
                       isSelected
-                        ? `${colorScheme.bg} ${colorScheme.text} ${colorScheme.border} shadow-sm ring-2 ring-blue-500/20`
+                        ? 'bg-blue-50 text-blue-800 border-blue-200 shadow-sm ring-2 ring-blue-500/20'
                         : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
                     }`}
                   >
-                    <span>{w.icon || '📁'}</span>
+                    {renderWorksetIcon(w.icon)}
                     <span>{w.title}</span>
                     {count > 0 && (
                       <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-slate-100 text-slate-600">
@@ -1437,13 +1526,15 @@ export const Todos: React.FC<TodosProps> = ({
                 );
               })}
 
+              {/* Manage Worksets Button */}
               {isLoggedIn && (
                 <button
-                  onClick={() => setIsNewWorksetModalOpen(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 border border-blue-200 transition"
+                  onClick={() => setIsWorksetsModalOpen(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold text-slate-600 bg-slate-50 hover:bg-slate-100 border border-slate-200 transition"
+                  title="Manage and create worksets"
                 >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                  <span>New Workset</span>
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  <span>Worksets</span>
                 </button>
               )}
             </div>
@@ -1454,150 +1545,164 @@ export const Todos: React.FC<TodosProps> = ({
                 onClick={handleClearCompletedTasks}
                 className="text-xs font-bold text-slate-400 hover:text-red-600 transition flex items-center gap-1"
               >
-                <Trash2 className="w-3 h-3" /> Clear Completed
+                <Trash2 className="w-3.5 h-3.5" /> Clear Completed
               </button>
             )}
           </div>
 
-          {/* Quick Add Task Bar (Google Tasks Style) */}
+          {/* ── Simple, Responsive & Idempotent Task Creation Bar ── */}
           {isLoggedIn && (
-            <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm space-y-3">
-              <form onSubmit={handleCreateTask} className="space-y-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                    <Plus className="w-4 h-4" />
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="Add a new task (e.g. 'Draft system evaluation section')..."
-                    value={newTaskTitle}
-                    onChange={e => setNewTaskTitle(e.target.value)}
-                    onFocus={() => setIsTaskFormExpanded(true)}
-                    className="flex-1 text-sm font-semibold text-slate-900 bg-transparent focus:outline-none placeholder-slate-400"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!newTaskTitle.trim()}
-                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-sm shrink-0"
-                  >
-                    Add Task
-                  </button>
+            <div className="bg-white border border-slate-200 rounded-3xl p-4 shadow-sm space-y-3">
+              <form onSubmit={handleQuickCreateTask} className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+                  <Plus className="w-4 h-4" />
                 </div>
+                
+                <input
+                  type="text"
+                  placeholder={`Add a task to ${currentWorksetName}... (Press Enter)`}
+                  value={quickTaskTitle}
+                  onChange={e => setQuickTaskTitle(e.target.value)}
+                  disabled={isSubmittingTask}
+                  className="flex-1 text-sm font-medium text-slate-900 bg-transparent focus:outline-none placeholder-slate-400"
+                />
 
-                {/* Expanded Details Form */}
-                {isTaskFormExpanded && (
-                  <div className="pt-3 border-t border-slate-100 space-y-3 animate-fade-in">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {/* Workset Selector */}
-                      <div>
-                        <label className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Workset</label>
-                        <select
-                          value={selectedWorksetId === 'all' ? newTaskWorkset : selectedWorksetId}
-                          onChange={e => setNewTaskWorkset(e.target.value)}
-                          className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
-                        >
-                          {worksets.map(w => (
-                            <option key={w.id} value={w.id}>{w.icon} {w.title}</option>
-                          ))}
-                        </select>
-                      </div>
+                <button
+                  type="button"
+                  onClick={() => setIsTaskDetailsOpen(!isTaskDetailsOpen)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 shrink-0 ${
+                    isTaskDetailsOpen 
+                      ? 'bg-slate-100 text-slate-900 border-slate-300' 
+                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                  }`}
+                  title="Toggle additional details (due date, priority, notes)"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Options</span>
+                </button>
 
-                      {/* Due Date */}
-                      <div>
-                        <label className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Due Date</label>
-                        <input
-                          type="date"
-                          value={newTaskDueDate}
-                          onChange={e => setNewTaskDueDate(e.target.value)}
-                          className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
-                        />
-                      </div>
+                <button
+                  type="submit"
+                  disabled={!quickTaskTitle.trim() || isSubmittingTask}
+                  className="px-5 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-sm shrink-0 flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add</span>
+                </button>
+              </form>
 
-                      {/* Priority Selector */}
-                      <div>
-                        <label className="text-[10px] font-extrabold uppercase text-slate-400 tracking-wider">Priority</label>
-                        <select
-                          value={newTaskPriority}
-                          onChange={e => setNewTaskPriority(e.target.value as TaskPriority)}
-                          className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
-                        >
-                          <option value="p1">P1: Urgent (🚨)</option>
-                          <option value="p2">P2: High (⚡)</option>
-                          <option value="p3">P3: Normal (🔵)</option>
-                        </select>
-                      </div>
+              {/* Extended Form Tray (Opens only when Options button is explicitly clicked) */}
+              {isTaskDetailsOpen && (
+                <div className="pt-3 border-t border-slate-100 space-y-3 animate-fade-in">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {/* Workset Selector */}
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Target Workset</label>
+                      <select
+                        value={selectedWorksetId === 'all' ? extraTaskWorkset : selectedWorksetId}
+                        onChange={e => setExtraTaskWorkset(e.target.value)}
+                        className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+                      >
+                        {worksets.map(w => (
+                          <option key={w.id} value={w.id}>{w.title}</option>
+                        ))}
+                      </select>
                     </div>
 
-                    {/* Notes Field */}
+                    {/* Due Date */}
                     <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Due Date</label>
                       <input
-                        type="text"
-                        placeholder="Add notes, context, or links..."
-                        value={newTaskNotes}
-                        onChange={e => setNewTaskNotes(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none"
+                        type="date"
+                        value={extraTaskDueDate}
+                        onChange={e => setExtraTaskDueDate(e.target.value)}
+                        className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
                       />
                     </div>
 
-                    {/* Subtasks / Checklist Builder */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          placeholder="Add subtask checklist item..."
-                          value={newSubtaskInput}
-                          onChange={e => setNewSubtaskInput(e.target.value)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              if (newSubtaskInput.trim()) {
-                                setNewTaskSubtasks([...newTaskSubtasks, newSubtaskInput.trim()]);
-                                setNewSubtaskInput('');
-                              }
-                            }
-                          }}
-                          className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (newSubtaskInput.trim()) {
-                              setNewTaskSubtasks([...newTaskSubtasks, newSubtaskInput.trim()]);
-                              setNewSubtaskInput('');
-                            }
-                          }}
-                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
-                        >
-                          + Add Subtask
-                        </button>
-                      </div>
-
-                      {newTaskSubtasks.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-1">
-                          {newTaskSubtasks.map((st, idx) => (
-                            <span key={idx} className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 text-xs rounded-lg font-medium">
-                              • {st}
-                              <button
-                                type="button"
-                                onClick={() => setNewTaskSubtasks(newTaskSubtasks.filter((_, i) => i !== idx))}
-                                className="text-slate-400 hover:text-red-600 ml-1"
-                              >
-                                ✕
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                    {/* Priority Selector */}
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-400 tracking-wider">Priority</label>
+                      <select
+                        value={extraTaskPriority}
+                        onChange={e => setExtraTaskPriority(e.target.value as TaskPriority)}
+                        className="w-full mt-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+                      >
+                        <option value="p1">P1 (Urgent)</option>
+                        <option value="p2">P2 (High)</option>
+                        <option value="p3">P3 (Normal)</option>
+                      </select>
                     </div>
                   </div>
-                )}
-              </form>
+
+                  {/* Notes Field */}
+                  <div>
+                    <input
+                      type="text"
+                      placeholder="Add notes, instructions, or links..."
+                      value={extraTaskNotes}
+                      onChange={e => setExtraTaskNotes(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Subtask / Checklist Builder */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Add subtask checklist item..."
+                        value={newSubtaskInput}
+                        onChange={e => setNewSubtaskInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (newSubtaskInput.trim()) {
+                              setExtraSubtasks([...extraSubtasks, newSubtaskInput.trim()]);
+                              setNewSubtaskInput('');
+                            }
+                          }
+                        }}
+                        className="flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newSubtaskInput.trim()) {
+                            setExtraSubtasks([...extraSubtasks, newSubtaskInput.trim()]);
+                            setNewSubtaskInput('');
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+                      >
+                        Add Subtask
+                      </button>
+                    </div>
+
+                    {extraSubtasks.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {extraSubtasks.map((st, idx) => (
+                          <span key={idx} className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 text-xs rounded-lg font-medium">
+                            <span>• {st}</span>
+                            <button
+                              type="button"
+                              onClick={() => setExtraSubtasks(extraSubtasks.filter((_, i) => i !== idx))}
+                              className="text-slate-400 hover:text-red-600 ml-1"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* Filter Chips & Search Bar */}
           <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
-            {/* Filter Chips */}
             <div className="flex flex-wrap items-center gap-1.5">
               {(['all', 'today', 'upcoming', 'overdue', 'completed'] as const).map(f => (
                 <button
@@ -1613,7 +1718,6 @@ export const Todos: React.FC<TodosProps> = ({
 
               <span className="text-slate-300 mx-1">|</span>
 
-              {/* Priority Chips */}
               {(['all', 'p1', 'p2', 'p3'] as const).map(p => (
                 <button
                   key={p}
@@ -1622,16 +1726,15 @@ export const Todos: React.FC<TodosProps> = ({
                     taskPriorityFilter === p ? 'bg-slate-900 text-white shadow-xs' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
                   }`}
                 >
-                  {p === 'all' ? 'All Priorities' : p}
+                  {p === 'all' ? 'All' : p}
                 </button>
               ))}
             </div>
 
-            {/* Search */}
             <div className="relative">
               <input
                 type="text"
-                placeholder="Filter tasks..."
+                placeholder="Search tasks..."
                 value={taskSearch}
                 onChange={e => setTaskSearch(e.target.value)}
                 className="w-full md:w-48 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none"
@@ -1662,7 +1765,6 @@ export const Todos: React.FC<TodosProps> = ({
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 flex-1 min-w-0">
-                        {/* Checkbox */}
                         <button
                           onClick={() => handleToggleTaskComplete(t.id)}
                           className="mt-0.5 text-blue-600 hover:text-blue-700 transition shrink-0"
@@ -1676,35 +1778,31 @@ export const Todos: React.FC<TodosProps> = ({
                               {t.title}
                             </span>
 
-                            {/* Priority Badge */}
-                            <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border uppercase ${priorityBadge}`}>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border uppercase ${priorityBadge}`}>
                               {t.priority}
                             </span>
 
-                            {/* Workset Badge (Common Board View) */}
                             {selectedWorksetId === 'all' && parentWorkset && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">
-                                {parentWorkset.icon} {parentWorkset.title}
+                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1">
+                                {renderWorksetIcon(parentWorkset.icon)}
+                                <span>{parentWorkset.title}</span>
                               </span>
                             )}
 
-                            {/* Due Date Pill */}
                             {t.dueDate && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-50 text-slate-600 border border-slate-200 flex items-center gap-1">
+                              <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-50 text-slate-600 border border-slate-200 flex items-center gap-1">
                                 <Calendar className="w-3 h-3 text-slate-400" />
-                                {t.dueDate.slice(0, 10)}
+                                <span>{t.dueDate.slice(0, 10)}</span>
                               </span>
                             )}
                           </div>
 
-                          {/* Notes */}
                           {t.notes && (
                             <p className="text-xs text-slate-500 line-clamp-2">
                               {t.notes}
                             </p>
                           )}
 
-                          {/* Subtasks Progress Bar & Checklist */}
                           {hasSubtasks && (
                             <div className="pt-2 space-y-1.5">
                               <div className="flex items-center gap-2">
@@ -1742,7 +1840,6 @@ export const Todos: React.FC<TodosProps> = ({
                         </div>
                       </div>
 
-                      {/* Actions */}
                       {isLoggedIn && (
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition shrink-0">
                           <button
@@ -1760,29 +1857,66 @@ export const Todos: React.FC<TodosProps> = ({
             ) : (
               <div className="text-center py-12 text-slate-400 text-xs font-semibold space-y-2">
                 <CheckSquare className="w-8 h-8 opacity-30 mx-auto" />
-                <p>No tasks found in this view.</p>
+                <p>No tasks in this view.</p>
               </div>
             )}
           </div>
 
-          {/* ── New Workset Modal ── */}
-          {isNewWorksetModalOpen && (
+          {/* ── Worksets Management Modal with Delete & Creation Options ── */}
+          {isWorksetsModalOpen && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
-              <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-5">
+              <div className="bg-white border border-slate-200 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-5">
                 <div className="flex items-center justify-between border-b pb-3">
                   <div className="flex items-center gap-2 font-bold text-slate-900">
                     <FolderPlus className="w-5 h-5 text-blue-600" />
-                    Create Custom Workset
+                    Manage Worksets
                   </div>
-                  <button onClick={() => setIsNewWorksetModalOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
+                  <button onClick={() => setIsWorksetsModalOpen(false)} className="text-slate-400 hover:text-slate-700">
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
 
-                <form onSubmit={handleCreateWorkset} className="space-y-4">
+                {/* Existing Worksets List */}
+                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Current Worksets</div>
+                  {worksets.map(w => {
+                    const taskCount = tasks.filter(t => t.worksetId === w.id).length;
+                    const isDefault = ['work', 'research', 'dev', 'personal'].includes(w.id);
+
+                    return (
+                      <div key={w.id} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                        <div className="flex items-center gap-2.5">
+                          <div className="p-1.5 bg-white rounded-lg border border-slate-200 text-slate-700">
+                            {renderWorksetIcon(w.icon)}
+                          </div>
+                          <div>
+                            <div className="text-xs font-bold text-slate-900">{w.title}</div>
+                            <div className="text-[10px] text-slate-500">{taskCount} tasks assigned</div>
+                          </div>
+                        </div>
+
+                        {!isDefault && (
+                          <button
+                            onClick={() => handleDeleteWorkset(w.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-white transition"
+                            title="Delete Workset"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Add New Workset Form */}
+                <form onSubmit={handleCreateWorkset} className="space-y-4 pt-3 border-t border-slate-100">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">Create New Workset</div>
                   <div>
-                    <label className="text-xs font-bold text-slate-700">Workset Title *</label>
+                    <label className="text-xs font-bold text-slate-700">Title *</label>
                     <input
                       type="text"
-                      placeholder="e.g. Deep Work, Reading, Family..."
+                      placeholder="e.g. Deep Work, Reading, Finance..."
                       value={newWorksetTitle}
                       onChange={e => setNewWorksetTitle(e.target.value)}
                       className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -1791,14 +1925,16 @@ export const Todos: React.FC<TodosProps> = ({
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-xs font-bold text-slate-700">Icon / Emoji</label>
-                      <input
-                        type="text"
-                        placeholder="💼, 🔬, 🛠️, 📚..."
+                      <label className="text-xs font-bold text-slate-700">Icon</label>
+                      <select
                         value={newWorksetIcon}
                         onChange={e => setNewWorksetIcon(e.target.value)}
                         className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
-                      />
+                      >
+                        {AVAILABLE_WORKSET_ICONS.map(ic => (
+                          <option key={ic} value={ic}>{ic}</option>
+                        ))}
+                      </select>
                     </div>
 
                     <div>
@@ -1813,7 +1949,6 @@ export const Todos: React.FC<TodosProps> = ({
                         <option value="emerald">Emerald</option>
                         <option value="amber">Amber</option>
                         <option value="rose">Rose</option>
-                        <option value="indigo">Indigo</option>
                       </select>
                     </div>
                   </div>
@@ -1821,7 +1956,7 @@ export const Todos: React.FC<TodosProps> = ({
                   <button
                     type="submit"
                     disabled={!newWorksetTitle.trim()}
-                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md"
+                    className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-md"
                   >
                     Save Workset
                   </button>
@@ -1833,46 +1968,46 @@ export const Todos: React.FC<TodosProps> = ({
       )}
 
       {/* ───────────────────────────────────────────────────────────────────── */}
-      {/* ── PILLAR 3: PRATIGYA (THE COVENANT & COMMITMENT MANAGER) ─────────── */}
+      {/* ── PILLAR 3: PRATIGYA (COVENANT LEDGER — HARMONIC THEME) ─────────── */}
       {/* ───────────────────────────────────────────────────────────────────── */}
       {activePillar === 'pratigya' && (
         <div className="space-y-6 animate-fade-in">
-          {/* Philosophical Sanskrit Banner */}
-          <div className="relative overflow-hidden bg-gradient-to-r from-slate-950 via-slate-900 to-amber-950/80 border border-amber-900/40 rounded-3xl p-6 sm:p-8 text-white shadow-xl">
-            <div className="relative z-10 space-y-3">
-              <div className="flex items-center gap-2 text-amber-400 text-xs font-black uppercase tracking-widest">
-                <Flame className="w-4 h-4 text-amber-500 animate-pulse" />
-                The Sovereign Covenant Ledger (प्रतिज्ञा)
-              </div>
-              <h2 className="text-xl sm:text-2xl font-black text-amber-100 font-serif tracking-wide">
-                "रघुकुल रीत सदा चली आई, प्राण जाई पर वचन न जाई"
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
-                Pratigya is a high-stakes ledger for promises made to specific living people. Guarded by an adaptive horizon email engine that ensures commitments are fulfilled or renegotiated with integrity.
-              </p>
+          {/* Harmonic Canvas Header aligned with Shudkara's warm editorial palette */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 shadow-sm space-y-4">
+            <div className="flex items-center gap-2 text-blue-600 text-xs font-bold uppercase tracking-wider">
+              <Shield className="w-4 h-4 text-blue-600" />
+              <span>Sovereign Word & Integrity Ledger (प्रतिज्ञा)</span>
+            </div>
 
-              {/* Stats Bar */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4 border-t border-white/10 text-center">
-                <div className="bg-white/5 rounded-2xl p-2.5 border border-white/10">
-                  <div className="text-lg font-black text-white">{pratigyaStats.total}</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Pledges</div>
-                </div>
-                <div className="bg-white/5 rounded-2xl p-2.5 border border-white/10">
-                  <div className="text-lg font-black text-amber-400">{pratigyaStats.active}</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active</div>
-                </div>
-                <div className="bg-white/5 rounded-2xl p-2.5 border border-white/10">
-                  <div className="text-lg font-black text-red-400">{pratigyaStats.sacred}</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sacred</div>
-                </div>
-                <div className="bg-white/5 rounded-2xl p-2.5 border border-white/10">
-                  <div className="text-lg font-black text-rose-500">{pratigyaStats.overdue}</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Overdue / Breach</div>
-                </div>
-                <div className="bg-white/5 rounded-2xl p-2.5 border border-white/10">
-                  <div className="text-lg font-black text-emerald-400">{pratigyaStats.honored}</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Honored</div>
-                </div>
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 font-serif tracking-tight">
+              "रघुकुल रीत सदा चली आई, प्राण जाई पर वचन न जाई"
+            </h2>
+
+            <p className="text-xs sm:text-sm text-slate-600 max-w-2xl leading-relaxed">
+              Pratigya tracks commitments made to specific individuals. Guarded by the autonomous Caretaker alerting engine, ensuring promises are fulfilled or renegotiated with transparent justification.
+            </p>
+
+            {/* Stats Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-3 border-t border-slate-100 text-center">
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div className="text-lg font-black text-slate-900">{pratigyaStats.total}</div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Total</div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div className="text-lg font-black text-blue-700">{pratigyaStats.active}</div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Active</div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div className="text-lg font-black text-amber-700">{pratigyaStats.sacred}</div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Sacred</div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div className="text-lg font-black text-red-700">{pratigyaStats.overdue}</div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Overdue</div>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3">
+                <div className="text-lg font-black text-emerald-700">{pratigyaStats.honored}</div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Honored</div>
               </div>
             </div>
           </div>
@@ -1886,7 +2021,7 @@ export const Todos: React.FC<TodosProps> = ({
                   onClick={() => setPratigyaFilter(f)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize transition ${
                     pratigyaFilter === f
-                      ? 'bg-amber-600 text-white shadow-xs'
+                      ? 'bg-blue-600 text-white shadow-xs'
                       : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
@@ -1895,31 +2030,15 @@ export const Todos: React.FC<TodosProps> = ({
               ))}
             </div>
 
-            <div className="flex items-center gap-2">
-              {/* Test Alert Dispatch Button */}
-              {isLoggedIn && (
-                <button
-                  onClick={() => handleTriggerTestAlert()}
-                  disabled={isSendingTestAlert}
-                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 transition flex items-center gap-1.5"
-                  title="Dispatch instant test alert email"
-                >
-                  <Mail className={`w-3.5 h-3.5 ${isSendingTestAlert ? 'animate-pulse text-amber-600' : ''}`} />
-                  <span>{isSendingTestAlert ? 'Sending...' : 'Test Alert'}</span>
-                </button>
-              )}
-
-              {/* Record Covenant Button */}
-              {isLoggedIn && (
-                <button
-                  onClick={() => setIsNewCommitmentModalOpen(true)}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5"
-                >
-                  <Award className="w-4 h-4" />
-                  <span>Record Covenant (प्रतिज्ञा लें)</span>
-                </button>
-              )}
-            </div>
+            {isLoggedIn && (
+              <button
+                onClick={() => setIsNewCommitmentModalOpen(true)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-1.5"
+              >
+                <Award className="w-4 h-4" />
+                <span>Record Commitment</span>
+              </button>
+            )}
           </div>
 
           {/* Commitments Feed */}
@@ -1927,80 +2046,67 @@ export const Todos: React.FC<TodosProps> = ({
             {filteredCommitments.length > 0 ? (
               filteredCommitments.map(c => {
                 const timing = getCommitmentTiming(c.deadline);
-                const isSacred = c.urgency === 'sacred';
                 const isHonored = c.status === 'honored';
                 const isRenegotiated = c.status === 'renegotiated';
                 const isBreached = timing.isPast && !isHonored;
 
                 const cardBorder = 
                   isHonored ? 'border-emerald-300 bg-emerald-50/20' :
-                  isBreached ? 'border-red-400 bg-red-50/30 ring-1 ring-red-400' :
-                  isSacred ? 'border-amber-400 bg-amber-50/20 shadow-amber-100/50' :
+                  isBreached ? 'border-red-300 bg-red-50/20' :
+                  c.urgency === 'sacred' ? 'border-amber-300 bg-amber-50/15' :
                   'border-slate-200 bg-white';
 
-                const urgencyPill = 
-                  c.urgency === 'sacred' ? 'bg-red-500 text-white' :
-                  c.urgency === 'high' ? 'bg-orange-500 text-white' :
-                  c.urgency === 'standard' ? 'bg-blue-600 text-white' :
-                  'bg-emerald-600 text-white';
+                const urgencyBadge = 
+                  c.urgency === 'sacred' ? 'border-amber-300 bg-amber-50 text-amber-900' :
+                  c.urgency === 'high' ? 'border-slate-300 bg-slate-100 text-slate-800' :
+                  c.urgency === 'standard' ? 'border-slate-200 bg-slate-50 text-slate-700' :
+                  'border-emerald-200 bg-emerald-50 text-emerald-800';
 
                 return (
                   <div
                     key={c.id}
-                    className={`rounded-3xl border-2 p-6 transition-all duration-200 shadow-sm ${cardBorder} space-y-4`}
+                    className={`rounded-3xl border-2 p-6 transition-all duration-200 shadow-xs ${cardBorder} space-y-4`}
                   >
                     {/* Header Row */}
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-black/5 pb-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        {/* Urgency Badge */}
-                        <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full ${urgencyPill}`}>
+                        <span className={`text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-md border ${urgencyBadge}`}>
                           {c.urgency}
                         </span>
 
-                        {/* Status Badge */}
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase border ${
-                          isHonored ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
-                          isBreached ? 'bg-red-100 text-red-800 border-red-300 animate-pulse' :
-                          isRenegotiated ? 'bg-amber-100 text-amber-800 border-amber-300' :
-                          'bg-blue-100 text-blue-800 border-blue-300'
+                          isHonored ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                          isBreached ? 'bg-red-50 text-red-800 border-red-200' :
+                          isRenegotiated ? 'bg-amber-50 text-amber-800 border-amber-200' :
+                          'bg-blue-50 text-blue-800 border-blue-200'
                         }`}>
-                          {isHonored ? 'Fulfilled / Honored' : isBreached ? '⚠️ Overdue Breach' : c.status}
+                          {isHonored ? 'Fulfilled' : isBreached ? 'Overdue Breach' : c.status}
                         </span>
-
-                        {/* Alert History Count */}
-                        {Array.isArray(c.alertHistory) && c.alertHistory.length > 0 && (
-                          <span className="text-[10px] font-mono text-slate-500 flex items-center gap-1">
-                            <Mail className="w-3 h-3 text-slate-400" />
-                            {c.alertHistory.length} alert(s) dispatched
-                          </span>
-                        )}
                       </div>
 
-                      {/* Timing Pill */}
-                      <div className={`px-3 py-1 rounded-full text-xs font-black flex items-center gap-1.5 ${
-                        isHonored ? 'bg-emerald-100 text-emerald-900' :
-                        timing.isPast ? 'bg-red-100 text-red-900' : 'bg-slate-100 text-slate-900'
+                      <div className={`px-3 py-1 rounded-full text-xs font-semibold flex items-center gap-1.5 ${
+                        isHonored ? 'bg-emerald-50 text-emerald-800' :
+                        timing.isPast ? 'bg-red-50 text-red-800' : 'bg-slate-100 text-slate-700'
                       }`}>
                         <Clock className="w-3.5 h-3.5" />
-                        <span>{isHonored ? `Honored on ${c.fulfilledAt?.slice(0, 10)}` : timing.label}</span>
+                        <span>{isHonored ? `Honored ${c.fulfilledAt?.slice(0, 10)}` : timing.label}</span>
                       </div>
                     </div>
 
-                    {/* Core Commitment Details */}
+                    {/* Details */}
                     <div className="space-y-2">
-                      <h3 className={`text-lg font-black text-slate-900 ${isHonored ? 'line-through text-slate-500' : ''}`}>
+                      <h3 className={`text-base font-bold text-slate-900 ${isHonored ? 'line-through text-slate-400' : ''}`}>
                         {c.title}
                       </h3>
 
-                      {/* Recipient Details */}
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700 bg-white/60 p-2.5 rounded-xl border border-black/5">
-                        <div className="flex items-center gap-1.5 font-bold">
+                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                        <div className="flex items-center gap-1.5 font-semibold">
                           <User className="w-4 h-4 text-blue-600" />
-                          <span>Word Given To:</span>
-                          <span className="text-slate-900 underline font-black">{c.recipientName}</span>
+                          <span>Given to:</span>
+                          <span className="text-slate-900 font-bold">{c.recipientName}</span>
                         </div>
                         {c.recipientContact && (
-                          <span className="text-slate-400">({c.recipientContact})</span>
+                          <span className="text-slate-500">({c.recipientContact})</span>
                         )}
                         <span className="text-slate-300">•</span>
                         <div className="flex items-center gap-1.5 text-slate-500">
@@ -2009,30 +2115,27 @@ export const Todos: React.FC<TodosProps> = ({
                         </div>
                       </div>
 
-                      {/* Description */}
                       {c.description && (
                         <p className="text-xs text-slate-600 leading-relaxed pt-1">
                           {c.description}
                         </p>
                       )}
 
-                      {/* Proof / Fulfillment Notes */}
                       {c.proofNotes && (
                         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 space-y-1">
                           <div className="font-bold flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            Deliverable Evidence / Proof Notes:
+                            Evidence & Fulfillment Notes:
                           </div>
                           <p>{c.proofNotes}</p>
                         </div>
                       )}
 
-                      {/* Renegotiation History Accordion */}
                       {Array.isArray(c.renegotiationHistory) && c.renegotiationHistory.length > 0 && (
                         <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 text-xs space-y-2">
                           <div className="font-bold text-amber-900 flex items-center gap-1.5">
                             <RefreshCw className="w-3.5 h-3.5 text-amber-700" />
-                            Renegotiation History ({c.renegotiationHistory.length} time(s))
+                            Renegotiation History ({c.renegotiationHistory.length})
                           </div>
                           {c.renegotiationHistory.map((h, i) => (
                             <div key={i} className="text-[11px] text-amber-800 border-l-2 border-amber-400 pl-2 space-y-0.5">
@@ -2046,9 +2149,9 @@ export const Todos: React.FC<TodosProps> = ({
                       )}
                     </div>
 
-                    {/* Actions Bar */}
+                    {/* Actions */}
                     {isLoggedIn && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-black/5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
                         <div className="flex items-center gap-2">
                           {!isHonored && (
                             <button
@@ -2069,16 +2172,6 @@ export const Todos: React.FC<TodosProps> = ({
                               Renegotiate
                             </button>
                           )}
-
-                          <button
-                            onClick={() => handleTriggerTestAlert(c)}
-                            disabled={isSendingTestAlert}
-                            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-slate-800 text-xs font-bold rounded-xl transition border border-slate-200 flex items-center gap-1"
-                            title="Dispatch email alert now"
-                          >
-                            <Mail className="w-3 h-3" />
-                            Alert Now
-                          </button>
                         </div>
 
                         <button
@@ -2101,14 +2194,14 @@ export const Todos: React.FC<TodosProps> = ({
             )}
           </div>
 
-          {/* ── New Commitment Modal ── */}
+          {/* ── Record Commitment Modal ── */}
           {isNewCommitmentModalOpen && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
               <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5">
                 <div className="flex items-center justify-between border-b pb-3">
                   <div className="flex items-center gap-2 font-black text-slate-900">
-                    <Award className="w-5 h-5 text-amber-600" />
-                    Record Sacred Covenant (प्रतिज्ञा)
+                    <Award className="w-5 h-5 text-blue-600" />
+                    Record Commitment (Pratigya)
                   </div>
                   <button onClick={() => setIsNewCommitmentModalOpen(false)} className="text-slate-400 hover:text-slate-700">✕</button>
                 </div>
@@ -2127,7 +2220,7 @@ export const Todos: React.FC<TodosProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="text-xs font-bold text-slate-700">Word Given To (Person) *</label>
+                      <label className="text-xs font-bold text-slate-700">Word Given To *</label>
                       <input
                         type="text"
                         placeholder="e.g. Prof. Sharma, Mom, Alex..."
@@ -2141,7 +2234,7 @@ export const Todos: React.FC<TodosProps> = ({
                       <label className="text-xs font-bold text-slate-700">Contact (Optional Phone/Email)</label>
                       <input
                         type="text"
-                        placeholder="Optional phone or email..."
+                        placeholder="Optional contact details..."
                         value={newCommitmentContact}
                         onChange={e => setNewCommitmentContact(e.target.value)}
                         className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -2157,10 +2250,10 @@ export const Todos: React.FC<TodosProps> = ({
                         onChange={e => setNewCommitmentUrgency(e.target.value as CommitmentUrgency)}
                         className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
                       >
-                        <option value="sacred">🔥 Sacred (Unbreakable)</option>
-                        <option value="high">⚡ High Stakes</option>
-                        <option value="standard">📜 Standard Commitment</option>
-                        <option value="flexible">🌱 Flexible Timeline</option>
+                        <option value="sacred">Sacred (Highest Integrity)</option>
+                        <option value="high">High</option>
+                        <option value="standard">Standard</option>
+                        <option value="flexible">Flexible</option>
                       </select>
                     </div>
 
@@ -2176,10 +2269,10 @@ export const Todos: React.FC<TodosProps> = ({
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700">Description / Scope & Deliverables</label>
+                    <label className="text-xs font-bold text-slate-700">Description & Deliverable Scope</label>
                     <textarea
                       rows={3}
-                      placeholder="Detailed expectations, scope, constraints, and delivery links..."
+                      placeholder="Context, expectations, delivery instructions, or links..."
                       value={newCommitmentDesc}
                       onChange={e => setNewCommitmentDesc(e.target.value)}
                       className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -2188,10 +2281,10 @@ export const Todos: React.FC<TodosProps> = ({
 
                   <button
                     type="submit"
-                    className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center justify-center gap-2"
+                    className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs transition shadow-md flex items-center justify-center gap-2"
                   >
                     <Award className="w-4 h-4" />
-                    Record in Pratigya Ledger
+                    Record in Ledger
                   </button>
                 </form>
               </div>
@@ -2212,14 +2305,14 @@ export const Todos: React.FC<TodosProps> = ({
 
                 <div className="space-y-4">
                   <p className="text-xs text-slate-600">
-                    You gave your word to <strong>{honoringCommitment.recipientName}</strong> on <em>"{honoringCommitment.title}"</em>.
+                    Word given to <strong>{honoringCommitment.recipientName}</strong> on <em>"{honoringCommitment.title}"</em>.
                   </p>
 
                   <div>
                     <label className="text-xs font-bold text-slate-700">Deliverable Evidence / Proof Notes (Optional)</label>
                     <textarea
                       rows={3}
-                      placeholder="e.g. Sent via email, delivered final PDF link, received confirmation..."
+                      placeholder="e.g. Sent report via email, shared link, delivered physical item..."
                       value={honorProofNotes}
                       onChange={e => setHonorProofNotes(e.target.value)}
                       className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -2230,7 +2323,7 @@ export const Todos: React.FC<TodosProps> = ({
                     onClick={handleExecuteHonor}
                     className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition shadow-md"
                   >
-                    Confirm Word Honored & Fulfilled
+                    Confirm Word Honored
                   </button>
                 </div>
               </div>
@@ -2242,9 +2335,9 @@ export const Todos: React.FC<TodosProps> = ({
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
               <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-5">
                 <div className="flex items-center justify-between border-b pb-3">
-                  <div className="flex items-center gap-2 font-black text-amber-900">
-                    <RefreshCw className="w-5 h-5 text-amber-600" />
-                    Renegotiate Commitment Deadline
+                  <div className="flex items-center gap-2 font-black text-slate-900">
+                    <RefreshCw className="w-5 h-5 text-blue-600" />
+                    Renegotiate Deadline
                   </div>
                   <button onClick={() => setRenegotiatingCommitment(null)} className="text-slate-400 hover:text-slate-700">✕</button>
                 </div>
@@ -2270,7 +2363,7 @@ export const Todos: React.FC<TodosProps> = ({
                     <label className="text-xs font-bold text-slate-700">Documented Reason / Justification *</label>
                     <textarea
                       rows={3}
-                      placeholder="Why is this deadline being renegotiated? Document the reason truthfully..."
+                      placeholder="Why is this deadline being renegotiated? Document transparently..."
                       value={renegotiateReason}
                       onChange={e => setRenegotiateReason(e.target.value)}
                       className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
@@ -2280,7 +2373,7 @@ export const Todos: React.FC<TodosProps> = ({
                   <button
                     onClick={handleExecuteRenegotiate}
                     disabled={!renegotiateNewDeadline || !renegotiateReason.trim()}
-                    className="w-full py-3.5 bg-amber-600 hover:bg-amber-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-md"
+                    className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition shadow-md"
                   >
                     Record Renegotiated Deadline
                   </button>

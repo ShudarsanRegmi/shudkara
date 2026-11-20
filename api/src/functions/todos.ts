@@ -16,15 +16,15 @@ function createEmailTransporter() {
   });
 }
 
-// ── Default Worksets Seeder ──────────────────────────────────────────────────
+// ── Default Worksets Seeder (Clean icon names, no emojis) ────────────────────
 const DEFAULT_WORKSETS = [
-  { id: 'work', title: 'Work & Career', icon: '💼', color: 'blue', order: 1, createdAt: new Date().toISOString() },
-  { id: 'research', title: 'Research & Deep Work', icon: '🔬', color: 'purple', order: 2, createdAt: new Date().toISOString() },
-  { id: 'shudkara', title: 'Shudkara Dev', icon: '🛠️', color: 'emerald', order: 3, createdAt: new Date().toISOString() },
-  { id: 'personal', title: 'Personal & Home', icon: '🏠', color: 'amber', order: 4, createdAt: new Date().toISOString() }
+  { id: 'work', title: 'Work & Projects', icon: 'Briefcase', color: 'blue', order: 1, createdAt: new Date().toISOString() },
+  { id: 'research', title: 'Research & Study', icon: 'BookOpen', color: 'purple', order: 2, createdAt: new Date().toISOString() },
+  { id: 'dev', title: 'Development', icon: 'Code', color: 'emerald', order: 3, createdAt: new Date().toISOString() },
+  { id: 'personal', title: 'Personal & Home', icon: 'Home', color: 'amber', order: 4, createdAt: new Date().toISOString() }
 ];
 
-// ── Email Alert Dispatcher ───────────────────────────────────────────────────
+// ── Email Alert Dispatcher (Harmonic with Shudkara Warm Palette) ──────────────
 export async function sendCommitmentEmailAlert(
   commitment: any,
   alertType: string,
@@ -36,7 +36,7 @@ export async function sendCommitmentEmailAlert(
   const diffMs = deadlineDate.getTime() - now.getTime();
   const isOverdue = diffMs <= 0;
 
-  // Format human-friendly time remaining
+  // Format human-friendly time remaining without emojis
   let timeRemainingStr = '';
   if (isOverdue) {
     const overdueMins = Math.abs(Math.floor(diffMs / (1000 * 60)));
@@ -60,30 +60,26 @@ export async function sendCommitmentEmailAlert(
     timeStyle: 'short'
   });
 
-  // Determine Email Subject
-  let subjectPrefix = '[PRATIGYA 📜]';
+  // Clean, professional subject line with zero emojis
+  let subjectPrefix = '[PRATIGYA]';
   if (alertType === 'breach' || isOverdue) {
-    subjectPrefix = '[BREACH ALERT ⚠️]';
+    subjectPrefix = '[PRATIGYA BREACH]';
   } else if (commitment.urgency === 'sacred') {
-    subjectPrefix = '[SACRED COVENANT ⚡]';
+    subjectPrefix = '[SACRED COVENANT]';
   } else if (alertType.includes('24h')) {
-    subjectPrefix = '[FINAL 24H ⏳]';
+    subjectPrefix = '[PRATIGYA 24H]';
   } else if (alertType.includes('6h')) {
-    subjectPrefix = '[URGENT 6H 🚨]';
+    subjectPrefix = '[PRATIGYA 6H]';
   } else if (alertType === 'test') {
-    subjectPrefix = '[TEST DISPATCH 🧪]';
+    subjectPrefix = '[PRATIGYA NOTICE]';
   }
 
   const subject = `${subjectPrefix} Word to ${commitment.recipientName}: "${commitment.title}"`;
 
-  const urgencyBadgeColor = 
-    commitment.urgency === 'sacred' ? '#dc2626' :
-    commitment.urgency === 'high' ? '#ea580c' :
-    commitment.urgency === 'standard' ? '#2563eb' : '#059669';
-
-  const statusPillBg = isOverdue ? '#fee2e2' : '#eff6ff';
-  const statusPillText = isOverdue ? '#991b1b' : '#1e40af';
-  const statusPillBorder = isOverdue ? '#fca5a5' : '#bfdbfe';
+  // Harmonic warm colors matching Shudkara's ivory/charcoal/amber palette
+  const statusBg = isOverdue ? '#fdf2f2' : '#f5eedf';
+  const statusText = isOverdue ? '#991b1b' : '#8c6e35';
+  const statusBorder = isOverdue ? '#f87171' : '#caa15d';
 
   const html = `
 <!DOCTYPE html>
@@ -91,40 +87,40 @@ export async function sendCommitmentEmailAlert(
 <head>
   <meta charset="utf-8">
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #0f172a; }
-    .card { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); }
-    .header { background: #090d16; padding: 28px 28px 24px; color: #ffffff; border-bottom: 3px solid ${urgencyBadgeColor}; }
-    .header-sub { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #94a3b8; margin-bottom: 6px; }
-    .header-motto { font-size: 12px; color: #cbd5e1; font-style: italic; margin-top: 4px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fdfbf7; margin: 0; padding: 24px; color: #1c1714; }
+    .card { max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e3dfda; box-shadow: 0 4px 20px -2px rgba(46, 39, 36, 0.06); }
+    .header { background: #1c1714; padding: 26px 28px 22px; color: #ffffff; border-bottom: 3px solid #caa15d; }
+    .header-sub { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #caa15d; margin-bottom: 4px; }
+    .header-motto { font-size: 13px; color: #d6d0c7; font-style: italic; margin-top: 6px; }
     .body { padding: 28px; }
-    .status-badge { display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 800; letter-spacing: 0.05em; background: ${statusPillBg}; color: ${statusPillText}; border: 1px solid ${statusPillBorder}; margin-bottom: 20px; }
-    .title { font-size: 20px; font-weight: 800; color: #0f172a; margin: 0 0 16px; line-height: 1.3; }
-    .info-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #f8fafc; border-radius: 12px; margin-bottom: 10px; border: 1px solid #f1f5f9; }
-    .info-label { font-size: 12px; font-weight: 600; color: #64748b; }
-    .info-val { font-size: 13px; font-weight: 700; color: #0f172a; }
-    .desc-box { background: #fafafa; border-left: 4px solid #3b82f6; padding: 14px 16px; border-radius: 0 12px 12px 0; margin: 18px 0; font-size: 13px; line-height: 1.5; color: #334155; }
-    .reneg-box { background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 12px 16px; margin: 16px 0; font-size: 12px; color: #92400e; }
-    .button { display: block; text-align: center; background: #0f172a; color: #ffffff !important; font-weight: 700; font-size: 14px; padding: 14px 24px; border-radius: 12px; text-decoration: none; margin-top: 24px; }
-    .footer { text-align: center; padding: 20px; font-size: 11px; color: #94a3b8; }
+    .status-badge { display: inline-block; padding: 6px 14px; border-radius: 9999px; font-size: 11px; font-weight: 800; letter-spacing: 0.05em; background: ${statusBg}; color: ${statusText}; border: 1px solid ${statusBorder}; margin-bottom: 20px; text-transform: uppercase; }
+    .title { font-size: 20px; font-weight: 800; color: #1c1714; margin: 0 0 16px; line-height: 1.35; }
+    .info-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: #fdfbf7; border-radius: 10px; margin-bottom: 8px; border: 1px solid #e3dfda; }
+    .info-label { font-size: 12px; font-weight: 600; color: #6e645c; }
+    .info-val { font-size: 13px; font-weight: 700; color: #1c1714; }
+    .desc-box { background: #fdfbf7; border-left: 3px solid #caa15d; padding: 12px 16px; border-radius: 0 10px 10px 0; margin: 16px 0; font-size: 13px; line-height: 1.5; color: #2e2724; }
+    .reneg-box { background: #f5eedf; border: 1px solid #ebddc2; border-radius: 10px; padding: 12px 16px; margin: 16px 0; font-size: 12px; color: #8c6e35; }
+    .button { display: block; text-align: center; background: #1c1714; color: #ffffff !important; font-weight: 700; font-size: 13px; padding: 13px 20px; border-radius: 10px; text-decoration: none; margin-top: 24px; }
+    .footer { text-align: center; padding: 18px; font-size: 11px; color: #8a8076; }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="header">
-      <div class="header-sub">Shudkara Pratigya • The Covenant Ledger</div>
-      <div style="font-size: 17px; font-weight: 800; color: #f8fafc;">प्रतिज्ञा सतर्कता सूचना (Commitment Alert)</div>
+      <div class="header-sub">Shudkara Pratigya &bull; Covenant Ledger</div>
+      <div style="font-size: 16px; font-weight: 800; color: #ffffff;">Commitment Alert</div>
       <div class="header-motto">"रघुकुल रीत सदा चली आई, प्राण जाई पर वचन न जाई"</div>
     </div>
     <div class="body">
       <div class="status-badge">
-        ${isOverdue ? '⚠️ ' : '⏳ '}${timeRemainingStr}
+        ${timeRemainingStr}
       </div>
 
       <h1 class="title">${commitment.title}</h1>
 
       <div class="info-row">
         <span class="info-label">Word Given To</span>
-        <span class="info-val" style="color: #0f172a; font-size: 14px;">${commitment.recipientName}${commitment.recipientContact ? ` (${commitment.recipientContact})` : ''}</span>
+        <span class="info-val">${commitment.recipientName}${commitment.recipientContact ? ` (${commitment.recipientContact})` : ''}</span>
       </div>
 
       <div class="info-row">
@@ -134,17 +130,17 @@ export async function sendCommitmentEmailAlert(
 
       <div class="info-row">
         <span class="info-label">Urgency Tier</span>
-        <span class="info-val" style="color: ${urgencyBadgeColor}; text-transform: uppercase;">● ${commitment.urgency}</span>
+        <span class="info-val" style="text-transform: uppercase;">${commitment.urgency}</span>
       </div>
 
       <div class="info-row">
-        <span class="info-label">Alert Trigger</span>
-        <span class="info-val" style="color: #64748b;">${extraReason || alertType}</span>
+        <span class="info-label">Notification Type</span>
+        <span class="info-val" style="color: #6e645c;">${extraReason || alertType}</span>
       </div>
 
       ${commitment.description ? `
       <div class="desc-box">
-        <strong>Context & Promise:</strong><br/>
+        <strong>Context & Scope:</strong><br/>
         ${commitment.description.replace(/\n/g, '<br/>')}
       </div>` : ''}
 
@@ -155,11 +151,11 @@ export async function sendCommitmentEmailAlert(
       </div>` : ''}
 
       <a href="https://regmishudarsan.com.np/?tab=todos&pillar=pratigya" class="button">
-        Open Commitment in Shudkara →
+        Open Commitment in Shudkara &rarr;
       </a>
     </div>
     <div class="footer">
-      Autonomous Sentinel • Shudkara Tasks & Covenant Engine • Dispatched to ${OWNER_EMAIL}
+      Autonomous Sentinel &bull; Shudkara Tasks & Covenant Engine &bull; Dispatched to ${OWNER_EMAIL}
     </div>
   </div>
 </body>
@@ -168,7 +164,7 @@ export async function sendCommitmentEmailAlert(
 
   try {
     await transporter.sendMail({
-      from: `"Shudkara Pratigya (प्रतिज्ञा)" <${OWNER_EMAIL}>`,
+      from: `"Shudkara Pratigya" <${OWNER_EMAIL}>`,
       to: OWNER_EMAIL,
       subject,
       html
@@ -316,15 +312,6 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
   const url = new URL(request.url);
   const pathParts = url.pathname.replace(/^\/api\/todos\/?/, '').split('/').filter(Boolean);
 
-  // pathParts can be:
-  // [] -> Base todos GET / POST
-  // ['privacy'] -> Toggle board privacy
-  // ['whiteboard', ...?] -> Whiteboard sticky CRUD
-  // ['worksets', ...?] -> Worksets CRUD
-  // ['tasks', ...?] -> Tasks CRUD
-  // ['commitments', ...?] -> Commitments CRUD
-  // [legacyId] -> Legacy PUT / DELETE /api/todos/:id
-
   const primarySection = pathParts[0] || '';
   const secondParam = pathParts[1] || '';
   const thirdParam = pathParts[2] || '';
@@ -451,7 +438,7 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
         const newWorkset = {
           id,
           title: title.trim(),
-          icon: icon || '📁',
+          icon: icon || 'Folder',
           color: color || 'blue',
           order: typeof order === 'number' ? order : Date.now(),
           createdAt: body.createdAt || new Date().toISOString()
@@ -476,6 +463,8 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
 
       if (method === 'DELETE' && secondParam) {
         await worksetsCol.deleteOne({ id: secondParam });
+        // Re-assign orphaned tasks to default 'work'
+        await tasksCol.updateMany({ worksetId: secondParam }, { $set: { worksetId: 'work' } });
         return { status: 200, jsonBody: { success: true } };
       }
     }
@@ -558,9 +547,8 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
           targetCommitment = await commitmentsCol.findOne({ id: body.id });
         }
         if (!targetCommitment) {
-          // Use sample commitment for test alert
           targetCommitment = {
-            id: 'test-commitment',
+            id: 'sample-commitment',
             title: 'Deliver Core Milestone Documentation & Architectural Audit',
             recipientName: 'Prof. Sharma (Advisor)',
             recipientContact: 'advisor@university.edu',
@@ -571,11 +559,11 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
           };
         }
 
-        const alertRes = await sendCommitmentEmailAlert(targetCommitment, 'test', 'Manual Test Dispatch via Shudkara UI');
+        const alertRes = await sendCommitmentEmailAlert(targetCommitment, 'test', 'Manual Alert Verification');
         if (!alertRes.success) {
-          return { status: 500, jsonBody: { error: 'Failed to send test email.', details: alertRes.error } };
+          return { status: 500, jsonBody: { error: 'Failed to send alert email.', details: alertRes.error } };
         }
-        return { status: 200, jsonBody: { success: true, message: `Test alert dispatched to ${OWNER_EMAIL}` } };
+        return { status: 200, jsonBody: { success: true, message: `Alert dispatched to ${OWNER_EMAIL}` } };
       }
 
       // 5.2 PUT /api/todos/commitments/:id/honor
@@ -692,7 +680,6 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
     // ─────────────────────────────────────────────────────────────────────────
     // ── 6. WHITEBOARD CRUD & LEGACY FALLBACK ─────────────────────────────────
     // ─────────────────────────────────────────────────────────────────────────
-    // Handles POST /api/todos/whiteboard and legacy POST /api/todos
     if (method === 'POST' && (primarySection === '' || primarySection === 'whiteboard')) {
       let body: any;
       try { body = await request.json(); } catch { return { status: 400, jsonBody: { error: 'Invalid JSON.' } }; }
@@ -717,7 +704,6 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
       return { status: 201, jsonBody: { success: true, todo: newTodo } };
     }
 
-    // Handles PUT /api/todos/whiteboard/:id and legacy PUT /api/todos/:id
     const targetWhiteboardId = primarySection === 'whiteboard' ? secondParam : primarySection;
     if (method === 'PUT' && targetWhiteboardId) {
       let body: any;
@@ -739,7 +725,6 @@ export async function todosHandler(request: HttpRequest, context: InvocationCont
       return { status: 200, jsonBody: { success: true } };
     }
 
-    // Handles DELETE /api/todos/whiteboard/:id and legacy DELETE /api/todos/:id
     if (method === 'DELETE') {
       const deleteId = primarySection === 'whiteboard' ? secondParam : primarySection;
       if (deleteId === 'completed') {
