@@ -42,7 +42,12 @@ import {
   Briefcase,
   Scale,
   GraduationCap,
-  HeartPulse
+  HeartPulse,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Minimize2,
+  Move
 } from 'lucide-react';
 
 import {
@@ -257,6 +262,496 @@ function createInitialManifest(): VaultManifest {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPONENT: High-Fidelity Zoom & Pan Interactive Document Viewer
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface ZoomPanImageViewerProps {
+  src?: string;
+  alt: string;
+  label?: string;
+  heightClass?: string;
+}
+
+const ZoomPanImageViewer: React.FC<ZoomPanImageViewerProps> = ({
+  src,
+  alt,
+  label,
+  heightClass = 'h-[360px] sm:h-[480px]'
+}) => {
+  const [zoom, setZoom] = useState<number>(1);
+  const [rotation, setRotation] = useState<number>(0);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const [startPoint, setStartPoint] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (zoom <= 1) return;
+    setIsPanning(true);
+    setStartPoint({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isPanning || zoom <= 1) return;
+    setPan({
+      x: e.clientX - startPoint.x,
+      y: e.clientY - startPoint.y
+    });
+  };
+
+  const handleMouseUp = () => setIsPanning(false);
+
+  // Touch handlers for mobile pan
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (zoom <= 1 || e.touches.length !== 1) return;
+    setIsPanning(true);
+    setStartPoint({ x: e.touches[0].clientX - pan.x, y: e.touches[0].clientY - pan.y });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isPanning || zoom <= 1) return;
+    setPan({
+      x: e.touches[0].clientX - startPoint.x,
+      y: e.touches[0].clientY - startPoint.y
+    });
+  };
+
+  const handleTouchEnd = () => setIsPanning(false);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    const delta = e.deltaY < 0 ? 0.25 : -0.25;
+    setZoom((prev) => Math.min(Math.max(1, +(prev + delta).toFixed(2)), 5));
+  };
+
+  const handleReset = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+    setRotation(0);
+  };
+
+  return (
+    <div
+      className={`relative w-full ${isFullscreen ? 'fixed inset-0 z-50 rounded-none' : `${heightClass} rounded-2xl`} bg-slate-900 border border-slate-800 overflow-hidden select-none transition-all duration-200 flex flex-col justify-between shadow-inner`}
+    >
+      {/* Top Floating Controls */}
+      <div className="absolute top-3 left-3 right-3 z-20 flex items-center justify-between gap-2 pointer-events-none">
+        {label ? (
+          <span className="px-3 py-1 rounded-xl bg-slate-900/85 backdrop-blur-md text-white text-xs font-bold border border-white/10 pointer-events-auto shadow-md">
+            {label}
+          </span>
+        ) : <div />}
+
+        <div className="flex items-center gap-1.5 bg-slate-900/85 backdrop-blur-md p-1.5 rounded-2xl border border-white/10 pointer-events-auto shadow-md">
+          <button
+            type="button"
+            onClick={() => setZoom((prev) => Math.min(prev + 0.25, 5))}
+            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+            title="Zoom In (or scroll wheel)"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <span className="text-[11px] font-mono text-slate-300 px-1 font-bold">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            onClick={() => setZoom((prev) => Math.max(prev - 0.25, 1))}
+            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+            title="Zoom Out"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setRotation((prev) => (prev + 90) % 360)}
+            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+            title="Rotate 90° Clockwise"
+          >
+            <RotateCw className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition cursor-pointer"
+            title={isFullscreen ? 'Exit Fullscreen' : 'Expand Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
+          {(zoom > 1 || rotation !== 0 || pan.x !== 0 || pan.y !== 0) && (
+            <button
+              type="button"
+              onClick={handleReset}
+              className="px-2 py-1 text-[11px] font-bold text-amber-400 hover:bg-white/10 rounded-xl transition cursor-pointer"
+              title="Reset Zoom, Pan & Rotation"
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Main Interactive Viewport */}
+      <div
+        ref={containerRef}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onWheel={handleWheel}
+        className={`w-full h-full flex items-center justify-center overflow-hidden ${
+          zoom > 1 ? (isPanning ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-default'
+        }`}
+      >
+        {src ? (
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+              transition: isPanning ? 'none' : 'transform 0.15s ease-out',
+              maxWidth: '92%',
+              maxHeight: '92%',
+              objectFit: 'contain'
+            }}
+            className="shadow-2xl rounded-lg pointer-events-none select-none"
+          />
+        ) : (
+          <div className="flex flex-col items-center justify-center text-slate-400 gap-2 p-8 text-center">
+            <RefreshCw className="w-8 h-8 animate-spin text-amber-500" />
+            <span className="text-xs font-semibold text-slate-300">Decrypting Sovereign Image Data...</span>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Panning Helper Hint */}
+      {zoom > 1 && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1 rounded-full bg-slate-900/85 backdrop-blur-md text-[10px] text-slate-300 border border-white/10 flex items-center gap-1.5 pointer-events-none shadow-md">
+          <Move className="w-3 h-3 text-amber-400" />
+          <span>Click &amp; drag or touch to pan across document</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COMPONENT: Biometric-Protected Download & Version Chooser Modal
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface DownloadModalProps {
+  doc: VaultDocument;
+  masterVaultKey: CryptoKey | null;
+  resolveMediaPreview: (m: DocumentMediaSlot, mvk: CryptoKey) => Promise<string | null>;
+  onClose: () => void;
+  onSuccessNotice: (msg: string) => void;
+}
+
+const DownloadModal: React.FC<DownloadModalProps> = ({
+  doc,
+  masterVaultKey,
+  resolveMediaPreview,
+  onClose,
+  onSuccessNotice
+}) => {
+  // Available format editions
+  const availableEditions = useMemo(() => {
+    const list = [
+      {
+        id: 'original',
+        label: doc.layoutMode === 'front_back_separate' ? 'Original (3D Flip Dual-Sided)' : 'Original Master Document',
+        formatType: doc.layoutMode,
+        fileFormat: doc.layoutMode === 'multi_page_dossier' ? 'pdf' : 'png',
+        media: doc.media
+      }
+    ];
+    if (doc.editions && doc.editions.length > 0) {
+      doc.editions.forEach((ed) => {
+        list.push({
+          id: ed.id,
+          label: ed.label,
+          formatType: ed.formatType,
+          fileFormat: ed.fileFormat,
+          media: ed.media
+        });
+      });
+    }
+    return list;
+  }, [doc]);
+
+  const [selectedEditionId, setSelectedEditionId] = useState<string>('original');
+  const activeEdition = availableEditions.find((e) => e.id === selectedEditionId) || availableEditions[0];
+
+  // Face / Side options for the chosen edition
+  const faceOptions = useMemo(() => {
+    const media = activeEdition.media;
+    const hasFront = media.some((m) => m.slot === 'front');
+    const hasBack = media.some((m) => m.slot === 'back');
+    const hasCombined = media.some((m) => m.slot === 'combined');
+    const pageCount = media.filter((m) => m.slot === 'page').length;
+
+    const options: { id: string; label: string; desc: string }[] = [];
+    if (hasFront && hasBack) {
+      options.push({ id: 'both', label: 'Both Sides (Front & Back)', desc: 'Downloads both front and back files sequentially' });
+      options.push({ id: 'front', label: 'Front Face Only', desc: 'Single file containing official front face' });
+      options.push({ id: 'back', label: 'Back Face Only', desc: 'Single file containing official back face' });
+    } else if (hasCombined) {
+      options.push({ id: 'combined', label: 'Stitched Combined Sheet', desc: 'Single unified front and back composite image' });
+    } else if (pageCount > 0) {
+      options.push({ id: 'all_pages', label: `All ${pageCount} Pages`, desc: 'Downloads all pages of this document dossier' });
+      media.forEach((m, idx) => {
+        options.push({ id: `page_${idx}`, label: `Page ${idx + 1}`, desc: m.label || `Page ${idx + 1}` });
+      });
+    } else {
+      media.forEach((m, idx) => {
+        options.push({ id: `slot_${idx}`, label: m.label || `Part ${idx + 1}`, desc: `Slot ${m.slot}` });
+      });
+    }
+    return options;
+  }, [activeEdition]);
+
+  const [selectedFace, setSelectedFace] = useState<string>('both');
+
+  // Keep selectedFace valid when edition switches
+  useEffect(() => {
+    if (faceOptions.length > 0 && !faceOptions.some((f) => f.id === selectedFace)) {
+      setSelectedFace(faceOptions[0].id);
+    }
+  }, [faceOptions, selectedFace]);
+
+  const [isDownloading, setIsDownloading] = useState<boolean>(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = async () => {
+    try {
+      setIsDownloading(true);
+      setDownloadError(null);
+
+      // 1. Biometric verification challenge
+      const verified = await authenticateWebAuthnPasskey();
+      if (!verified) {
+        throw new Error('Biometric verification cancelled or rejected.');
+      }
+
+      if (!masterVaultKey) {
+        throw new Error('Master Vault Key is not available. Please unlock your vault.');
+      }
+
+      // 2. Identify target slots to download
+      const media = activeEdition.media;
+      let targetSlots: DocumentMediaSlot[] = [];
+
+      if (selectedFace === 'both') {
+        const front = media.find((m) => m.slot === 'front');
+        const back = media.find((m) => m.slot === 'back');
+        if (front) targetSlots.push(front);
+        if (back) targetSlots.push(back);
+      } else if (selectedFace === 'front') {
+        const front = media.find((m) => m.slot === 'front');
+        if (front) targetSlots.push(front);
+      } else if (selectedFace === 'back') {
+        const back = media.find((m) => m.slot === 'back');
+        if (back) targetSlots.push(back);
+      } else if (selectedFace === 'combined') {
+        const comb = media.find((m) => m.slot === 'combined');
+        if (comb) targetSlots.push(comb);
+      } else if (selectedFace === 'all_pages') {
+        targetSlots = [...media];
+      } else if (selectedFace.startsWith('page_')) {
+        const idx = parseInt(selectedFace.replace('page_', ''), 10);
+        if (media[idx]) targetSlots.push(media[idx]);
+      } else if (selectedFace.startsWith('slot_')) {
+        const idx = parseInt(selectedFace.replace('slot_', ''), 10);
+        if (media[idx]) targetSlots.push(media[idx]);
+      }
+
+      if (targetSlots.length === 0) {
+        targetSlots = media.slice(0, 1);
+      }
+
+      // 3. Resolve previews (decrypting if needed) and trigger sequential downloads
+      for (let i = 0; i < targetSlots.length; i++) {
+        const slot = targetSlots[i];
+        let url = slot.previewUrl;
+        if (!url) {
+          url = (await resolveMediaPreview(slot, masterVaultKey)) || undefined;
+        }
+
+        if (!url) {
+          throw new Error(`Failed to decrypt image data for ${slot.label || slot.slot}`);
+        }
+
+        const a = document.createElement('a');
+        a.href = url;
+        const safeTitle = doc.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeEdition = activeEdition.label.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeSlot = slot.slot;
+        const ext = activeEdition.fileFormat || 'jpg';
+        a.download = `${safeTitle}_${safeEdition}_${safeSlot}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        // Slight delay between multiple file downloads
+        if (targetSlots.length > 1 && i < targetSlots.length - 1) {
+          await new Promise((r) => setTimeout(r, 400));
+        }
+      }
+
+      onSuccessNotice(`Biometric verified! Downloaded ${targetSlots.length} file(s) for "${doc.title}".`);
+      onClose();
+    } catch (err: any) {
+      setIsDownloading(false);
+      if (err.name === 'NotAllowedError') {
+        setDownloadError('Biometric verification cancelled.');
+      } else {
+        setDownloadError(err.message || 'Download failed.');
+      }
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col animate-in zoom-in-95 duration-150">
+        {/* Header */}
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-2xl bg-amber-50 text-amber-700 border border-amber-200">
+              <Download className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-slate-900 serif-heading">Download Decrypted Document</h3>
+              <p className="text-xs text-slate-500 font-mono mt-0.5">{doc.title} • No: {doc.documentNumber}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl transition cursor-pointer">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form Body */}
+        <div className="p-5 space-y-4 text-left overflow-y-auto max-h-[70vh]">
+          {downloadError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{downloadError}</span>
+            </div>
+          )}
+
+          {/* 1. Format / Edition Selection */}
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+              1. Select Format / Edition
+            </label>
+            <div className="grid grid-cols-1 gap-2">
+              {availableEditions.map((ed) => {
+                const isSelected = selectedEditionId === ed.id;
+                return (
+                  <button
+                    key={ed.id}
+                    type="button"
+                    onClick={() => setSelectedEditionId(ed.id)}
+                    className={`p-3 rounded-2xl border text-left transition flex items-center justify-between cursor-pointer ${
+                      isSelected
+                        ? 'bg-amber-50/80 border-amber-400 ring-2 ring-amber-200'
+                        : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <div className={`p-1.5 rounded-xl ${isSelected ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                        <Layers className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">{ed.label}</span>
+                        <span className="text-[10px] text-slate-500 uppercase">{ed.fileFormat} • {ed.media.length} media item(s)</span>
+                      </div>
+                    </div>
+                    {isSelected && <Check className="w-4 h-4 text-amber-600" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 2. Side / Face Selection */}
+          {faceOptions.length > 0 && (
+            <div className="space-y-1.5 pt-2">
+              <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                2. Select Face / Part
+              </label>
+              <div className="grid grid-cols-1 gap-2">
+                {faceOptions.map((opt) => {
+                  const isSelected = selectedFace === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSelectedFace(opt.id)}
+                      className={`p-3 rounded-2xl border text-left transition flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-50/80 border-emerald-400 ring-2 ring-emerald-200'
+                          : 'bg-slate-50 border-slate-200 hover:bg-slate-100/70'
+                      }`}
+                    >
+                      <div>
+                        <span className="text-xs font-bold text-slate-900 block">{opt.label}</span>
+                        <span className="text-[10px] text-slate-500">{opt.desc}</span>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-emerald-600" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Zero-Knowledge Security Notice */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center gap-2.5 text-[11px] text-slate-600">
+            <Fingerprint className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Passkey challenge verifies sovereign ownership before plaintext binary download.</span>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isDownloading}
+            className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition cursor-pointer"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer"
+          >
+            {isDownloading ? (
+              <>
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                <span>Verifying Biometric &amp; Decrypting...</span>
+              </>
+            ) : (
+              <>
+                <Fingerprint className="w-4 h-4" />
+                <span>Verify Biometric &amp; Download</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const effectiveAuthToken = authToken || (typeof window !== 'undefined' ? localStorage.getItem('shudkara_auth_token') : null);
 
@@ -275,7 +770,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
   const [editingPerson, setEditingPerson] = useState<Person | null>(null);
   const [editingDoc, setEditingDoc] = useState<VaultDocument | null>(null);
   const [isAddEditionDoc, setIsAddEditionDoc] = useState<VaultDocument | null>(null);
-  const [biometricDownloadingDocId, setBiometricDownloadingDocId] = useState<string | null>(null);
   const [mediaVersion, setMediaVersion] = useState<number>(0);
 
   // ── 3D Card Flip States (keyed by documentId) ────────────────────────────────
@@ -283,9 +777,11 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
   // ── Modals & Drawers ──────────────────────────────────────────────────────────
   const [viewingDoc, setViewingDoc] = useState<VaultDocument | null>(null);
+  const [viewFaceTab, setViewFaceTab] = useState<'both' | 'front' | 'back' | 'flip'>('both');
   const [dossierPage, setDossierPage] = useState<number>(1);
   const [activeVersionId, setActiveVersionId] = useState<string | null>(null);
   const [watermarkDoc, setWatermarkDoc] = useState<VaultDocument | null>(null);
+  const [downloadingDoc, setDownloadingDoc] = useState<VaultDocument | null>(null);
   const [isAddDocOpen, setIsAddDocOpen] = useState<boolean>(false);
   const [isAddPersonOpen, setIsAddPersonOpen] = useState<boolean>(false);
   const [isFamilySummaryOpen, setIsFamilySummaryOpen] = useState<boolean>(false);
@@ -381,6 +877,7 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
     setMasterVaultKey(null);
     setViewingDoc(null);
     setWatermarkDoc(null);
+    setDownloadingDoc(null);
     setIsAddDocOpen(false);
     setIsAddPersonOpen(false);
     setIsFamilySummaryOpen(false);
@@ -852,57 +1349,6 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       setSelectedCountry(null);
     }
     await syncManifestToCloud(updatedManifest, masterVaultKey);
-  };
-
-  // ── Biometric-Protected Document Download Handler ───────────────────────────
-  const handleDownloadWithBiometric = async (doc: VaultDocument, edition?: DocumentEdition) => {
-    try {
-      setBiometricDownloadingDocId(doc.id);
-      // Challenge biometric sensor (passkey / fingerprint / face / Windows Hello)
-      const verified = await authenticateWebAuthnPasskey();
-      if (!verified) {
-        throw new Error('Biometric verification cancelled or rejected.');
-      }
-
-      const mediaList = edition?.media || doc.media;
-      const targetMedia = mediaList[0];
-      let blobUrl: string;
-
-      if (targetMedia?.previewUrl) {
-        blobUrl = targetMedia.previewUrl;
-      } else {
-        const dummyContent = `Abhyantara Kosha Decrypted Document Export\n` +
-          `Title: ${doc.title}\n` +
-          `Document Number: ${doc.documentNumber}\n` +
-          `Issuing Country: ${doc.issuingCountry || 'N/A'}\n` +
-          `Format Edition: ${edition?.label || 'Original'}\n` +
-          `Status: ${doc.status}\n` +
-          `Decrypted at: ${new Date().toISOString()}\n`;
-        const blob = new Blob([dummyContent], { type: 'text/plain;charset=utf-8' });
-        blobUrl = URL.createObjectURL(blob);
-      }
-
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      const cleanTitle = doc.title.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const cleanEdition = edition ? `_${edition.label.replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
-      const ext = edition?.fileFormat || (doc.layoutMode === 'multi_page_dossier' ? 'pdf' : 'png');
-      a.download = `${cleanTitle}${cleanEdition}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-
-      setPasskeyNotice(`Biometric verified! Decrypted file "${doc.title}" downloaded securely.`);
-      setTimeout(() => setPasskeyNotice(null), 4000);
-    } catch (err: any) {
-      if (err.name === 'NotAllowedError') {
-        alert('Biometric challenge was cancelled. Plaintext download aborted for security.');
-      } else {
-        alert(`Biometric authorization required to download decrypted file: ${err.message}`);
-      }
-    } finally {
-      setBiometricDownloadingDocId(null);
-    }
   };
 
   // ── Update Document Details Handler ─────────────────────────────────────────
@@ -2104,8 +2550,9 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                 const isFlipped = !!flippedCards[doc.id];
 
                 // Resolve active format edition for this card
-                const activeEditionId = selectedEditionByDoc[doc.id] || doc.editions?.find((e) => e.isPrimary)?.id || doc.editions?.[0]?.id;
-                const activeEdition = doc.editions?.find((e) => e.id === activeEditionId);
+                const activeEditionId = selectedEditionByDoc[doc.id] ?? 'original';
+                const isOriginalActive = activeEditionId === 'original' || (!doc.editions || doc.editions.length === 0);
+                const activeEdition = !isOriginalActive ? doc.editions?.find((e) => e.id === activeEditionId) : undefined;
                 const currentLayoutMode = activeEdition ? activeEdition.formatType : doc.layoutMode;
                 const currentMedia = activeEdition ? activeEdition.media : doc.media;
                 const frontMedia = currentMedia.find((m) => m.slot === 'front' || m.slot === 'combined' || m.slot === 'page');
@@ -2136,16 +2583,35 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                         <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">
                           Format:
                         </span>
+                        {/* Original Card button */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedEditionByDoc((prev) => ({ ...prev, [doc.id]: 'original' }));
+                          }}
+                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer ${
+                            isOriginalActive
+                              ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs'
+                              : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          <Layers className="w-2.5 h-2.5 text-amber-600" />
+                          <span>Original ({doc.layoutMode === 'front_back_separate' ? '3D Card' : 'Master'})</span>
+                        </button>
+
+                        {/* Custom editions */}
                         {doc.editions.map((ed) => {
-                          const isEdActive = activeEdition?.id === ed.id;
+                          const isEdActive = !isOriginalActive && activeEdition?.id === ed.id;
                           return (
                             <button
                               key={ed.id}
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedEditionByDoc((prev) => ({ ...prev, [doc.id]: ed.id }));
                               }}
-                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0 ${
+                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition flex items-center gap-1 shrink-0 cursor-pointer ${
                                 isEdActive
                                   ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs'
                                   : 'bg-white hover:bg-slate-100 text-slate-600 border border-slate-200'
@@ -2485,19 +2951,12 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                       <div className="flex items-center gap-1">
                         {/* Biometric-Protected Download Button */}
                         <button
-                          onClick={() => handleDownloadWithBiometric(doc, activeEdition)}
-                          disabled={biometricDownloadingDocId === doc.id}
-                          className="p-2 bg-white hover:bg-amber-50 text-amber-900 border border-slate-200 hover:border-amber-200 rounded-xl transition shadow-2xs hover:shadow-xs flex items-center gap-1"
-                          title="Download Decrypted File (Biometric Passkey Required)"
+                          onClick={() => setDownloadingDoc(doc)}
+                          className="p-2 bg-white hover:bg-amber-50 text-amber-900 border border-slate-200 hover:border-amber-200 rounded-xl transition shadow-2xs hover:shadow-xs flex items-center gap-1 cursor-pointer"
+                          title="Download Decrypted File (Choose Version & Biometric Verification)"
                         >
-                          {biometricDownloadingDocId === doc.id ? (
-                            <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
-                          ) : (
-                            <>
-                              <Download className="w-4 h-4 text-amber-700" />
-                              <Fingerprint className="w-3.5 h-3.5 text-amber-600" />
-                            </>
-                          )}
+                          <Download className="w-4 h-4 text-amber-700" />
+                          <Fingerprint className="w-3.5 h-3.5 text-amber-600" />
                         </button>
 
                         {/* Delete Document */}
@@ -2547,11 +3006,8 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
               <div className="flex items-center gap-2">
                 {/* Biometric-Protected Download Button inside Modal */}
                 <button
-                  onClick={() => {
-                    const activeEd = viewingDoc.editions?.find((e) => e.id === (selectedEditionByDoc[viewingDoc.id] || viewingDoc.editions?.[0]?.id));
-                    handleDownloadWithBiometric(viewingDoc, activeEd);
-                  }}
-                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                  onClick={() => setDownloadingDoc(viewingDoc)}
+                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
                   title="Biometric Passkey Challenge on Download"
                 >
                   <Fingerprint className="w-3.5 h-3.5 text-amber-700" />
@@ -2590,32 +3046,45 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                   <Layers className="w-3.5 h-3.5 text-amber-700" />
                   Formats / Editions:
                 </span>
-                {viewingDoc.editions && viewingDoc.editions.length > 0 ? (
-                  viewingDoc.editions.map((ed) => {
-                    const isEdActive = (selectedEditionByDoc[viewingDoc.id] || viewingDoc.editions?.[0]?.id) === ed.id;
-                    return (
-                      <button
-                        key={ed.id}
-                        onClick={() => setSelectedEditionByDoc((prev) => ({ ...prev, [viewingDoc.id]: ed.id }))}
-                        className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-                          isEdActive
-                            ? 'bg-amber-600 text-white shadow-2xs'
-                            : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
-                        }`}
-                      >
-                        {ed.fileFormat === 'pdf' ? <FileText className="w-3 h-3" /> : <Layers className="w-3 h-3" />}
-                        <span>{ed.label}</span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <span className="text-xs text-slate-400 italic">Single Master Format</span>
-                )}
+                {/* 1. Original Option */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedEditionByDoc((prev) => ({ ...prev, [viewingDoc.id]: 'original' }))}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                    (selectedEditionByDoc[viewingDoc.id] ?? 'original') === 'original'
+                      ? 'bg-amber-600 text-white shadow-2xs'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                  }`}
+                >
+                  <Layers className="w-3 h-3" />
+                  <span>Original ({viewingDoc.layoutMode === 'front_back_separate' ? '3D Card' : 'Master'})</span>
+                </button>
+
+                {/* 2. Custom Editions */}
+                {viewingDoc.editions?.map((ed) => {
+                  const isEdActive = selectedEditionByDoc[viewingDoc.id] === ed.id;
+                  return (
+                    <button
+                      key={ed.id}
+                      type="button"
+                      onClick={() => setSelectedEditionByDoc((prev) => ({ ...prev, [viewingDoc.id]: ed.id }))}
+                      className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        isEdActive
+                          ? 'bg-amber-600 text-white shadow-2xs'
+                          : 'bg-white hover:bg-slate-100 text-slate-700 border border-slate-200'
+                      }`}
+                    >
+                      {ed.fileFormat === 'pdf' ? <FileText className="w-3 h-3 text-red-500" /> : <Layers className="w-3 h-3" />}
+                      <span>{ed.label}</span>
+                    </button>
+                  );
+                })}
               </div>
 
               <button
+                type="button"
                 onClick={() => setIsAddEditionDoc(viewingDoc)}
-                className="text-xs font-bold text-amber-800 hover:text-amber-900 bg-amber-100/60 hover:bg-amber-100 border border-amber-300/80 px-2.5 py-1 rounded-xl transition flex items-center gap-1 shrink-0"
+                className="text-xs font-bold text-amber-800 hover:text-amber-900 bg-amber-100/60 hover:bg-amber-100 border border-amber-300/80 px-2.5 py-1 rounded-xl transition flex items-center gap-1 shrink-0 cursor-pointer"
               >
                 <Plus className="w-3 h-3" />
                 Add Format / Edition
@@ -2757,88 +3226,226 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
                 </div>
               )}
 
-              {/* Media Preview Viewport */}
-              <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 flex flex-col items-center justify-center space-y-3">
-                {viewingDoc.layoutMode === 'multi_page_dossier' ? (
-                  // Multi-page dossier controls & view
-                  <div className="w-full space-y-3">
-                    <div className="flex items-center justify-between bg-white px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold">
-                      <span className="text-slate-600">
-                        Page {dossierPage} of {viewingDoc.media.length}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          disabled={dossierPage <= 1}
-                          onClick={() => setDossierPage((p) => Math.max(1, p - 1))}
-                          className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-40 text-slate-700"
-                        >
-                          <ChevronLeft className="w-4 h-4" />
-                        </button>
-                        <button
-                          disabled={dossierPage >= viewingDoc.media.length}
-                          onClick={() => setDossierPage((p) => Math.min(viewingDoc.media.length, p + 1))}
-                          className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-40 text-slate-700"
-                        >
-                          <ChevronRight className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
+              {/* Media Preview Viewport with Zoom & Pan and Side Switcher */}
+              {(() => {
+                const activeEditionId = selectedEditionByDoc[viewingDoc.id] ?? 'original';
+                const isOrigActive = activeEditionId === 'original' || (!viewingDoc.editions || viewingDoc.editions.length === 0);
+                const activeEd = !isOrigActive ? viewingDoc.editions?.find((e) => e.id === activeEditionId) : undefined;
+                const activeMedia = activeEd ? activeEd.media : viewingDoc.media;
+                const activeLayout = activeEd ? activeEd.formatType : viewingDoc.layoutMode;
+                const frontSlot = activeMedia.find((m) => m.slot === 'front');
+                const backSlot = activeMedia.find((m) => m.slot === 'back');
+                const combinedSlot = activeMedia.find((m) => m.slot === 'combined');
+                const hasDualSides = !!frontSlot && !!backSlot;
 
-                    <div className="max-h-[500px] overflow-auto flex items-center justify-center bg-white rounded-xl border border-slate-200 p-2">
-                      {viewingDoc.media[dossierPage - 1]?.previewUrl ? (
-                        <img
-                          src={viewingDoc.media[dossierPage - 1]?.previewUrl}
-                          alt={`Page ${dossierPage}`}
-                          className="max-h-[460px] object-contain shadow-xs"
-                        />
-                      ) : (
-                        <div className="p-12 text-center text-slate-400 text-xs">
-                          <FileText className="w-12 h-12 text-slate-300 mx-auto mb-2" />
-                          <span>Dossier Page {dossierPage} (Ciphertext Blob)</span>
+                return (
+                  <div className="space-y-3">
+                    {/* Side Switcher Tabs for Dual-Sided Cards */}
+                    {hasDualSides && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setViewFaceTab('both')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                              viewFaceTab === 'both' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Both Sides
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewFaceTab('front')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                              viewFaceTab === 'front' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Front Face Only
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewFaceTab('back')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                              viewFaceTab === 'back' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Back Face Only
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setViewFaceTab('flip')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                              viewFaceTab === 'flip' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            <RotateCw className="w-3 h-3" />
+                            <span>3D Flip Card</span>
+                          </button>
                         </div>
+                        <span className="text-[10px] text-slate-400 font-medium px-2">
+                          Interactive Zoom &amp; Pan enabled
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Interactive Media Viewport */}
+                    <div className="bg-slate-50 rounded-2xl border border-slate-200 p-2 sm:p-4">
+                      {activeLayout === 'multi_page_dossier' ? (
+                        // Multi-page dossier controls & interactive viewer
+                        <div className="w-full space-y-3">
+                          <div className="flex items-center justify-between bg-white px-4 py-2 rounded-xl border border-slate-200 text-xs font-bold">
+                            <span className="text-slate-700">
+                              Page {dossierPage} of {activeMedia.length}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                disabled={dossierPage <= 1}
+                                onClick={() => setDossierPage((p) => Math.max(1, p - 1))}
+                                className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-40 text-slate-700 cursor-pointer"
+                              >
+                                <ChevronLeft className="w-4 h-4" />
+                              </button>
+                              <button
+                                disabled={dossierPage >= activeMedia.length}
+                                onClick={() => setDossierPage((p) => Math.min(activeMedia.length, p + 1))}
+                                className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-40 text-slate-700 cursor-pointer"
+                              >
+                                <ChevronRight className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <ZoomPanImageViewer
+                            src={activeMedia[dossierPage - 1]?.previewUrl}
+                            alt={`Page ${dossierPage}`}
+                            label={`Page ${dossierPage}`}
+                            heightClass="h-[440px] sm:h-[520px]"
+                          />
+
+                          {/* Thumbnail strip */}
+                          <div className="flex items-center gap-2 overflow-x-auto p-1">
+                            {activeMedia.map((page, idx) => (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => setDossierPage(idx + 1)}
+                                className={`w-16 h-20 rounded-lg border-2 overflow-hidden shrink-0 transition flex items-center justify-center bg-white cursor-pointer ${
+                                  dossierPage === idx + 1 ? 'border-amber-600 ring-2 ring-amber-200' : 'border-slate-200 opacity-60 hover:opacity-100'
+                                }`}
+                              >
+                                {page.previewUrl ? (
+                                  <img src={page.previewUrl} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
+                                ) : (
+                                  <span className="text-[10px] font-bold text-slate-400">P.{idx + 1}</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : hasDualSides ? (
+                        viewFaceTab === 'flip' ? (
+                          // 3D Flip Card View inside Modal
+                          <div
+                            className="w-full max-w-md mx-auto relative cursor-pointer my-4"
+                            style={{ perspective: '1000px', height: '260px' }}
+                            onClick={(e) => toggleCardFlip(viewingDoc.id, e)}
+                          >
+                            <div
+                              className="w-full h-full relative transition-transform duration-700 rounded-2xl"
+                              style={{
+                                transformStyle: 'preserve-3d',
+                                transform: flippedCards[viewingDoc.id] ? 'rotateY(180deg)' : 'rotateY(0deg)'
+                              }}
+                            >
+                              {/* Front Face */}
+                              <div
+                                className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-md bg-white flex flex-col items-center justify-center"
+                                style={{ backfaceVisibility: 'hidden', WebkitBackfaceVisibility: 'hidden' }}
+                              >
+                                {frontSlot?.previewUrl ? (
+                                  <img src={frontSlot.previewUrl} alt="Front Face" className="w-full h-full object-contain" />
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center text-slate-400 text-xs">
+                                    <RefreshCw className="w-6 h-6 animate-spin text-amber-600 mb-1" />
+                                    <span>Decrypting Front Face...</span>
+                                  </div>
+                                )}
+                                <div className="absolute bottom-2 right-2">
+                                  <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1 font-bold">
+                                    <RotateCw className="w-2.5 h-2.5" /> Tap to Flip to Back
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Back Face */}
+                              <div
+                                className="absolute inset-0 w-full h-full rounded-2xl overflow-hidden border border-slate-200 shadow-md bg-white flex flex-col items-center justify-center"
+                                style={{
+                                  backfaceVisibility: 'hidden',
+                                  WebkitBackfaceVisibility: 'hidden',
+                                  transform: 'rotateY(180deg)'
+                                }}
+                              >
+                                {backSlot?.previewUrl ? (
+                                  <img src={backSlot.previewUrl} alt="Back Face" className="w-full h-full object-contain" />
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center text-slate-400 text-xs">
+                                    <RefreshCw className="w-6 h-6 animate-spin text-amber-600 mb-1" />
+                                    <span>Decrypting Back Face...</span>
+                                  </div>
+                                )}
+                                <div className="absolute bottom-2 right-2">
+                                  <span className="bg-slate-900/80 text-white text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1 font-bold">
+                                    <RotateCw className="w-2.5 h-2.5" /> Tap to Flip to Front
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : viewFaceTab === 'front' ? (
+                          <ZoomPanImageViewer
+                            src={frontSlot?.previewUrl}
+                            alt={frontSlot?.label || "Front Face"}
+                            label="Front Face"
+                            heightClass="h-[400px] sm:h-[500px]"
+                          />
+                        ) : viewFaceTab === 'back' ? (
+                          <ZoomPanImageViewer
+                            src={backSlot?.previewUrl}
+                            alt={backSlot?.label || "Back Face"}
+                            label="Back Face"
+                            heightClass="h-[400px] sm:h-[500px]"
+                          />
+                        ) : (
+                          // Both sides view
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                            <ZoomPanImageViewer
+                              src={frontSlot?.previewUrl}
+                              alt={frontSlot?.label || "Front Face"}
+                              label="Front Face"
+                              heightClass="h-[340px] sm:h-[440px]"
+                            />
+                            <ZoomPanImageViewer
+                              src={backSlot?.previewUrl}
+                              alt={backSlot?.label || "Back Face"}
+                              label="Back Face"
+                              heightClass="h-[340px] sm:h-[440px]"
+                            />
+                          </div>
+                        )
+                      ) : (
+                        // Single Face / Stitched Combined View
+                        <ZoomPanImageViewer
+                          src={activeMedia[0]?.previewUrl}
+                          alt={activeMedia[0]?.label || viewingDoc.title}
+                          label={activeMedia[0]?.label || (combinedSlot ? 'Stitched Combined Sheet' : 'Document Face')}
+                          heightClass="h-[420px] sm:h-[520px]"
+                        />
                       )}
                     </div>
-
-                    {/* Thumbnail strip */}
-                    <div className="flex items-center gap-2 overflow-x-auto p-1">
-                      {viewingDoc.media.map((page, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => setDossierPage(idx + 1)}
-                          className={`w-16 h-20 rounded-lg border-2 overflow-hidden shrink-0 transition flex items-center justify-center bg-white ${
-                            dossierPage === idx + 1 ? 'border-blue-600 ring-2 ring-blue-200' : 'border-slate-200 opacity-60 hover:opacity-100'
-                          }`}
-                        >
-                          {page.previewUrl ? (
-                            <img src={page.previewUrl} alt={`Page ${idx + 1}`} className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[10px] font-bold text-slate-400">P.{idx + 1}</span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
                   </div>
-                ) : (
-                  // Dual or Single Card Display
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-                    {viewingDoc.media.map((m, idx) => (
-                      <div key={idx} className="bg-white rounded-2xl border border-slate-200 p-3 space-y-2 shadow-2xs">
-                        <span className="text-[11px] font-bold text-slate-600">{m.label}</span>
-                        <div className="rounded-xl overflow-hidden border border-slate-100 min-h-[160px] flex items-center justify-center bg-slate-50">
-                          {m.previewUrl ? (
-                            <img src={m.previewUrl} alt={m.label} className="w-full h-auto object-cover" />
-                          ) : (
-                            <div className="p-8 text-center text-slate-400 text-xs">
-                              <FileText className="w-8 h-8 text-slate-300 mx-auto mb-1" />
-                              <span>{m.label} (Encrypted)</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                );
+              })()}
 
               {/* Section 3.4: Linked & Related Document Clusters */}
               {viewingDoc.relatedDocuments && viewingDoc.relatedDocuments.length > 0 && (
@@ -2879,7 +3486,25 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
       {watermarkDoc && (
         <WatermarkRedactModal
           doc={watermarkDoc}
+          masterVaultKey={masterVaultKey}
+          resolveMediaPreview={resolveMediaPreview}
           onClose={() => setWatermarkDoc(null)}
+        />
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════════
+          2.A BIOMETRIC-PROTECTED DOCUMENT DOWNLOAD MODAL
+         ════════════════════════════════════════════════════════════════════════ */}
+      {downloadingDoc && (
+        <DownloadModal
+          doc={downloadingDoc}
+          masterVaultKey={masterVaultKey}
+          resolveMediaPreview={resolveMediaPreview}
+          onClose={() => setDownloadingDoc(null)}
+          onSuccessNotice={(msg) => {
+            setPasskeyNotice(msg);
+            setTimeout(() => setPasskeyNotice(null), 4000);
+          }}
         />
       )}
 
@@ -2984,6 +3609,8 @@ export const DocumentVault: React.FC<DocumentVaultProps> = ({ authToken }) => {
 
 interface WatermarkRedactModalProps {
   doc: VaultDocument;
+  masterVaultKey: CryptoKey | null;
+  resolveMediaPreview: (m: DocumentMediaSlot, mvk: CryptoKey) => Promise<string | null>;
   onClose: () => void;
 }
 
@@ -2992,43 +3619,91 @@ interface WatermarkTargetItem {
   editionLabel: string;
   slot: string;
   slotLabel: string;
-  previewUrl?: string;
+  mediaSlot: DocumentMediaSlot;
 }
 
-const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClose }) => {
+const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({
+  doc,
+  masterVaultKey,
+  resolveMediaPreview,
+  onClose
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Build list of all selectable edition faces across the document
   const targets: WatermarkTargetItem[] = useMemo(() => {
     const list: WatermarkTargetItem[] = [];
-    if (doc.editions && doc.editions.length > 0) {
-      doc.editions.forEach((ed) => {
-        ed.media.forEach((m, idx) => {
-          list.push({
-            id: `${ed.id}_${m.slot}_${idx}`,
-            editionLabel: ed.label,
-            slot: m.slot,
-            slotLabel: m.label || (m.slot === 'front' ? 'Front Face' : m.slot === 'back' ? 'Back Face' : m.slot === 'combined' ? 'Stitched Sheet' : `Page ${m.pageNumber || idx + 1}`),
-            previewUrl: m.previewUrl
-          });
-        });
+
+    // 1. Original document media slots
+    doc.media.forEach((m, idx) => {
+      const slotName =
+        m.slot === 'front'
+          ? 'Front Face'
+          : m.slot === 'back'
+          ? 'Back Face'
+          : m.slot === 'combined'
+          ? 'Stitched Sheet'
+          : `Page ${m.pageNumber || idx + 1}`;
+      list.push({
+        id: `orig_${m.slot}_${idx}`,
+        editionLabel: doc.layoutMode === 'front_back_separate' ? 'Original Card (3D Flip)' : 'Original Master',
+        slot: m.slot,
+        slotLabel: m.label || slotName,
+        mediaSlot: m
       });
-    } else {
-      doc.media.forEach((m, idx) => {
+    });
+
+    // 2. All format editions
+    doc.editions?.forEach((ed) => {
+      ed.media.forEach((m, idx) => {
+        const slotName =
+          m.slot === 'front'
+            ? 'Front Face'
+            : m.slot === 'back'
+            ? 'Back Face'
+            : m.slot === 'combined'
+            ? 'Stitched Sheet'
+            : `Page ${m.pageNumber || idx + 1}`;
         list.push({
-          id: `base_${m.slot}_${idx}`,
-          editionLabel: doc.layoutMode === 'front_back_separate' ? '3D Flip Card (Primary)' : 'Master Document',
+          id: `${ed.id}_${m.slot}_${idx}`,
+          editionLabel: ed.label,
           slot: m.slot,
-          slotLabel: m.label || (m.slot === 'front' ? 'Front Face' : m.slot === 'back' ? 'Back Face' : m.slot === 'combined' ? 'Stitched Sheet' : `Page ${m.pageNumber || idx + 1}`),
-          previewUrl: m.previewUrl
+          slotLabel: m.label || slotName,
+          mediaSlot: m
         });
       });
-    }
+    });
+
     return list;
   }, [doc]);
 
   const [selectedTargetIdx, setSelectedTargetIdx] = useState<number>(0);
   const activeTarget = targets[selectedTargetIdx] || targets[0];
+  const [activePreviewUrl, setActivePreviewUrl] = useState<string | null>(null);
+  const [isDecryptingImage, setIsDecryptingImage] = useState<boolean>(false);
+
+  // Asynchronously resolve active target's preview URL if missing in RAM
+  useEffect(() => {
+    if (!activeTarget) return;
+    if (activeTarget.mediaSlot.previewUrl) {
+      setActivePreviewUrl(activeTarget.mediaSlot.previewUrl);
+      setIsDecryptingImage(false);
+      return;
+    }
+
+    if (masterVaultKey) {
+      setIsDecryptingImage(true);
+      resolveMediaPreview(activeTarget.mediaSlot, masterVaultKey)
+        .then((url) => {
+          setActivePreviewUrl(url);
+          setIsDecryptingImage(false);
+        })
+        .catch((err) => {
+          console.warn('[Watermark] Failed to decrypt target preview:', err);
+          setIsDecryptingImage(false);
+        });
+    }
+  }, [activeTarget, masterVaultKey, resolveMediaPreview]);
 
   const [watermarkText, setWatermarkText] = useState<string>(
     `FOR OFFICIAL VERIFICATION ONLY - ${new Date().toISOString().split('T')[0]}`
@@ -3042,20 +3717,17 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
   const [isDrawing, setIsDrawing] = useState<boolean>(false);
   const [startPos, setStartPos] = useState<{ x: number; y: number } | null>(null);
 
-  // Draw on canvas whenever parameters or selected target changes
+  // Render on canvas whenever activePreviewUrl, watermarks, or redactions change
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const renderWatermarks = (imgWidth: number, imgHeight: number) => {
-      canvas.width = imgWidth;
-      canvas.height = imgHeight;
-
+    const renderOverlay = (width: number, height: number) => {
       if (watermarkText.trim()) {
         ctx.save();
-        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.translate(width / 2, height / 2);
         ctx.rotate((angle * Math.PI) / 180);
         ctx.fillStyle = `rgba(180, 20, 20, ${opacity})`;
         ctx.font = `bold ${fontSize}px sans-serif`;
@@ -3066,7 +3738,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
           ? `${watermarkText.trim()} • [${recipientName.trim().toUpperCase()}]`
           : watermarkText.trim();
 
-        for (let y = -canvas.height; y <= canvas.height; y += fontSize * 3.5) {
+        for (let y = -height; y <= height; y += fontSize * 3.5) {
           ctx.fillText(fullText, 0, y);
         }
         ctx.restore();
@@ -3078,41 +3750,25 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
       });
     };
 
-    if (activeTarget?.previewUrl) {
+    if (activePreviewUrl) {
       const img = new Image();
-      // DO NOT set crossOrigin on blob: or data: URLs to prevent browser security/CORS failures
-      if (!activeTarget.previewUrl.startsWith('blob:') && !activeTarget.previewUrl.startsWith('data:')) {
+      if (!activePreviewUrl.startsWith('blob:') && !activePreviewUrl.startsWith('data:')) {
         img.crossOrigin = 'anonymous';
       }
       img.onload = () => {
-        ctx.clearRect(0, 0, img.width, img.height);
-        ctx.drawImage(img, 0, 0, img.width, img.height);
-        renderWatermarks(img.width || 800, img.height || 520);
-      };
-      img.onerror = () => {
-        // High-fidelity fallback preview card on canvas
-        const w = 800;
-        const h = 520;
+        const w = img.naturalWidth || img.width || 800;
+        const h = img.naturalHeight || img.height || 520;
+        // IMPORTANT: canvas.width/height MUST be set FIRST, because setting width clears the canvas!
         canvas.width = w;
         canvas.height = h;
-        ctx.fillStyle = '#f8fafc';
-        ctx.fillRect(0, 0, w, h);
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(16, 16, w - 32, h - 32);
-
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 22px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(doc.title.toUpperCase(), w / 2, 210);
-
-        ctx.font = '14px monospace';
-        ctx.fillStyle = '#64748b';
-        ctx.fillText(`DOC NO: ${doc.documentNumber}`, w / 2, 245);
-        ctx.fillText(`${activeTarget.editionLabel} • ${activeTarget.slotLabel}`, w / 2, 275);
-        renderWatermarks(w, h);
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        renderOverlay(w, h);
       };
-      img.src = activeTarget.previewUrl;
+      img.onerror = () => {
+        console.warn('Canvas failed to load image src:', activePreviewUrl);
+      };
+      img.src = activePreviewUrl;
     } else {
       const w = 800;
       const h = 520;
@@ -3133,9 +3789,9 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
       ctx.fillStyle = '#64748b';
       ctx.fillText(`DOC NO: ${doc.documentNumber}`, w / 2, 245);
       ctx.fillText(`${activeTarget?.editionLabel || 'MASTER'} • ${activeTarget?.slotLabel || 'FACE'}`, w / 2, 275);
-      renderWatermarks(w, h);
+      renderOverlay(w, h);
     }
-  }, [activeTarget, watermarkText, recipientName, opacity, angle, fontSize, redactions]);
+  }, [activePreviewUrl, activeTarget, watermarkText, recipientName, opacity, angle, fontSize, redactions, doc]);
 
   // Canvas mouse handlers for click-and-drag redaction tool
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -3179,9 +3835,9 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
     const a = document.createElement('a');
     a.href = dataUrl;
-    const safeTitle = doc.title.replace(/\s+/g, '_');
-    const safeEd = (activeTarget?.editionLabel || 'edition').replace(/\s+/g, '_');
-    const safeSlot = (activeTarget?.slotLabel || 'face').replace(/\s+/g, '_');
+    const safeTitle = doc.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeEd = (activeTarget?.editionLabel || 'edition').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeSlot = (activeTarget?.slotLabel || 'face').replace(/[^a-zA-Z0-9_-]/g, '_');
     a.download = `${safeTitle}_${safeEd}_${safeSlot}_watermarked.jpg`;
     document.body.appendChild(a);
     a.click();
@@ -3189,8 +3845,8 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-fade-in">
-      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+      <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between">
           <div>
@@ -3199,10 +3855,10 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
               Dynamic Watermark &amp; Redaction Studio
             </h2>
             <p className="text-[11px] text-slate-500">
-              Baked client-side directly onto pixels before download • Zero server transmission
+              Baked client-side directly onto original pixels before download • Zero server transmission
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl">
+          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-800 rounded-xl transition cursor-pointer">
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -3212,17 +3868,43 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
           {/* Controls Panel */}
           <div className="space-y-4">
             {/* Target Edition & Face Selector */}
-            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2">
+            <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-2.5">
               <label className="block text-[11px] font-bold text-amber-900 uppercase tracking-wider">
-                Select Edition &amp; Face to Export
+                Select Edition &amp; Face to Export ({targets.length} Available)
               </label>
+
+              {/* Horizontal quick pills */}
+              <div className="flex flex-wrap gap-1.5">
+                {targets.map((t, idx) => {
+                  const isSelected = selectedTargetIdx === idx;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTargetIdx(idx);
+                        setRedactions([]);
+                      }}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition flex items-center gap-1 cursor-pointer ${
+                        isSelected
+                          ? 'bg-amber-600 text-white shadow-2xs'
+                          : 'bg-white hover:bg-amber-100 text-slate-700 border border-amber-200'
+                      }`}
+                    >
+                      <Layers className="w-3 h-3" />
+                      <span>{t.editionLabel} • {t.slotLabel}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <select
                 value={selectedTargetIdx}
                 onChange={(e) => {
                   setSelectedTargetIdx(parseInt(e.target.value, 10));
                   setRedactions([]);
                 }}
-                className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs text-slate-800 font-semibold focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer"
               >
                 {targets.map((t, idx) => (
                   <option key={t.id} value={idx}>
@@ -3231,7 +3913,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                 ))}
               </select>
               <span className="block text-[10px] text-amber-800 font-medium">
-                Choose specifically between Front, Back, Stitched, or PDF Pages.
+                Choose specifically between Front, Back, Stitched Sheet, or custom editions.
               </span>
             </div>
 
@@ -3268,8 +3950,9 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                 {['FOR VISA APPLICATION', 'FOR KYC VERIFICATION', 'CONFIDENTIAL - OFFICIAL USE'].map((p) => (
                   <button
                     key={p}
+                    type="button"
                     onClick={() => setWatermarkText(`${p} - ${new Date().toISOString().split('T')[0]}`)}
-                    className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-semibold"
+                    className="px-2 py-0.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-semibold cursor-pointer"
                   >
                     {p}
                   </button>
@@ -3291,7 +3974,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                   step="0.05"
                   value={opacity}
                   onChange={(e) => setOpacity(parseFloat(e.target.value))}
-                  className="w-full accent-blue-600"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
 
@@ -3307,7 +3990,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                   step="5"
                   value={angle}
                   onChange={(e) => setAngle(parseInt(e.target.value))}
-                  className="w-full accent-blue-600"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
 
@@ -3323,7 +4006,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                   step="2"
                   value={fontSize}
                   onChange={(e) => setFontSize(parseInt(e.target.value))}
-                  className="w-full accent-blue-600"
+                  className="w-full accent-blue-600 cursor-pointer"
                 />
               </div>
             </div>
@@ -3333,8 +4016,9 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-700">Black-Out Redactor</span>
                 <button
+                  type="button"
                   onClick={() => setIsRedactMode(!isRedactMode)}
-                  className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1 ${
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
                     isRedactMode
                       ? 'bg-slate-900 text-white shadow-xs'
                       : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
@@ -3348,8 +4032,9 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
                 <div className="flex items-center justify-between text-[11px] text-slate-500">
                   <span>{redactions.length} redaction box(es) applied</span>
                   <button
+                    type="button"
                     onClick={() => setRedactions([])}
-                    className="text-red-600 hover:underline font-bold"
+                    className="text-red-600 hover:underline font-bold cursor-pointer"
                   >
                     Clear All
                   </button>
@@ -3359,7 +4044,7 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
           </div>
 
           {/* Interactive Canvas Viewport */}
-          <div className="lg:col-span-2 flex flex-col items-center justify-center bg-slate-100 rounded-2xl p-4 border border-slate-200 overflow-hidden space-y-2">
+          <div className="lg:col-span-2 flex flex-col items-center justify-center bg-slate-100 rounded-2xl p-4 border border-slate-200 overflow-hidden space-y-2 relative min-h-[420px]">
             {/* Active Target Banner */}
             <div className="w-full px-3 py-1.5 bg-white rounded-xl border border-slate-200 flex items-center justify-between text-xs font-bold text-slate-700 shadow-2xs">
               <span className="flex items-center gap-1.5 text-amber-900">
@@ -3369,14 +4054,21 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
               <span className="text-[10px] text-slate-400 font-mono">Pixel-Flattened Canvas</span>
             </div>
 
-            <canvas
-              ref={canvasRef}
-              onMouseDown={handleMouseDown}
-              onMouseUp={handleMouseUp}
-              className={`max-w-full h-auto rounded-xl shadow-md border border-slate-300 ${
-                isRedactMode ? 'cursor-crosshair' : 'cursor-default'
-              }`}
-            />
+            {isDecryptingImage ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-500 gap-2 p-12">
+                <RefreshCw className="w-8 h-8 animate-spin text-amber-600" />
+                <span className="text-xs font-bold">Decrypting Sovereign Image Pixels...</span>
+              </div>
+            ) : (
+              <canvas
+                ref={canvasRef}
+                onMouseDown={handleMouseDown}
+                onMouseUp={handleMouseUp}
+                className={`max-w-full max-h-[520px] h-auto object-contain rounded-xl shadow-md border border-slate-300 ${
+                  isRedactMode ? 'cursor-crosshair' : 'cursor-default'
+                }`}
+              />
+            )}
           </div>
         </div>
 
@@ -3386,8 +4078,10 @@ const WatermarkRedactModal: React.FC<WatermarkRedactModalProps> = ({ doc, onClos
             Exported file contains indelible, flattened pixel transformations.
           </span>
           <button
+            type="button"
             onClick={handleExportDownload}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-2"
+            disabled={isDecryptingImage}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <Download className="w-3.5 h-3.5" />
             Download Watermarked JPEG
