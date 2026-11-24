@@ -1,19 +1,7 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import * as nodemailer from 'nodemailer';
 import { connectToMongo, verifySession, extractToken } from './db';
-
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
-
-function createEmailTransporter() {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: OWNER_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || ''
-    }
-  });
-}
+import { OWNER_EMAIL, createEmailTransporter, sendSafeMail } from './emailService';
 
 export interface ExpenseSet {
   id: string;
@@ -1814,8 +1802,7 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
       `;
 
       try {
-        const transporter = createEmailTransporter();
-        await transporter.sendMail({
+        const mailResult = await sendSafeMail({
           from: `"Shudkara Finance" <${OWNER_EMAIL}>`,
           to: email.trim(),
           subject,
@@ -1838,10 +1825,14 @@ export async function financeHandler(request: HttpRequest, context: InvocationCo
           await lendsCol.updateMany(query, { $set: { reminderSent: true, reminderSentAt: now, updatedAt: now } });
         }
 
+        const message = mailResult.redirected
+          ? `Settlement email safely intercepted in sandbox and redirected to owner (${OWNER_EMAIL}) instead of external recipient (${email.trim()}).`
+          : `Settlement email successfully sent to ${email.trim()}`;
+
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          jsonBody: { success: true, message: `Settlement email successfully sent to ${email.trim()}` }
+          jsonBody: { success: true, message, redirected: mailResult.redirected }
         };
       } catch (err: any) {
         context.error('Error sending reminder email:', err);

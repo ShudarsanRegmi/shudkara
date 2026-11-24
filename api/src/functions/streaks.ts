@@ -1,20 +1,8 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import * as nodemailer from 'nodemailer';
 import { connectToMongo } from './db';
 import { createFolderInDrive, uploadToFolder } from './gdrive';
-
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
-
-function createEmailTransporter() {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: OWNER_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || ''
-    }
-  });
-}
+import { OWNER_EMAIL, createEmailTransporter, sendSafeMail } from './emailService';
 
 export interface StreakCheckIn {
   id: string;
@@ -189,16 +177,19 @@ export async function streaksHandler(request: HttpRequest, context: InvocationCo
       `;
 
       try {
-        await transporter.sendMail({
+        const mailResult = await sendSafeMail({
           from: `"Shudkara Streaks" <${OWNER_EMAIL}>`,
           to: recipient,
           subject,
           html: emailHtml
         });
+        const message = mailResult.redirected
+          ? `Streak alert intercepted in sandbox and redirected to owner (${OWNER_EMAIL}) instead of external recipient (${recipient}).`
+          : `Email alert sent to ${recipient}`;
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          jsonBody: { success: true, message: `Email alert sent to ${recipient}` }
+          jsonBody: { success: true, message, redirected: mailResult.redirected }
         };
       } catch (mailErr: any) {
         context.error('Failed to send streak email:', mailErr);

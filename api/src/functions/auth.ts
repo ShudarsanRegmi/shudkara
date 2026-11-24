@@ -1,20 +1,8 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
 import * as speakeasy from 'speakeasy';
-import * as nodemailer from 'nodemailer';
 import { connectToMongo, verifySession, extractToken } from './db';
-
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
-
-function createEmailTransporter() {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: OWNER_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || ''
-    }
-  });
-}
+import { OWNER_EMAIL, createEmailTransporter, sendSafeMail } from './emailService';
 
 export async function authHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;
@@ -139,8 +127,7 @@ export async function authHandler(request: HttpRequest, context: InvocationConte
       );
 
       // Send email
-      const transporter = createEmailTransporter();
-      await transporter.sendMail({
+      await sendSafeMail({
         from: `"shudkara" <${OWNER_EMAIL}>`,
         to: OWNER_EMAIL,
         subject: `shudkara Login Code: ${otp}`,

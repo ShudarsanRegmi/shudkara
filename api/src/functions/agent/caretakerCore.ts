@@ -15,18 +15,7 @@ import {
   callGeminiChat,
   CaretakerAnalysisResult
 } from './geminiClient';
-
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
-
-function createEmailTransporter() {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: OWNER_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || ''
-    }
-  });
-}
+import { OWNER_EMAIL, createEmailTransporter, sendSafeMail } from '../emailService';
 
 export interface CaretakerCycleResult {
   success: boolean;
@@ -117,7 +106,7 @@ export async function runCaretakerCycle(
         </div>
       `;
 
-      await transporter.sendMail({
+      await sendSafeMail({
         from: `"Shudkara Sentinel" <${OWNER_EMAIL}>`,
         to: OWNER_EMAIL,
         subject: analysis.emailSubject || `[Sentinel] ${analysis.headline}`,

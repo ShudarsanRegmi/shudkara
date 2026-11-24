@@ -1,20 +1,8 @@
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
 import * as crypto from 'crypto';
-import * as nodemailer from 'nodemailer';
 import { Db } from 'mongodb';
 import { connectToMongo, verifySession, extractToken } from './db';
-
-const OWNER_EMAIL = process.env.OWNER_EMAIL || 'shudarsanregmi555@gmail.com';
-
-function createEmailTransporter() {
-  return nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: OWNER_EMAIL,
-      pass: process.env.GMAIL_APP_PASSWORD || ''
-    }
-  });
-}
+import { OWNER_EMAIL, createEmailTransporter, sendSafeMail } from './emailService';
 
 // ── Default Worksets Seeder (Clean icon names, no emojis) ────────────────────
 const DEFAULT_WORKSETS = [
@@ -163,7 +151,7 @@ export async function sendCommitmentEmailAlert(
 `;
 
   try {
-    await transporter.sendMail({
+    await sendSafeMail({
       from: `"Shudkara Pratigya" <${OWNER_EMAIL}>`,
       to: OWNER_EMAIL,
       subject,
