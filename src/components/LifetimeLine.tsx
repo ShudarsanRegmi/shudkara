@@ -15,7 +15,7 @@ import { MediaLightboxModal, type LightboxMediaItem } from './MediaLightboxModal
 import { 
   TimelineWizardModal, type DraftMediaItem, type TimelineDraftMeta,
   finalizeSuccessfulDraftUpload, loadMediaFromDb, saveFullDraftToDb, 
-  markDraftFailed, listAllDraftsFromDb, getLocalIsoString
+  markDraftFailed, listAllDraftsFromDb, getLocalIsoString, getMediaMimeType
 } from './TimelineWizardModal';
 import { TagManagerModal, type TimelineTag } from './TagManagerModal';
 import { RichTagSelector } from './RichTagSelector';
@@ -894,10 +894,10 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     for (let i = 0; i < len; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
-    return new Blob([bytes], { type: file.type || 'image/jpeg' });
+    return new Blob([bytes], { type: file.type || getMediaMimeType(file) || 'image/jpeg' });
   };
 
-  // Upload helper: uses single-request for small files (< 8MB), and 4MB chunked resumable upload for larger files (videos)
+  // Upload helper: uses single-request for small files (< 2.5MB), and 2MB chunked resumable upload for videos and larger files
   const uploadMediaFileWithProgress = async (
     postId: string,
     file: DraftMediaItem,
@@ -906,10 +906,12 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
   ): Promise<any> => {
     const blob = await getBlobFromDraftMedia(file);
     const size = blob.size;
-    const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
+    const mimeType = file.type || getMediaMimeType(file) || 'image/jpeg';
+    const isVid = mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|3gp)($|\?)/i.test(file.name);
+    const CHUNK_THRESHOLD = 2.5 * 1024 * 1024; // 2.5 MB
 
     // Fast single-request upload for small images
-    if (size < CHUNK_THRESHOLD) {
+    if (!isVid && size < CHUNK_THRESHOLD) {
       onProgress?.(25, `Preparing ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
       const res = await fetch(`/api/timeline/${postId}/media`, {
         method: 'POST',
@@ -918,7 +920,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
         }),
         body: JSON.stringify({
           name: file.name,
-          type: file.type,
+          type: mimeType,
           base64: file.base64
         })
       });
@@ -932,7 +934,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       return data.mediaItem;
     }
 
-    // Resumable Chunked Upload (4 MB slices to completely prevent HTTP 413)
+    // Resumable Chunked Upload (2 MB slices to completely prevent HTTP 413)
     onProgress?.(5, `Starting chunked upload for ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
 
     const initRes = await fetch(`/api/timeline/${postId}/media/init-chunked`, {
@@ -942,7 +944,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       }),
       body: JSON.stringify({
         name: file.name,
-        type: file.type,
+        type: mimeType,
         size
       })
     });
@@ -952,7 +954,7 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       throw new Error(errData.error || `Failed to initialize chunked upload for "${file.name}"`);
     }
 
-    const { uploadId, chunkSize = 4 * 1024 * 1024 } = await initRes.json();
+    const { uploadId, chunkSize = 2 * 1024 * 1024 } = await initRes.json();
     const totalChunks = Math.ceil(size / chunkSize);
     let finalMediaItem: any = null;
 
@@ -2857,28 +2859,40 @@ const MomentCardBody: React.FC<MomentCardBodyProps> = ({
               <input
                 type="file"
                 multiple
-                accept="image/*,video/*,.gif"
+                accept="image/*,video/*"
                 className="hidden"
-                onChange={e => {
+                onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
+                onChange={async (e) => {
                   const files = e.target.files;
-                  if (!files) return;
-                  Array.from(files).forEach(file => {
-                    const reader = new FileReader();
-                    reader.onload = ev => {
-                      const base64 = ev.target?.result as string;
-                      if (base64) {
-                        setEditNewMedia(prev => [...prev, {
-                          id: `edit_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                          name: file.name,
-                          type: file.type || 'image/jpeg',
-                          base64,
-                          rawFile: file,
-                          size: file.size
-                        }]);
-                      }
-                    };
-                    reader.readAsDataURL(file);
-                  });
+                  if (!files || files.length === 0) return;
+                  const fileList = Array.from(files);
+                  try {
+                    const newItems = await Promise.all(
+                      fileList.map((file) => {
+                        return new Promise<DraftMediaItem>((resolve, reject) => {
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const base64 = ev.target?.result as string;
+                            resolve({
+                              id: `edit_media_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                              name: file.name,
+                              type: getMediaMimeType(file),
+                              base64,
+                              rawFile: file,
+                              size: file.size
+                            });
+                          };
+                          reader.onerror = reject;
+                          reader.readAsDataURL(file);
+                        });
+                      })
+                    );
+                    setEditNewMedia((prev) => [...prev, ...newItems]);
+                  } catch (readErr) {
+                    console.error('Failed reading edit snaps:', readErr);
+                  } finally {
+                    if (e.target) (e.target as HTMLInputElement).value = '';
+                  }
                 }}
               />
             </label>

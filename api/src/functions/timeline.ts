@@ -85,7 +85,7 @@ function slugify(text: string): string {
 
 export async function timelineHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const method = request.method;
-  const url = new URL(request.url);
+  const url = new URL(request.url, 'http://localhost');
   const pathParts = url.pathname.replace(/^\/api\/timeline\/?/, '').split('/').filter(Boolean);
 
   try {
@@ -859,7 +859,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         };
 
         const result = await sessionCol.insertOne(sessionDoc);
-        const chunkSize = 4 * 1024 * 1024; // 4 MB chunk size
+        const chunkSize = 2 * 1024 * 1024; // 2 MB chunk size (multiple of 256KB to fit within server/proxy payload limits)
 
         return {
           status: 200,
@@ -1021,7 +1021,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         };
 
         const result = await sessionCol.insertOne(sessionDoc);
-        const chunkSize = 4 * 1024 * 1024; // 4 MB chunk size (multiple of 256KB)
+        const chunkSize = 2 * 1024 * 1024; // 2 MB chunk size (multiple of 256KB to fit within server/proxy payload limits) (multiple of 256KB)
 
         return {
           status: 200,
