@@ -830,7 +830,135 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
       }
     }
 
-    // ── 2d. POST /api/timeline/staging-media/init-chunked (Start Staging Resumable Session for Videos) ──
+    // ── 2d. POST /api/timeline/staging-media/init-upload (Browser-Direct-to-Drive: get signed session URL) ──
+    // Browser uses this to upload directly to Google Drive without proxying bytes through the server.
+    // Returns a signed resumable session URL that the browser can PUT to directly.
+    if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'init-upload') {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { name, type, size } = body;
+      if (!name || typeof size !== 'number' || size <= 0) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and valid positive size are required.' } };
+      }
+
+      try {
+        const bucketId = await executeDriveAction(async (drive) => getSubappBucketId(drive, 'Timeline'));
+        const sessionUrl = await initiateResumableSession(bucketId, name, type || 'application/octet-stream', size);
+        const sessionCol = db.collection('upload_sessions');
+        sessionCol.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }).catch(() => {});
+
+        const result = await sessionCol.insertOne({
+          folderId: bucketId,
+          fileName: name,
+          mimeType: type || 'application/octet-stream',
+          totalBytes: size,
+          sessionUrl,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
+
+        // Return the signed session URL so the browser can PUT directly to Google Drive
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: {
+            success: true,
+            uploadId: result.insertedId.toString(),
+            sessionUrl  // Browser uses this to PUT chunks directly to Google Drive
+          }
+        };
+      } catch (initErr: any) {
+        context.error(`Failed to initiate direct-upload session for "${name}":`, initErr);
+        return {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Failed to initiate upload with Google Drive: ${initErr.message}` }
+        };
+      }
+    }
+
+    // ── 2d-finalize. POST /api/timeline/staging-media/finalize (Record completed browser-direct upload) ──
+    if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'finalize') {
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { uploadId, fileId: clientFileId, thumbnailBase64 } = body;
+      if (!uploadId || !ObjectId.isValid(uploadId)) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Missing uploadId.' } };
+      }
+
+      const session = await db.collection('upload_sessions').findOne({ _id: new ObjectId(uploadId) });
+      if (!session) {
+        return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Upload session not found or expired.' } };
+      }
+
+      try {
+        // If browser sends back the fileId (from Drive response), use it; otherwise query Drive
+        let fileId = clientFileId as string | undefined;
+        if (!fileId) {
+          return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'fileId from Google Drive response is required.' } };
+        }
+
+        // Set public permissions on the file
+        let publicRes = {
+          viewUrl: `https://lh3.googleusercontent.com/d/${fileId}`,
+          thumbnailUrl: `https://lh3.googleusercontent.com/d/${fileId}`
+        };
+        try {
+          publicRes = await ensureFilePublic(fileId);
+        } catch (permErr: any) {
+          context.warn('Could not set public permissions on uploaded file:', permErr.message);
+        }
+
+        const isVideo = (session.mimeType || '').startsWith('video/');
+        const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
+        const viewUrl = isVideo ? previewUrl : publicRes.viewUrl;
+        let thumbnailUrl = publicRes.thumbnailUrl;
+
+        // Upload the video thumbnail if provided
+        if (isVideo && thumbnailBase64) {
+          try {
+            const cleanThumb = thumbnailBase64.split(';base64,').pop() || thumbnailBase64;
+            const thumbRes = await uploadToFolder(session.folderId, `${session.fileName}.thumb.jpg`, 'image/jpeg', cleanThumb);
+            thumbnailUrl = thumbRes.viewUrl;
+          } catch (tErr: any) {
+            context.warn('Failed to upload video thumbnail:', tErr.message);
+          }
+        }
+
+        const mediaItem = {
+          googleDriveId: fileId,
+          fileName: session.fileName,
+          mimeType: session.mimeType,
+          size: session.totalBytes,
+          viewUrl,
+          thumbnailUrl,
+          previewUrl,
+          streamUrl: previewUrl
+        };
+
+        await db.collection('upload_sessions').deleteOne({ _id: new ObjectId(uploadId) });
+
+        return {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { success: true, mediaItem }
+        };
+      } catch (finalizeErr: any) {
+        context.error(`Failed to finalize upload for session ${uploadId}:`, finalizeErr);
+        return {
+          status: 502,
+          headers: { 'Content-Type': 'application/json' },
+          jsonBody: { error: `Failed to finalize upload: ${finalizeErr.message}` }
+        };
+      }
+    }
+
+    // ── 2d-legacy. POST /api/timeline/staging-media/init-chunked (Legacy server-proxied chunk upload) ──
+    // Kept for fallback - but new uploads use init-upload + browser-direct PUT
     if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'init-chunked') {
       let body: any;
       try { body = await request.json(); }
@@ -847,7 +975,7 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
         const sessionCol = db.collection('upload_sessions');
         sessionCol.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }).catch(() => {});
 
-        const sessionDoc = {
+        const result = await sessionCol.insertOne({
           folderId: bucketId,
           fileName: name,
           mimeType: type || 'application/octet-stream',
@@ -856,31 +984,20 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
           sessionUrl,
           createdAt: new Date(),
           updatedAt: new Date()
-        };
-
-        const result = await sessionCol.insertOne(sessionDoc);
-        const chunkSize = 2 * 1024 * 1024; // 2 MB chunk size (multiple of 256KB to fit within server/proxy payload limits)
+        });
 
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          jsonBody: {
-            success: true,
-            uploadId: result.insertedId.toString(),
-            chunkSize
-          }
+          jsonBody: { success: true, uploadId: result.insertedId.toString(), chunkSize: 2 * 1024 * 1024 }
         };
       } catch (initErr: any) {
         context.error(`Failed to initiate staging resumable session for "${name}":`, initErr);
-        return {
-          status: 502,
-          headers: { 'Content-Type': 'application/json' },
-          jsonBody: { error: `Failed to initiate resumable upload with Google Drive: ${initErr.message}` }
-        };
+        return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: `Failed to initiate resumable upload with Google Drive: ${initErr.message}` } };
       }
     }
 
-    // ── 2e. POST /api/timeline/staging-media/upload-chunk (Stream Staging Video Chunk to Drive) ──
+    // ── 2e. POST /api/timeline/staging-media/upload-chunk (Legacy server-proxied chunk upload) ──
     if (method === 'POST' && pathParts[0] === 'staging-media' && pathParts[1] === 'upload-chunk') {
       let body: any;
       try { body = await request.json(); }
@@ -898,38 +1015,16 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
 
       try {
         const chunkBuffer = Buffer.from(chunkBase64.split(';base64,').pop() || chunkBase64, 'base64');
-        const chunkRes = await uploadChunkToSession(
-          session.sessionUrl,
-          chunkBuffer,
-          startByte,
-          endByte,
-          totalBytes,
-          session.mimeType
-        );
+        const chunkRes = await uploadChunkToSession(session.sessionUrl, chunkBuffer, startByte, endByte, totalBytes, session.mimeType);
 
         if (!chunkRes.complete) {
-          await db.collection('upload_sessions').updateOne(
-            { _id: new ObjectId(uploadId) },
-            { $set: { updatedAt: new Date() } }
-          );
-          return {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-            jsonBody: { success: true, complete: false }
-          };
+          await db.collection('upload_sessions').updateOne({ _id: new ObjectId(uploadId) }, { $set: { updatedAt: new Date() } });
+          return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, complete: false } };
         }
 
-        // Upload Completed!
         const fileId = chunkRes.fileId!;
-        let publicRes = {
-          viewUrl: `https://lh3.googleusercontent.com/d/${fileId}`,
-          thumbnailUrl: `https://lh3.googleusercontent.com/d/${fileId}`
-        };
-        try {
-          publicRes = await ensureFilePublic(fileId);
-        } catch (permErr: any) {
-          context.warn('Could not set public permissions on uploaded file:', permErr.message);
-        }
+        let publicRes = { viewUrl: `https://lh3.googleusercontent.com/d/${fileId}`, thumbnailUrl: `https://lh3.googleusercontent.com/d/${fileId}` };
+        try { publicRes = await ensureFilePublic(fileId); } catch (permErr: any) { context.warn('Could not set public permissions:', permErr.message); }
 
         const isVideo = (session.mimeType || '').startsWith('video/');
         const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
@@ -941,38 +1036,133 @@ export async function timelineHandler(request: HttpRequest, context: InvocationC
             const cleanThumb = session.thumbnailBase64.split(';base64,').pop() || session.thumbnailBase64;
             const thumbRes = await uploadToFolder(session.folderId, `${session.fileName}.thumb.jpg`, 'image/jpeg', cleanThumb);
             thumbnailUrl = thumbRes.viewUrl;
-          } catch (tErr: any) {
-            context.warn('Failed to upload video thumbnail for session:', tErr.message);
-          }
+          } catch (tErr: any) { context.warn('Failed to upload video thumbnail:', tErr.message); }
         }
 
-        const mediaItem = {
-          googleDriveId: fileId,
-          fileName: session.fileName,
-          mimeType: session.mimeType,
-          size: session.totalBytes,
-          viewUrl,
-          thumbnailUrl,
-          previewUrl,
-          streamUrl: previewUrl
-        };
+        const mediaItem = { googleDriveId: fileId, fileName: session.fileName, mimeType: session.mimeType, size: session.totalBytes, viewUrl, thumbnailUrl, previewUrl, streamUrl: previewUrl };
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, complete: true, mediaItem } };
+      } catch (chunkErr: any) {
+        context.error(`Failed to upload chunk (${startByte}-${endByte}) for staging session ${uploadId}:`, chunkErr);
+        return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: `Failed to stream chunk to Google Drive: ${chunkErr.message}` } };
+      }
+    }
+
+    // ── 3a. POST /api/timeline/:id/media/init-upload (Browser-Direct-to-Drive: get signed session URL for post media) ──
+    if (method === 'POST' && pathParts.length === 3 && pathParts[1] === 'media' && pathParts[2] === 'init-upload') {
+      const postId = pathParts[0];
+      if (!ObjectId.isValid(postId)) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid post ID.' } };
+      }
+
+      const post = await col.findOne({ _id: new ObjectId(postId) });
+      if (!post || parseClearanceLevel(post.clearanceLevel) > activeClearance) {
+        return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Post not found.' } };
+      }
+
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { name, type, size } = body;
+      if (!name || typeof size !== 'number' || size <= 0) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'File name and valid positive size are required.' } };
+      }
+
+      let folderId = post.googleDriveFolderId;
+      try {
+        if (!folderId) {
+          const rawDate = post.timestamp ? new Date(post.timestamp) : new Date();
+          const postDate = !isNaN(rawDate.getTime()) ? rawDate : new Date();
+          const datePrefix = postDate.toISOString().substring(0, 10);
+          const folderSlug = post.title ? slugify(post.title) : 'moment';
+          folderId = await createFolderInDrive(`${datePrefix}-${folderSlug || 'moment'}`, 'Timeline');
+          await col.updateOne({ _id: new ObjectId(postId) }, { $set: { googleDriveFolderId: folderId } });
+        }
+
+        const sessionUrl = await initiateResumableSession(folderId, name, type || 'application/octet-stream', size);
+        const sessionCol = db.collection('upload_sessions');
+        sessionCol.createIndex({ createdAt: 1 }, { expireAfterSeconds: 86400 }).catch(() => {});
+
+        const result = await sessionCol.insertOne({
+          postId: new ObjectId(postId),
+          folderId,
+          fileName: name,
+          mimeType: type || 'application/octet-stream',
+          totalBytes: size,
+          sessionUrl,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        });
 
         return {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          jsonBody: { success: true, complete: true, mediaItem }
+          jsonBody: {
+            success: true,
+            uploadId: result.insertedId.toString(),
+            sessionUrl  // Browser uses this to PUT chunks directly to Google Drive
+          }
         };
-      } catch (chunkErr: any) {
-        context.error(`Failed to upload chunk (${startByte}-${endByte}) for staging session ${uploadId}:`, chunkErr);
-        return {
-          status: 502,
-          headers: { 'Content-Type': 'application/json' },
-          jsonBody: { error: `Failed to stream chunk to Google Drive: ${chunkErr.message}` }
-        };
+      } catch (initErr: any) {
+        context.error(`Failed to initiate direct-upload session for post media "${name}":`, initErr);
+        return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: `Failed to initiate upload with Google Drive: ${initErr.message}` } };
       }
     }
 
-    // ── 3a. POST /api/timeline/:id/media/init-chunked (Start Resumable Chunked Upload Session) ──
+    // ── 3a-finalize. POST /api/timeline/:id/media/finalize (Record completed browser-direct upload for post) ──
+    if (method === 'POST' && pathParts.length === 3 && pathParts[1] === 'media' && pathParts[2] === 'finalize') {
+      const postId = pathParts[0];
+      if (!ObjectId.isValid(postId)) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid post ID.' } };
+      }
+
+      let body: any;
+      try { body = await request.json(); }
+      catch { return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Invalid JSON body.' } }; }
+
+      const { uploadId, fileId: clientFileId, thumbnailBase64 } = body;
+      if (!uploadId || !ObjectId.isValid(uploadId) || !clientFileId) {
+        return { status: 400, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'uploadId and fileId are required.' } };
+      }
+
+      const session = await db.collection('upload_sessions').findOne({ _id: new ObjectId(uploadId) });
+      if (!session) {
+        return { status: 404, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: 'Upload session not found or expired.' } };
+      }
+
+      try {
+        const fileId = clientFileId as string;
+        let publicRes = { viewUrl: `https://lh3.googleusercontent.com/d/${fileId}`, thumbnailUrl: `https://lh3.googleusercontent.com/d/${fileId}` };
+        try { publicRes = await ensureFilePublic(fileId); } catch (permErr: any) { context.warn('Could not set public permissions:', permErr.message); }
+
+        const isVideo = (session.mimeType || '').startsWith('video/');
+        const previewUrl = `https://drive.google.com/file/d/${fileId}/preview`;
+        const viewUrl = isVideo ? previewUrl : publicRes.viewUrl;
+        let thumbnailUrl = publicRes.thumbnailUrl;
+
+        if (isVideo && thumbnailBase64) {
+          try {
+            const cleanThumb = thumbnailBase64.split(';base64,').pop() || thumbnailBase64;
+            const thumbRes = await uploadToFolder(session.folderId, `${session.fileName}.thumb.jpg`, 'image/jpeg', cleanThumb);
+            thumbnailUrl = thumbRes.viewUrl;
+          } catch (tErr: any) { context.warn('Failed to upload video thumbnail:', tErr.message); }
+        }
+
+        const mediaItem = { googleDriveId: fileId, fileName: session.fileName, mimeType: session.mimeType, size: session.totalBytes, viewUrl, thumbnailUrl, previewUrl, streamUrl: previewUrl };
+
+        const post = await col.findOne({ _id: new ObjectId(postId) });
+        const currentMedia = Array.isArray(post?.media) ? [...post.media, mediaItem] : [mediaItem];
+        await col.updateOne({ _id: new ObjectId(postId) }, { $set: { media: currentMedia } });
+        await db.collection('upload_sessions').deleteOne({ _id: new ObjectId(uploadId) });
+
+        return { status: 200, headers: { 'Content-Type': 'application/json' }, jsonBody: { success: true, complete: true, mediaItem, media: currentMedia } };
+      } catch (finalizeErr: any) {
+        context.error(`Failed to finalize upload for post media session ${uploadId}:`, finalizeErr);
+        return { status: 502, headers: { 'Content-Type': 'application/json' }, jsonBody: { error: `Failed to finalize upload: ${finalizeErr.message}` } };
+      }
+    }
+
+    // ── 3a-legacy. POST /api/timeline/:id/media/init-chunked (Legacy server-proxied chunk upload) ──
     if (method === 'POST' && pathParts.length === 3 && pathParts[1] === 'media' && pathParts[2] === 'init-chunked') {
       const postId = pathParts[0];
       if (!ObjectId.isValid(postId)) {
