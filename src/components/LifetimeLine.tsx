@@ -897,7 +897,9 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     return new Blob([bytes], { type: file.type || getMediaMimeType(file) || 'image/jpeg' });
   };
 
-  // Upload helper: uses single-request for small files (< 2.5MB), and 2MB chunked resumable upload for videos and larger files
+  // Upload helper: direct-to-Drive for large files/videos, base64 fallback for small images.
+  // For videos & large files: browser GETs a signed GDrive session URL, then PUTs binary directly to Drive.
+  // No base64 encoding, no server proxy for video bytes → eliminates HTTP 413 and 1.33× encoding overhead.
   const uploadMediaFileWithProgress = async (
     postId: string,
     file: DraftMediaItem,
@@ -910,19 +912,13 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
     const isVid = mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|3gp)($|\?)/i.test(file.name);
     const CHUNK_THRESHOLD = 2.5 * 1024 * 1024; // 2.5 MB
 
-    // Fast single-request upload for small images
+    // Small images use legacy single-request base64 upload (fast, no overhead for < 2.5 MB)
     if (!isVid && size < CHUNK_THRESHOLD) {
       onProgress?.(25, `Preparing ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
       const res = await fetch(`/api/timeline/${postId}/media`, {
         method: 'POST',
-        headers: getAuthHeaders({
-          'Content-Type': 'application/json'
-        }),
-        body: JSON.stringify({
-          name: file.name,
-          type: mimeType,
-          base64: file.base64
-        })
+        headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ name: file.name, type: mimeType, base64: file.base64 })
       });
 
       if (!res.ok) {
@@ -934,94 +930,92 @@ export const LifetimeLine: React.FC<LifetimeLineProps> = ({ authToken }) => {
       return data.mediaItem;
     }
 
-    // Resumable Chunked Upload (2 MB slices to completely prevent HTTP 413)
-    onProgress?.(5, `Starting chunked upload for ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
+    // ── Direct-to-Drive Resumable Upload for videos / large files ──
+    // Step 1: Server creates a GDrive resumable session URL and returns it
+    onProgress?.(3, `Requesting upload session for ${file.name} (${(size / (1024 * 1024)).toFixed(1)} MB)...`);
 
-    const initRes = await fetch(`/api/timeline/${postId}/media/init-chunked`, {
+    const initRes = await fetch(`/api/timeline/${postId}/media/init-upload`, {
       method: 'POST',
-      headers: getAuthHeaders({
-        'Content-Type': 'application/json'
-      }),
-      body: JSON.stringify({
-        name: file.name,
-        type: mimeType,
-        size
-      })
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name: file.name, type: mimeType, size })
     });
 
     if (!initRes.ok) {
       const errData = await initRes.json().catch(() => ({}));
-      throw new Error(errData.error || `Failed to initialize chunked upload for "${file.name}"`);
+      throw new Error(errData.error || `Failed to initialize upload session for "${file.name}"`);
     }
 
-    const { uploadId, chunkSize = 2 * 1024 * 1024 } = await initRes.json();
-    const totalChunks = Math.ceil(size / chunkSize);
-    let finalMediaItem: any = null;
+    const { uploadId, sessionUrl } = await initRes.json();
+    if (!sessionUrl) throw new Error('Server did not return a GDrive upload session URL');
+
+    // Step 2: Browser PUTs raw binary chunks directly to Google Drive (no base64, no server proxy)
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk — raw binary PUT to GDrive
+    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    let driveFileId: string | null = null;
 
     for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-      const startByte = chunkIdx * chunkSize;
-      const endByte = Math.min(startByte + chunkSize - 1, size - 1);
-      const chunkSlice = blob.slice(startByte, endByte + 1);
+      const startByte = chunkIdx * CHUNK_SIZE;
+      const endByte = Math.min(startByte + CHUNK_SIZE - 1, size - 1);
+      const chunkBlob = blob.slice(startByte, endByte + 1);
+      const chunkBytes = await chunkBlob.arrayBuffer();
+      const contentRange = `bytes ${startByte}-${endByte}/${size}`;
+      const pct = Math.round(5 + ((chunkIdx + 1) / totalChunks) * 88);
 
-      const chunkBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(chunkSlice);
-      });
+      onProgress?.(pct, `Uploading ${file.name}: ${(endByte / (1024 * 1024)).toFixed(1)} / ${(size / (1024 * 1024)).toFixed(1)} MB...`);
 
-      const chunkPercent = Math.round(((chunkIdx + 1) / totalChunks) * 100);
-      onProgress?.(
-        chunkPercent,
-        `Uploading ${file.name}: chunk ${chunkIdx + 1} of ${totalChunks} (${(endByte / (1024 * 1024)).toFixed(1)} / ${(size / (1024 * 1024)).toFixed(1)} MB)...`
-      );
-
-      let success = false;
-      let lastError = '';
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      let chunkDone = false;
+      let attempt = 0;
+      while (attempt < 3 && !chunkDone) {
+        attempt++;
         try {
-          const chunkRes = await fetch(`/api/timeline/${postId}/media/upload-chunk`, {
-            method: 'POST',
-            headers: getAuthHeaders({
-              'Content-Type': 'application/json'
-            }),
-            body: JSON.stringify({
-              uploadId,
-              chunkBase64,
-              startByte,
-              endByte,
-              totalBytes: size
-            })
+          const putRes = await fetch(sessionUrl, {
+            method: 'PUT',
+            headers: {
+              'Content-Range': contentRange,
+              'Content-Type': mimeType
+            },
+            body: chunkBytes
           });
 
-          if (!chunkRes.ok) {
-            const errData = await chunkRes.json().catch(() => ({}));
-            throw new Error(errData.error || `HTTP ${chunkRes.status}`);
+          if (putRes.status === 308) {
+            // 308 Resume Incomplete: chunk accepted by Google Drive, continue
+            chunkDone = true;
+          } else if (putRes.status === 200 || putRes.status === 201) {
+            // Final chunk — Google Drive returns file metadata
+            const fileData = await putRes.json();
+            driveFileId = fileData.id;
+            chunkDone = true;
+          } else {
+            const errText = await putRes.text().catch(() => '');
+            throw new Error(`Google Drive PUT failed HTTP ${putRes.status}: ${errText}`);
           }
-
-          const chunkData = await chunkRes.json();
-          if (chunkIdx === totalChunks - 1) {
-            if (!chunkData.complete) {
-              throw new Error('Google Drive upload incomplete on final chunk.');
-            }
-            finalMediaItem = chunkData.mediaItem;
-          }
-          success = true;
-          break;
-        } catch (attemptErr: any) {
-          lastError = attemptErr.message || 'Network error';
-          if (attempt < 3) {
-            await new Promise(r => setTimeout(r, 1200));
-          }
+        } catch (putErr: any) {
+          if (attempt >= 3) throw putErr;
+          await new Promise(r => setTimeout(r, 1200 * attempt));
         }
-      }
-
-      if (!success) {
-        throw new Error(`Failed to upload chunk ${chunkIdx + 1}/${totalChunks} of "${file.name}": ${lastError}`);
       }
     }
 
-    return finalMediaItem;
+    if (!driveFileId) {
+      throw new Error(`Upload of "${file.name}" completed but Google Drive did not return a file ID`);
+    }
+
+    // Step 3: Notify server — it sets public permissions and records metadata
+    onProgress?.(97, `Finalizing ${file.name}...`);
+    const finalizeRes = await fetch(`/api/timeline/${postId}/media/finalize`, {
+      method: 'POST',
+      headers: getAuthHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ uploadId, fileId: driveFileId, thumbnailBase64: (file as any).thumbnailBase64 || undefined })
+    });
+
+    if (!finalizeRes.ok) {
+      const errData = await finalizeRes.json().catch(() => ({}));
+      throw new Error(errData.error || `Failed to finalize upload for "${file.name}"`);
+    }
+
+    onProgress?.(100, `Uploaded ${file.name} to Google Drive successfully!`);
+    const finalData = await finalizeRes.json();
+    return finalData.mediaItem;
   };
 
   // Submit new post from Social Wizard with background queueing, single-file uploads & floating progress

@@ -238,7 +238,10 @@ export async function openDraftDb(): Promise<IDBDatabase> {
 }
 
 /**
- * Eager background uploader for individual media items (real-time draft staging)
+ * Direct-to-Drive Upload: Browser gets a signed Google Drive resumable session URL from the server,
+ * then PUTs raw binary chunks directly to Google Drive — no base64, no server proxy for large files.
+ * This eliminates the 1.33× base64 overhead and completely bypasses server body-size limits (HTTP 413).
+ * Falls back to server-proxied base64 upload only for small images.
  */
 export async function uploadMediaItemEagerly(
   item: DraftMediaItem,
@@ -258,7 +261,7 @@ export async function uploadMediaItemEagerly(
     };
   }
 
-  // 1. Obtain raw Blob/File
+  // 1. Obtain raw Blob/File — prefer rawFile to avoid any base64 overhead
   let blob: Blob;
   if (item.rawFile instanceof Blob) {
     blob = item.rawFile;
@@ -282,17 +285,17 @@ export async function uploadMediaItemEagerly(
   const mimeType = item.type || blob.type || getMediaMimeType(item);
   const isVideo = mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|3gp)($|\?)/i.test(item.name);
   const sessionToken = token || (typeof window !== 'undefined' ? localStorage.getItem('shudkara_auth_token') : null);
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
   if (sessionToken) {
-    headers['X-Session-Token'] = sessionToken;
-    headers['Authorization'] = `Bearer ${sessionToken}`;
+    authHeaders['X-Session-Token'] = sessionToken;
+    authHeaders['Authorization'] = `Bearer ${sessionToken}`;
   }
 
-  // Fast single-request upload for small images (< 2.5 MB).
-  // ALL videos and large images use chunked resumable upload to avoid HTTP 413 / payload limits.
-  const USE_CHUNKED = isVideo || size >= 2.5 * 1024 * 1024;
+  // ── Small images (< 2.5 MB, non-video): legacy single-request base64 upload ──
+  // Large files and all videos: use direct-to-Drive resumable upload
+  const USE_DIRECT = isVideo || size >= 2.5 * 1024 * 1024;
 
-  if (!USE_CHUNKED) {
+  if (!USE_DIRECT) {
     onProgress?.(30);
     let base64String = item.base64;
     if (!base64String || !base64String.startsWith('data:')) {
@@ -306,14 +309,8 @@ export async function uploadMediaItemEagerly(
 
     const res = await fetch('/api/timeline/staging-media', {
       method: 'POST',
-      headers,
-      body: JSON.stringify({
-        name: item.name,
-        type: mimeType,
-        base64: base64String,
-        thumbnailBase64: item.thumbnailBase64,
-        size
-      })
+      headers: authHeaders,
+      body: JSON.stringify({ name: item.name, type: mimeType, base64: base64String, thumbnailBase64: item.thumbnailBase64, size })
     });
 
     if (!res.ok) {
@@ -335,87 +332,104 @@ export async function uploadMediaItemEagerly(
     };
   }
 
-  // Large File / Video Resumable Upload (2MB slices: safe against all reverse proxy limits)
-  onProgress?.(5);
-  const initRes = await fetch('/api/timeline/staging-media/init-chunked', {
+  // ── Direct-to-Drive Resumable Upload ──
+  // Step 1: Ask server to create a GDrive resumable session, get back a signed upload URL
+  onProgress?.(3);
+  const initRes = await fetch('/api/timeline/staging-media/init-upload', {
     method: 'POST',
-    headers,
-    body: JSON.stringify({
-      name: item.name,
-      type: mimeType,
-      thumbnailBase64: item.thumbnailBase64,
-      size
-    })
+    headers: authHeaders,
+    body: JSON.stringify({ name: item.name, type: mimeType, size })
   });
 
   if (!initRes.ok) {
     const err = await initRes.json().catch(() => ({}));
-    throw new Error(err.error || `Failed to initiate chunked session: HTTP ${initRes.status}`);
+    throw new Error(err.error || `Failed to initiate upload session: HTTP ${initRes.status}`);
   }
 
-  const { uploadId, chunkSize = 2 * 1024 * 1024 } = await initRes.json();
-  const totalChunks = Math.ceil(size / chunkSize);
-  let finalMediaItem: any = null;
+  const { uploadId, sessionUrl } = await initRes.json();
+  if (!sessionUrl) throw new Error('Server did not return a GDrive upload session URL');
+
+  // Step 2: Browser PUTs raw binary chunks directly to Google Drive (no base64, no server proxy)
+  // Google Drive resumable protocol: each chunk is PUT with Content-Range header
+  // Min chunk size: 256 KB (Google requirement). We use 5 MB chunks for good performance.
+  const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB per chunk — raw binary, no overhead
+  const totalChunks = Math.ceil(size / CHUNK_SIZE);
+  let driveFileId: string | null = null;
 
   for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
-    const startByte = chunkIdx * chunkSize;
-    const endByte = Math.min(startByte + chunkSize - 1, size - 1);
-    const chunkSlice = blob.slice(startByte, endByte + 1);
+    const startByte = chunkIdx * CHUNK_SIZE;
+    const endByte = Math.min(startByte + CHUNK_SIZE - 1, size - 1);
+    const chunkBlob = blob.slice(startByte, endByte + 1);
+    const chunkBytes = await chunkBlob.arrayBuffer();
 
-    const chunkBase64 = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(chunkSlice);
-    });
+    const contentRange = `bytes ${startByte}-${endByte}/${size}`;
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    let attempt = 0;
+    let chunkDone = false;
+    while (attempt < 3 && !chunkDone) {
+      attempt++;
       try {
-        const chunkRes = await fetch('/api/timeline/staging-media/upload-chunk', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            uploadId,
-            chunkBase64,
-            startByte,
-            endByte,
-            totalBytes: size
-          })
+        const putRes = await fetch(sessionUrl, {
+          method: 'PUT',
+          headers: {
+            'Content-Range': contentRange,
+            'Content-Type': mimeType
+          },
+          body: chunkBytes
         });
 
-        if (!chunkRes.ok) {
-          const err = await chunkRes.json().catch(() => ({}));
-          throw new Error(err.error || `HTTP ${chunkRes.status}`);
+        if (putRes.status === 308) {
+          // 308 Resume Incomplete: chunk accepted, continue
+          chunkDone = true;
+        } else if (putRes.status === 200 || putRes.status === 201) {
+          // Upload complete — Google Drive returns the file metadata
+          const fileData = await putRes.json();
+          driveFileId = fileData.id;
+          chunkDone = true;
+        } else {
+          const errText = await putRes.text().catch(() => '');
+          throw new Error(`Google Drive PUT failed HTTP ${putRes.status}: ${errText}`);
         }
-
-        const chunkData = await chunkRes.json();
-        if (chunkIdx === totalChunks - 1) {
-          if (!chunkData.complete) throw new Error('Upload incomplete on final chunk');
-          finalMediaItem = chunkData.mediaItem;
-        }
-        break;
-      } catch (attErr) {
-        if (attempt === 3) throw attErr;
+      } catch (putErr: any) {
+        if (attempt >= 3) throw putErr;
         await new Promise(r => setTimeout(r, 1000 * attempt));
       }
     }
 
-    const chunkProgress = Math.min(99, Math.round(((chunkIdx + 1) / totalChunks) * 100));
-    onProgress?.(chunkProgress);
+    const progress = Math.min(95, Math.round(5 + ((chunkIdx + 1) / totalChunks) * 90));
+    onProgress?.(progress);
   }
 
-  if (!finalMediaItem) {
-    throw new Error('Upload completed without returning media item');
+  if (!driveFileId) {
+    throw new Error('Upload completed but Google Drive did not return a file ID');
   }
 
+  // Step 3: Notify server that upload is complete — server sets public permissions and returns metadata
+  onProgress?.(97);
+  const finalizeRes = await fetch('/api/timeline/staging-media/finalize', {
+    method: 'POST',
+    headers: authHeaders,
+    body: JSON.stringify({
+      uploadId,
+      fileId: driveFileId,
+      thumbnailBase64: item.thumbnailBase64 || undefined
+    })
+  });
+
+  if (!finalizeRes.ok) {
+    const err = await finalizeRes.json().catch(() => ({}));
+    throw new Error(err.error || `Failed to finalize upload: HTTP ${finalizeRes.status}`);
+  }
+
+  const finalData = await finalizeRes.json();
   onProgress?.(100);
   return {
-    googleDriveId: finalMediaItem.googleDriveId,
-    viewUrl: finalMediaItem.viewUrl,
-    thumbnailUrl: finalMediaItem.thumbnailUrl || item.thumbnailUrl,
-    previewUrl: finalMediaItem.previewUrl,
-    streamUrl: finalMediaItem.streamUrl,
-    size: finalMediaItem.size || size,
+    googleDriveId: finalData.mediaItem.googleDriveId,
+    viewUrl: finalData.mediaItem.viewUrl,
+    thumbnailUrl: finalData.mediaItem.thumbnailUrl || item.thumbnailUrl,
+    previewUrl: finalData.mediaItem.previewUrl,
+    streamUrl: finalData.mediaItem.streamUrl,
+    size: finalData.mediaItem.size || size,
     uploadStatus: 'uploaded',
     uploadProgress: 100
   };
