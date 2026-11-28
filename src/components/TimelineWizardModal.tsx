@@ -23,6 +23,22 @@ export function getLocalIsoString(d: Date = new Date()): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
 }
 
+export function getMediaMimeType(file: { name?: string; type?: string }): string {
+  if (file.type && file.type.trim()) return file.type.trim();
+  const name = (file.name || '').toLowerCase();
+  if (name.endsWith('.mp4') || name.endsWith('.m4v')) return 'video/mp4';
+  if (name.endsWith('.mov')) return 'video/quicktime';
+  if (name.endsWith('.webm')) return 'video/webm';
+  if (name.endsWith('.mkv')) return 'video/x-matroska';
+  if (name.endsWith('.3gp')) return 'video/3gpp';
+  if (name.endsWith('.avi')) return 'video/x-msvideo';
+  if (name.endsWith('.png')) return 'image/png';
+  if (name.endsWith('.webp')) return 'image/webp';
+  if (name.endsWith('.gif')) return 'image/gif';
+  if (name.endsWith('.svg')) return 'image/svg+xml';
+  return 'image/jpeg';
+}
+
 export function generateVideoThumbnail(videoSource: File | Blob | string): Promise<string> {
   return new Promise((resolve) => {
     try {
@@ -30,6 +46,8 @@ export function generateVideoThumbnail(videoSource: File | Blob | string): Promi
       video.crossOrigin = 'anonymous';
       video.muted = true;
       video.playsInline = true;
+      video.setAttribute('playsinline', '');
+      video.setAttribute('muted', '');
       video.preload = 'metadata';
 
       let objectUrl = '';
@@ -51,24 +69,25 @@ export function generateVideoThumbnail(videoSource: File | Blob | string): Promi
           try { URL.revokeObjectURL(objectUrl); } catch {}
         }
         video.onloadeddata = null;
+        video.onloadedmetadata = null;
         video.onseeked = null;
         video.onerror = null;
         resolve(result);
       };
 
+      // Safe 2.5-second timeout: never hangs media processing or blocks video uploads
       timeoutId = setTimeout(() => {
         finish('');
-      }, 5000);
+      }, 2500);
 
-      video.onloadeddata = () => {
-        const target = Math.min(0.5, (video.duration && video.duration > 0) ? video.duration / 2 : 0.5);
-        video.currentTime = target;
-      };
-
-      video.onseeked = () => {
+      const captureFrame = () => {
         try {
           const width = video.videoWidth || 640;
           const height = video.videoHeight || 360;
+          if (width === 0 || height === 0) {
+            finish('');
+            return;
+          }
           const canvas = document.createElement('canvas');
           const maxDim = 480;
           let scale = 1;
@@ -91,9 +110,24 @@ export function generateVideoThumbnail(videoSource: File | Blob | string): Promi
         finish('');
       };
 
-      video.onerror = () => {
-        finish('');
+      video.onseeked = captureFrame;
+
+      const seekToTime = () => {
+        const target = Math.min(0.5, (video.duration && video.duration > 0) ? video.duration / 2 : 0.5);
+        try {
+          video.currentTime = target;
+        } catch {
+          captureFrame();
+        }
       };
+
+      video.onloadedmetadata = seekToTime;
+      video.onloadeddata = seekToTime;
+      video.onerror = () => finish('');
+
+      try {
+        video.load();
+      } catch {}
     } catch {
       resolve('');
     }
@@ -245,12 +279,20 @@ export async function uploadMediaItemEagerly(
   }
 
   const size = blob.size;
-  const CHUNK_THRESHOLD = 8 * 1024 * 1024; // 8 MB
+  const mimeType = item.type || blob.type || getMediaMimeType(item);
+  const isVideo = mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|3gp)($|\?)/i.test(item.name);
+  const sessionToken = token || (typeof window !== 'undefined' ? localStorage.getItem('shudkara_auth_token') : null);
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers['X-Session-Token'] = token;
+  if (sessionToken) {
+    headers['X-Session-Token'] = sessionToken;
+    headers['Authorization'] = `Bearer ${sessionToken}`;
+  }
 
-  // Small File Fast Upload (< 8MB)
-  if (size < CHUNK_THRESHOLD) {
+  // Fast single-request upload for small images (< 2.5 MB).
+  // ALL videos and large images use chunked resumable upload to avoid HTTP 413 / payload limits.
+  const USE_CHUNKED = isVideo || size >= 2.5 * 1024 * 1024;
+
+  if (!USE_CHUNKED) {
     onProgress?.(30);
     let base64String = item.base64;
     if (!base64String || !base64String.startsWith('data:')) {
@@ -267,7 +309,7 @@ export async function uploadMediaItemEagerly(
       headers,
       body: JSON.stringify({
         name: item.name,
-        type: item.type || 'image/jpeg',
+        type: mimeType,
         base64: base64String,
         thumbnailBase64: item.thumbnailBase64,
         size
@@ -293,14 +335,14 @@ export async function uploadMediaItemEagerly(
     };
   }
 
-  // Large File Resumable Upload (>= 8MB)
+  // Large File / Video Resumable Upload (2MB slices: safe against all reverse proxy limits)
   onProgress?.(5);
   const initRes = await fetch('/api/timeline/staging-media/init-chunked', {
     method: 'POST',
     headers,
     body: JSON.stringify({
       name: item.name,
-      type: item.type || 'application/octet-stream',
+      type: mimeType,
       thumbnailBase64: item.thumbnailBase64,
       size
     })
@@ -311,7 +353,7 @@ export async function uploadMediaItemEagerly(
     throw new Error(err.error || `Failed to initiate chunked session: HTTP ${initRes.status}`);
   }
 
-  const { uploadId, chunkSize = 4 * 1024 * 1024 } = await initRes.json();
+  const { uploadId, chunkSize = 2 * 1024 * 1024 } = await initRes.json();
   const totalChunks = Math.ceil(size / chunkSize);
   let finalMediaItem: any = null;
 
@@ -755,11 +797,12 @@ export async function finalizeSuccessfulDraftUpload(draftId: string): Promise<vo
 
 // Client-side image optimization helper for high-res photos
 async function processSelectedFile(file: File): Promise<DraftMediaItem> {
-  const mimeType = file.type || 'image/jpeg';
+  const mimeType = getMediaMimeType(file);
   const fileId = `media_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
   // If video: use lightweight object URL for zero-RAM video playback in preview
-  if (mimeType.startsWith('video/')) {
+  const isVideo = mimeType.startsWith('video/') || /\.(mp4|mov|webm|mkv|m4v|3gp)($|\?)/i.test(file.name);
+  if (isVideo) {
     const objectUrl = URL.createObjectURL(file);
     let thumbnailBase64 = '';
     try {
@@ -770,7 +813,7 @@ async function processSelectedFile(file: File): Promise<DraftMediaItem> {
     return {
       id: fileId,
       name: file.name,
-      type: mimeType,
+      type: mimeType.startsWith('video/') ? mimeType : 'video/mp4',
       base64: objectUrl,
       rawFile: file,
       size: file.size,
@@ -1423,16 +1466,34 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    // Snapshot file list before any async processing
     const fileList = Array.from(files);
-    e.target.value = '';
 
-    for (const file of fileList) {
-      try {
-        const item = await processSelectedFile(file);
-        setSelectedFiles(prev => [...prev, item]);
-        if (item.id) triggerBackgroundUpload(item, item.id);
-      } catch (err) {
-        console.error('Error processing file:', file.name, err);
+    try {
+      // Process all files in parallel so all selected photos/videos show up together
+      const processedItems = await Promise.all(
+        fileList.map(async (file) => {
+          try {
+            return await processSelectedFile(file);
+          } catch (err) {
+            console.error('Error processing file:', file.name, err);
+            return null;
+          }
+        })
+      );
+
+      const validItems = processedItems.filter((item): item is DraftMediaItem => item !== null);
+      if (validItems.length > 0) {
+        // Atomic single update: guarantees all selected files are preserved in state
+        setSelectedFiles(prev => [...prev, ...validItems]);
+        validItems.forEach(item => {
+          if (item.id) triggerBackgroundUpload(item, item.id);
+        });
+      }
+    } finally {
+      // Reset input value only after files are read to prevent Android from revoking content handles
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
       }
     }
   };
@@ -1930,7 +1991,8 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                     ref={fileInputRef}
                     type="file"
                     multiple
-                    accept="image/*,video/*,.gif"
+                    accept="image/*,video/*"
+                    onClick={(e) => { (e.target as HTMLInputElement).value = ''; }}
                     onChange={handleFileInput}
                     className="hidden"
                   />
@@ -1994,9 +2056,13 @@ export const TimelineWizardModal: React.FC<TimelineWizardModalProps> = ({
                       >
                         {file.type.startsWith('video/') ? (
                           <div className="w-full h-full flex flex-col items-center justify-center text-white p-2 relative bg-slate-950">
-                            <video src={file.base64} className="w-full h-full object-cover opacity-60 pointer-events-none" />
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-white">
-                              <Film className="w-7 h-7 text-blue-400 mb-1" />
+                            {file.thumbnailUrl ? (
+                              <img src={file.thumbnailUrl} alt={file.name} className="w-full h-full object-cover opacity-80 pointer-events-none" />
+                            ) : (
+                              <video src={file.base64} className="w-full h-full object-cover opacity-60 pointer-events-none" />
+                            )}
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-white bg-black/30">
+                              <Film className="w-7 h-7 text-blue-400 mb-1 drop-shadow" />
                               <span className="text-[9px] truncate max-w-[90%] font-mono bg-black/60 px-1.5 py-0.5 rounded">{file.name}</span>
                             </div>
                           </div>
